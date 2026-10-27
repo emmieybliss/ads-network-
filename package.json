@@ -13,7 +13,7 @@
     "typecheck": "pnpm -r typecheck",
     "db:migrate": "pnpm --filter @blissnova/database migrate",
     "db:rollback": "pnpm --filter @blissnova/database rollback",
-    "db:seed": "pnpm --filter @blissnova/database seed",
+    "db:seed": "pnpm --filter @blissnova/api seed",
     "admin:create": "pnpm --filter @blissnova/api create-admin",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { orgRoleHas, platformRoleHas, type OrgPermission, type OrgRole, type OrgType, type PlatformPermission, type PlatformRole } from '@blissnova/shared';
+import fp from 'fastify-plugin';
 import { ipHash } from '@blissnova/tracking';
 import { AppError, forbidden, notFound, unauthenticated } from '../lib/errors';
 import { randomToken, safeEqual, sha256, verifyPassword } from '../lib/crypto';
@@ -29,7 +30,7 @@ export const CSRF_COOKIE = 'bn_csrf';
 const STEP_UP_WINDOW_MS = 10 * 60 * 1000;
 const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-export async function authPlugin(app: FastifyInstance) {
+async function authPluginFn(app: FastifyInstance) {
   app.decorateRequest('auth', null);
   app.decorateRequest('org', null);
   app.decorateRequest('ipHash', '');
@@ -55,6 +56,13 @@ export async function authPlugin(app: FastifyInstance) {
     }
   });
 }
+
+/**
+ * Wrapped with fastify-plugin so the request decorators and the onRequest/CSRF
+ * hooks apply to every sibling route, not only to routes registered inside this
+ * plugin's own scope.
+ */
+export const authPlugin = fp(authPluginFn, { name: 'blissnova-auth' });
 
 async function loadSession(app: FastifyInstance, token: string): Promise<AuthState | null> {
   const r = await app.ctx.db.query(

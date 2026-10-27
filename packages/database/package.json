@@ -7,10 +7,9 @@
   "types": "src/index.ts",
   "exports": { ".": "./src/index.ts" },
   "scripts": {
-    "migrate": "tsx src/cli.ts up",
-    "rollback": "tsx src/cli.ts down",
-    "status": "tsx src/cli.ts status",
-    "seed": "tsx src/seed.ts",
+    "migrate": "tsx --env-file-if-exists=../../.env src/cli.ts up",
+    "rollback": "tsx --env-file-if-exists=../../.env src/cli.ts down",
+    "status": "tsx --env-file-if-exists=../../.env src/cli.ts status",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": { "pg": "^8.13.0", "@blissnova/shared": "workspace:*" },

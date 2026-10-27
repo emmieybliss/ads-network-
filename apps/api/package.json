@@ -11,11 +11,12 @@
     "./lib/*": "./src/lib/*.ts"
   },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch --env-file-if-exists=../../.env src/server.ts",
     "start": "node dist/server.js",
     "build": "node build.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "create-admin": "tsx src/scripts/create-admin.ts",
+    "seed": "tsx --env-file-if-exists=../../.env src/scripts/seed.ts",
+    "create-admin": "tsx --env-file-if-exists=../../.env src/scripts/create-admin.ts",
     "openapi": "tsx src/scripts/openapi.ts"
   },
   "dependencies": {
@@ -33,6 +34,7 @@
     "@node-rs/argon2": "^2.0.2",
     "bullmq": "^5.40.0",
     "fastify": "^5.2.0",
+    "fastify-plugin": "^6.0.1",
     "image-size": "^2.0.0",
     "ioredis": "^5.4.0",
     "nodemailer": "^7.0.0",
