@@ -24,10 +24,15 @@ if (process.env.NODE_ENV === 'production') {
 }
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-const slot = (key, extra = '') => `<div id="bn-ad-slot-${key}" data-bn-slot="${key}"></div>
+const slot = (key, extra = '', div = '') => `<div id="bn-ad-slot-${key}" data-bn-slot="${key}"${div}></div>
 <script async src="${esc(apiUrl)}/sdk/ads.js" data-site-key="${esc(siteKey)}" data-slot="${key}"${extra}></script>`;
 
-const page = () => `<!doctype html>
+const ARTICLES = {
+  1: { title: 'Five small habits for a calmer workday', next: 2 },
+  2: { title: 'A beginner\'s guide to keeping houseplants alive', next: 1 },
+};
+
+const page = (n = 1) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -57,17 +62,19 @@ const page = () => `<!doctype html>
 <div class="banner">Local demo publisher website. Fictional content for testing ad delivery. Not a real publication.</div>
 <header><h1>The Demo Gazette</h1><p>A sample site that runs on your computer</p></header>
 <div class="top-ad">
-${slot('demo-leaderboard')}
+${slot('demo-leaderboard', '', ' style="min-height:min(90px, 12.36vw)"')}
 </div>
 <div class="wrap">
   <article>
-    <h2>Five small habits for a calmer workday</h2>
+    <h2>${esc(ARTICLES[n].title)}</h2>
     <div class="byline">By the Demo Gazette desk · sample article</div>
     <p>This page exists so you can watch the BlissNova ad tag work end to end. Above, a leaderboard placement requests an image ad. In the sidebar, a text placement requests a text ad. Below this paragraph, an in-article placement requests a native ad, which matches the page's layout but is always marked "Sponsored" with the advertiser's name. All three use the same short snippet any publisher can paste into a page.</p>
     ${slot('demo-native')}
     <p>When an ad renders, the tag reports a render receipt. When at least half of the ad stays visible for a second, it reports a viewable impression. Clicking the ad goes through the network's click endpoint, which records a click before sending you on to the advertiser.</p>
     <p>Open the publisher or advertiser dashboard in another tab and refresh it after viewing and clicking: today's numbers update from the recorded events. Repeated views from the same browser are limited by frequency caps, and very fast or repeated clicks are filtered as invalid, exactly as on a live site.</p>
     <p>The tag does not read cookies or store identifiers unless the page signals consent for personalized ads. This demo page does not, so all ads here are contextual. The <a href="/consent-test">consent test page</a> shows what happens with a consent tool.</p>
+    <p>Other placement types: a <strong>sticky anchor</strong> at the bottom of the screen (close it with ×), a <strong>side rail</strong> on the right on wide screens, and an <strong>interstitial</strong> that appears when you follow the link below to the next article. The interstitial shows at most once every 10 minutes in a tab.</p>
+    <p><a href="/?article=${ARTICLES[n].next}" id="next-article">Read the next article: ${esc(ARTICLES[ARTICLES[n].next].title)}</a></p>
     <p><a href="${esc(webUrl)}/publisher">Open the publisher dashboard</a> · <a href="${esc(webUrl)}/advertiser">Open the advertiser dashboard</a></p>
   </article>
   <aside>
@@ -78,6 +85,9 @@ ${slot('demo-leaderboard')}
   </aside>
 </div>
 <footer>The Demo Gazette is fictional. Ads shown here are demo creatives.</footer>
+${slot('demo-anchor', '', ' data-bn-display="anchor"')}
+${slot('demo-rail', '', ' data-bn-display="rail_right"')}
+${slot('demo-interstitial', '', ' data-bn-display="interstitial"')}
 </body>
 </html>`;
 
@@ -218,5 +228,5 @@ createServer((req, res) => {
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'strict-origin-when-cross-origin',
-  }).end(consentKind ? consentPage(consentKind) : page());
+  }).end(consentKind ? consentPage(consentKind) : page(url.searchParams.get('article') === '2' ? 2 : 1));
 }).listen(port, () => console.log(`Demo publisher site on http://localhost:${port} (also http://demo-publisher.localhost:${port})`));

@@ -101,7 +101,7 @@ Docker Compose stack.
 
 | Command | Result |
 | --- | --- |
-| `pnpm test` (Vitest: unit, integration, security) | 18 files, **380 of 380 passed** |
+| `pnpm test` (Vitest: unit, integration, security) | 19 files, **385 of 385 passed** |
 | `pnpm -r typecheck` | no errors |
 | `next build` (web) | succeeded |
 | `pnpm audit --prod` | 26 advisories found, fixed by upgrading nodemailer and @fastify/swagger-ui and overriding postcss; now **no known vulnerabilities** |

@@ -2818,6 +2818,25 @@
                       "footer",
                       "other"
                     ]
+                  },
+                  "display": {
+                    "default": "inline",
+                    "type": "string",
+                    "enum": [
+                      "inline",
+                      "anchor",
+                      "rail_left",
+                      "rail_right",
+                      "interstitial"
+                    ]
+                  },
+                  "noFill": {
+                    "default": "collapse",
+                    "type": "string",
+                    "enum": [
+                      "collapse",
+                      "keep_space"
+                    ]
                   }
                 },
                 "required": [
@@ -2875,10 +2894,6 @@
                     "maxLength": 120
                   },
                   "formats": {
-                    "default": [
-                      "image",
-                      "text"
-                    ],
                     "minItems": 1,
                     "type": "array",
                     "items": {
@@ -2903,11 +2918,9 @@
                     "maximum": 2000
                   },
                   "responsive": {
-                    "default": true,
                     "type": "boolean"
                   },
                   "position": {
-                    "default": "in_content",
                     "type": "string",
                     "enum": [
                       "header",
@@ -2915,6 +2928,23 @@
                       "in_content",
                       "footer",
                       "other"
+                    ]
+                  },
+                  "display": {
+                    "type": "string",
+                    "enum": [
+                      "inline",
+                      "anchor",
+                      "rail_left",
+                      "rail_right",
+                      "interstitial"
+                    ]
+                  },
+                  "noFill": {
+                    "type": "string",
+                    "enum": [
+                      "collapse",
+                      "keep_space"
                     ]
                   }
                 }

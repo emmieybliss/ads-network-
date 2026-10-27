@@ -25,6 +25,13 @@
  *   personalization is allowed; any signal against it deletes the id.
  * - Any failure collapses the slot quietly. We never block page rendering and
  *   we never retry in a loop.
+ * - Placement types (data-bn-display, confirmed by the server): inline slots
+ *   keep the space their snippet reserves; an anchor is a closable bar at the
+ *   bottom of the screen (the page gets matching bottom padding so nothing is
+ *   hidden); side rails show only on screens wide enough to leave the content
+ *   clear; an interstitial shows full screen when the visitor follows a link to
+ *   another page of the site, at most once per 10 minutes per tab, and never
+ *   where GDPR applies without consent to store that timestamp.
  */
 
 type Format = 'image' | 'text' | 'native';
@@ -39,9 +46,10 @@ interface AdPayload {
   text?: { headline: string; body: string; cta: string; displayUrl: string };
   native?: { imageUrl: string; alt: string; headline: string; body: string; cta: string; displayUrl: string; sponsor: string };
 }
+type Display = 'inline' | 'anchor' | 'rail_left' | 'rail_right' | 'interstitial';
 interface ServeResponse {
   status: 'ok' | 'inactive' | 'blocked' | 'disabled';
-  ads: Array<{ slot: string; ad: AdPayload | null }>;
+  ads: Array<{ slot: string; display?: Display; ad: AdPayload | null }>;
   privacy?: { personalization: boolean; reason: string };
 }
 interface Consent {
@@ -67,6 +75,27 @@ const VIEWABLE_MS = 1000;
 const BATCH_MS = 1500;
 const MAX_BATCH = 20;
 const CMP_TIMEOUT_MS = 2000;
+const RAIL_CONTENT_WIDTH = 1024; // rails need this much room in the middle of the screen
+const INTERSTITIAL_GAP_MS = 10 * 60 * 1000;
+const INTERSTITIAL_WAIT_MS = 1500;
+const IST_KEY = 'bn_ist';
+
+function displayOf(el: Element): Display {
+  const d = el.getAttribute('data-bn-display');
+  return d === 'anchor' || d === 'rail_left' || d === 'rail_right' || d === 'interstitial' ? d : 'inline';
+}
+
+function railFits(width: number | null): boolean {
+  return window.innerWidth >= RAIL_CONTENT_WIDTH + 2 * ((width ?? 160) + 24);
+}
+
+function sessionStore(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
 
 /* ------------------------------------------------------------------ utils */
 
@@ -231,6 +260,9 @@ class Tag {
   private pending: Element[] = [];
   private lazy: IntersectionObserver | null = null;
   private started = false;
+  private anchorTaken = false;
+  private interstitial: Element | null = null;
+  private interstitialShown = false;
 
   constructor(api: string, siteKey: string) {
     this.api = api.replace(/\/+$/, '');
@@ -299,6 +331,26 @@ class Tag {
     for (const el of nodes) {
       if (this.seen.has(el)) continue;
       this.seen.add(el);
+      const display = displayOf(el);
+      if (display === 'interstitial') {
+        // Requested only when the visitor heads to another page.
+        if (!this.interstitial) {
+          this.interstitial = el;
+          document.addEventListener('click', (e) => this.onNavigate(e), true);
+        }
+        continue;
+      }
+      if (display === 'anchor') {
+        if (this.anchorTaken) { collapse(el); continue; } // one anchor per page
+        this.anchorTaken = true;
+        this.enqueue(el);
+        continue;
+      }
+      if (display === 'rail_left' || display === 'rail_right') {
+        if (!railFits(null)) { collapse(el); continue; }
+        this.enqueue(el);
+        continue;
+      }
       if (el.getAttribute('data-bn-lazy') === 'false' || !('IntersectionObserver' in window)) {
         this.enqueue(el);
         continue;
@@ -340,8 +392,32 @@ class Tag {
       slots.push(slot);
     }
     if (!slots.length) return;
-    await this.cmpReady;
+    const res = await this.fetchAds(slots);
+    if (!res) {
+      for (const el of byslot.values()) collapse(el);
+      return;
+    }
 
+    for (const entry of res.ads ?? []) {
+      const el = byslot.get(entry.slot);
+      if (!el) continue;
+      byslot.delete(entry.slot);
+      if (!entry.ad) {
+        collapse(el);
+        continue;
+      }
+      try {
+        this.render(el, entry.ad, entry.display ?? displayOf(el));
+      } catch {
+        collapse(el);
+      }
+    }
+    for (const el of byslot.values()) collapse(el);
+  }
+
+  /** One /serve call with the current consent signals. Null on any failure. */
+  private async fetchAds(slots: string[]): Promise<ServeResponse | null> {
+    await this.cmpReady;
     const c = this.cmp;
     const storageOk = this.deviceStorageAllowed();
     let res: ServeResponse;
@@ -367,8 +443,7 @@ class Tag {
       if (!r.ok) throw new Error(`serve ${r.status}`);
       res = (await r.json()) as ServeResponse;
     } catch {
-      for (const el of byslot.values()) collapse(el);
-      return;
+      return null;
     }
     if (res.privacy) {
       this.privacy = res.privacy;
@@ -376,26 +451,62 @@ class Tag {
       if (res.privacy.personalization && this.deviceStorageAllowed()) readVid(true);
       else dropVid();
     }
-
-    for (const entry of res.ads ?? []) {
-      const el = byslot.get(entry.slot);
-      if (!el) continue;
-      byslot.delete(entry.slot);
-      if (!entry.ad) {
-        collapse(el);
-        continue;
-      }
-      try {
-        this.render(el, entry.ad);
-      } catch {
-        collapse(el);
-      }
-    }
-    for (const el of byslot.values()) collapse(el);
+    return res;
   }
 
-  private render(el: Element, ad: AdPayload): void {
+  /* --------------------------------------------------------- interstitial */
+
+  /** May an interstitial show now? Needs a per-tab timestamp, so not where GDPR applies without storage consent. */
+  private interstitialAllowed(): boolean {
+    if (this.interstitialShown) return false;
+    if (this.cmp.gdprApplies && !this.cmp.storageConsent) return false;
+    const ss = sessionStore();
+    if (!ss) return false;
+    try {
+      return Date.now() - Number(ss.getItem(IST_KEY) ?? 0) > INTERSTITIAL_GAP_MS;
+    } catch {
+      return false;
+    }
+  }
+
+  private onNavigate(e: MouseEvent): void {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+    if (!a || (a.target && a.target !== '_self') || a.hasAttribute('download')) return;
+    let url: URL;
+    try {
+      url = new URL(a.href, window.location.href);
+    } catch {
+      return;
+    }
+    if (url.origin !== window.location.origin || (url.pathname === window.location.pathname && url.search === window.location.search)) return;
+    if (!this.interstitial || !this.interstitialAllowed()) return;
+    e.preventDefault();
+    this.interstitialShown = true;
+    try { sessionStore()?.setItem(IST_KEY, String(Date.now())); } catch { /* not shown again on this page anyway */ }
+    void this.showInterstitial(this.interstitial, url.href);
+  }
+
+  private async showInterstitial(el: Element, href: string): Promise<void> {
+    const go = () => window.location.assign(href);
+    const slot = el.getAttribute('data-bn-slot') ?? '';
+    // Never hold the visitor up for long: no ad within the wait means straight on.
+    const res = await Promise.race([this.fetchAds([slot]), new Promise<null>((r) => setTimeout(() => r(null), INTERSTITIAL_WAIT_MS))]);
+    const entry = res?.ads?.find((a) => a.slot === slot);
+    if (!entry?.ad) return go();
+    try {
+      this.render(el, entry.ad, 'interstitial', go);
+    } catch {
+      go();
+    }
+  }
+
+  private render(el: Element, ad: AdPayload, display: Display = 'inline', onContinue?: () => void): void {
     const host = el as HTMLElement;
+    if ((display === 'rail_left' || display === 'rail_right') && !railFits(ad.width)) {
+      collapse(host);
+      return;
+    }
     host.textContent = '';
     host.style.display = '';
     host.setAttribute('data-bn-state', 'filled');
@@ -507,7 +618,8 @@ class Tag {
     frame.appendChild(link);
     // Native ads carry their disclosure in the card itself.
     if (ad.format !== 'native') frame.appendChild(label);
-    mount.appendChild(frame);
+    if (display === 'inline') mount.appendChild(frame);
+    else this.place(host, mount, frame, display, ad, onContinue);
 
     // A render is reported as soon as the creative is in the document.
     this.report('render', ad.token);
@@ -536,6 +648,78 @@ class Tag {
       { threshold: [0, VIEWABLE_RATIO, 1] },
     );
     obs.observe(el);
+  }
+
+  /** Wrap a rendered ad for the anchor, side rail and interstitial placements. */
+  private place(host: HTMLElement, mount: Node & ParentNode, frame: HTMLElement, display: Display, ad: AdPayload, onContinue?: () => void): void {
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'bn-close';
+    const fixed = (css: Record<string, string>) => {
+      host.style.cssText = '';
+      for (const [k, v] of Object.entries({ position: 'fixed', zIndex: '2147483000', ...css })) host.style.setProperty(k.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`), v);
+    };
+
+    if (display === 'anchor') {
+      const wrap = document.createElement('div');
+      wrap.className = 'bn-anchor';
+      close.setAttribute('aria-label', 'Close ad');
+      close.textContent = '\u00d7';
+      wrap.appendChild(close);
+      wrap.appendChild(frame);
+      if (ad.width) frame.style.maxWidth = `min(${ad.width}px, 100%)`;
+      mount.appendChild(wrap);
+      fixed({ left: '0', right: '0', bottom: '0' });
+      // Pad the page by the bar's height so the end of the page is never covered.
+      const body = document.body;
+      const before = body.style.paddingBottom;
+      const pad = () => { body.style.paddingBottom = `${host.offsetHeight}px`; };
+      pad();
+      let ro: ResizeObserver | null = null;
+      try { ro = new ResizeObserver(pad); ro.observe(host); } catch { /* sized once */ }
+      close.addEventListener('click', () => {
+        ro?.disconnect();
+        body.style.paddingBottom = before;
+        host.remove();
+      });
+      return;
+    }
+
+    if (display === 'rail_left' || display === 'rail_right') {
+      mount.appendChild(frame);
+      fixed({ top: '50%', transform: 'translateY(-50%)', width: `${ad.width ?? 160}px`, [display === 'rail_left' ? 'left' : 'right']: '12px' });
+      return;
+    }
+
+    // Interstitial: full screen, clearly an ad, one obvious way on.
+    const panel = document.createElement('div');
+    panel.className = 'bn-ist';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+    panel.setAttribute('aria-label', 'Advertisement');
+    const bar = document.createElement('div');
+    bar.className = 'bn-ist-bar';
+    const t = document.createElement('span');
+    t.textContent = 'Advertisement';
+    close.className = 'bn-ist-go';
+    close.textContent = 'Continue to page \u2192';
+    bar.appendChild(t);
+    bar.appendChild(close);
+    panel.appendChild(bar);
+    frame.style.maxWidth = 'none';
+    panel.appendChild(frame);
+    mount.appendChild(panel);
+    fixed({ inset: '0', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(17,24,39,.72)', padding: '16px' });
+    const done = () => {
+      document.removeEventListener('keydown', onKey, true);
+      host.remove();
+      onContinue?.();
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') done(); };
+    document.addEventListener('keydown', onKey, true);
+    close.addEventListener('click', done);
+    host.addEventListener('click', (e) => { if (e.target === host) done(); });
+    try { close.focus(); } catch { /* not focusable yet */ }
   }
 
   private report(type: 'render' | 'viewable', token: string): void {
@@ -574,7 +758,9 @@ class Tag {
 
 function collapse(el: Element): void {
   try {
-    (el as HTMLElement).style.display = 'none';
+    // Slots set to keep their space stay as an empty box, so the page does not shift.
+    if (el.hasAttribute('data-bn-keep-space')) (el as HTMLElement).style.visibility = 'hidden';
+    else (el as HTMLElement).style.display = 'none';
     el.setAttribute('data-bn-state', 'empty');
   } catch {
     /* detached node */
@@ -595,12 +781,19 @@ const SHADOW_CSS = `
 .bn-native-img{display:block;width:100%;aspect-ratio:1.91/1;object-fit:cover;border:0;background:#f3f4f6}
 .bn-native{padding:12px 14px 14px}
 .bn-disclosure{font-size:11px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:#6b7280;margin-bottom:6px}
+.bn-anchor{position:relative;display:flex;justify-content:center;padding:6px 8px;background:rgba(255,255,255,.97);box-shadow:0 -2px 10px rgba(15,23,42,.15)}
+.bn-anchor .bn-ad{flex:1 1 auto;border-radius:4px}
+.bn-close{position:absolute;top:-26px;right:12px;width:28px;height:26px;border:0;border-radius:6px 6px 0 0;background:rgba(255,255,255,.97);box-shadow:0 -2px 6px rgba(15,23,42,.12);color:#374151;font:600 18px/26px system-ui,sans-serif;cursor:pointer}
+.bn-ist{width:min(640px,100%);max-height:100%;overflow:auto;background:#fff;border-radius:12px;padding:12px;box-shadow:0 20px 50px rgba(0,0,0,.35)}
+.bn-ist-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;font:600 12px/1.3 system-ui,sans-serif;letter-spacing:.04em;text-transform:uppercase;color:#6b7280}
+.bn-ist-go{border:0;border-radius:8px;padding:9px 14px;background:#111827;color:#fff;font:600 14px/1.2 system-ui,sans-serif;text-transform:none;letter-spacing:0;cursor:pointer}
 .bn-label{position:absolute;right:0;bottom:0;padding:2px 6px;font:500 10px/1.3 system-ui,sans-serif;letter-spacing:.02em;color:#6b7280;background:rgba(255,255,255,.92);border-top-left-radius:6px}
 @media (prefers-color-scheme:dark){
 .bn-ad{color:#e5e7eb;background:#111827;border-color:rgba(255,255,255,.12)}
 .bn-body{color:#9ca3af}.bn-url{color:#9ca3af}.bn-cta{color:#93b4fd}
 .bn-label{color:#9ca3af;background:rgba(17,24,39,.92)}
-.bn-disclosure{color:#9ca3af}.bn-native-img{background:#1f2937}}
+.bn-disclosure{color:#9ca3af}.bn-native-img{background:#1f2937}
+.bn-anchor,.bn-close{background:rgba(17,24,39,.97);color:#e5e7eb}.bn-ist{background:#111827}.bn-ist-go{background:#e5e7eb;color:#111827}}
 `;
 
 /* ------------------------------------------------------------- bootstrap */

@@ -39,6 +39,7 @@ const submitBody = z.object({
   policyVersion: z.string().min(1).max(40),
   acceptPolicies: z.literal(true, { error: 'You must accept the publisher policies' }),
 });
+export const UNIT_DISPLAYS = ['inline', 'anchor', 'rail_left', 'rail_right', 'interstitial'] as const;
 const unitBody = z.object({
   key: z.string().regex(/^[a-z0-9][a-z0-9_-]{1,63}$/, 'Use lowercase letters, numbers, hyphens and underscores'),
   name: z.string().trim().min(1).max(120),
@@ -47,8 +48,27 @@ const unitBody = z.object({
   height: z.number().int().min(1).max(2000).nullable().optional(),
   responsive: z.boolean().default(true),
   position: z.enum(['header', 'sidebar', 'in_content', 'footer', 'other']).default('in_content'),
+  display: z.enum(UNIT_DISPLAYS).default('inline'),
+  noFill: z.enum(['collapse', 'keep_space']).default('collapse'),
 });
-const unitPatch = unitBody.partial().omit({ key: true });
+// No defaults here: a field left out of a PATCH must keep its stored value.
+const unitPatch = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  formats: z.array(z.enum(['image', 'text', 'native'])).min(1).optional(),
+  width: z.number().int().min(1).max(2000).nullable().optional(),
+  height: z.number().int().min(1).max(2000).nullable().optional(),
+  responsive: z.boolean().optional(),
+  position: z.enum(['header', 'sidebar', 'in_content', 'footer', 'other']).optional(),
+  display: z.enum(UNIT_DISPLAYS).optional(),
+  noFill: z.enum(['collapse', 'keep_space']).optional(),
+});
+
+/** Size rules for placements that sit over the page, so they cannot cover most of it. */
+function displayProblem(display: string, width: number | null | undefined, height: number | null | undefined): string | null {
+  if (display === 'anchor' && height && height > 120) return 'An anchor placement can be at most 120 px tall';
+  if ((display === 'rail_left' || display === 'rail_right') && width && width > 300) return 'A side rail can be at most 300 px wide';
+  return null;
+}
 const siteUnitParams = z.object({ orgId: z.uuid(), siteId: z.uuid() });
 const payoutProfileBody = z.object({ method: z.enum(['bank_transfer', 'paypal', 'other']), displayLabel: z.string().trim().min(3).max(120) });
 const payoutBody = z.object({ amount: moneyString });
@@ -68,8 +88,22 @@ export function serializeSite(s: Record<string, any>) {
   };
 }
 
+/**
+ * The container a publisher pastes. Inline slots reserve their height up front
+ * (fixed size, or min-height for responsive ones) so the page does not jump
+ * when the ad arrives. Anchor, rail and interstitial slots take no space.
+ */
+export function slotContainer(key: string, u?: Record<string, any>, withId = true): string {
+  const display = u?.display ?? 'inline';
+  const id = withId ? `id="bn-ad-slot-${key}" ` : '';
+  if (display !== 'inline') return `<div ${id}data-bn-slot="${key}" data-bn-display="${display}"></div>`;
+  const style = u?.width && u?.height ? (u.responsive ? ` style="min-height:min(${u.height}px, ${+(u.height / u.width * 100).toFixed(2)}vw)"` : ` style="width:${u.width}px;max-width:100%;aspect-ratio:${u.width}/${u.height}"`) : '';
+  const keep = u?.no_fill === 'keep_space' ? ' data-bn-keep-space' : '';
+  return `<div ${id}data-bn-slot="${key}"${keep}${style}></div>`;
+}
+
 export function serializeUnit(u: Record<string, any>) {
-  return { id: u.id, siteId: u.site_id, key: u.key, name: u.name, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, position: u.position, status: u.status, adminBlocked: u.admin_blocked, createdAt: u.created_at };
+  return { id: u.id, siteId: u.site_id, key: u.key, name: u.name, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, position: u.position, display: u.display, noFill: u.no_fill, status: u.status, adminBlocked: u.admin_blocked, createdAt: u.created_at };
 }
 
 export async function publisherRoutes(app: FastifyInstance) {
@@ -323,17 +357,14 @@ export async function publisherRoutes(app: FastifyInstance) {
     const units = (await db.query(`SELECT * FROM ad_units WHERE site_id = $1 AND status <> 'archived' ORDER BY created_at`, [s.id])).rows;
     // Built from PUBLIC_API_URL, which production startup refuses to leave on localhost.
     const sdkUrl = `${config.PUBLIC_API_URL}/sdk/ads.js`;
-    const snippet = (key: string, u?: Record<string, any>) => {
-      const size = u && u.width && u.height && !u.responsive ? ` style="width:${u.width}px;height:${u.height}px"` : '';
-      return `<div id="bn-ad-slot-${key}" data-bn-slot="${key}"${size}></div>\n<script async src="${sdkUrl}" data-site-key="${s.public_key}" data-slot="${key}"></script>`;
-    };
+    const snippet = (key: string, u?: Record<string, any>) => `${slotContainer(key, u)}\n<script async src="${sdkUrl}" data-site-key="${s.public_key}" data-slot="${key}"></script>`;
     return {
       data: {
         available: true,
         siteKey: s.public_key,
         sdkUrl,
         loader: `<script async src="${sdkUrl}" data-site-key="${s.public_key}"></script>`,
-        units: units.map((u) => ({ key: u.key, name: u.name, status: u.status, snippet: snippet(u.key, u), container: `<div data-bn-slot="${u.key}"></div>` })),
+        units: units.map((u) => ({ key: u.key, name: u.name, status: u.status, display: u.display, snippet: snippet(u.key, u), container: slotContainer(u.key, u, false) })),
         instructions: [
           'Paste a placement snippet where the ad should appear. Each snippet is self-contained.',
           'For several placements on one page, load the script once and add one <div data-bn-slot="..."> per placement.',
@@ -396,8 +427,10 @@ export async function publisherRoutes(app: FastifyInstance) {
     if (b.formats.includes('image') && !b.width && !b.responsive) throw badRequest('Fixed-size image placements need dimensions');
     const bad = b.formats.filter((f) => !s.allowed_formats.includes(f));
     if (bad.length) throw badRequest(`This site is not approved for ${bad.join(', ')} ads`);
-    const row = (await db.query(`INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [siteId, b.key, b.name, b.formats, b.width ?? null, b.height ?? null, b.responsive, b.position]).catch((err: { code?: string }) => {
+    const dp = displayProblem(b.display, b.width, b.height);
+    if (dp) throw badRequest(dp);
+    const row = (await db.query(`INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position, display, no_fill) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [siteId, b.key, b.name, b.formats, b.width ?? null, b.height ?? null, b.responsive, b.position, b.display, b.noFill]).catch((err: { code?: string }) => {
       if (err.code === '23505') throw conflict('A placement with this key already exists on this site');
       throw err;
     })).rows[0];
@@ -415,10 +448,12 @@ export async function publisherRoutes(app: FastifyInstance) {
   app.patch('/orgs/:orgId/units/:id', { config: mgmt, preHandler: requireOrg('unit:write', pub), schema: { tags: ['placements'], params: orgIdParams, body: unitPatch } }, async (req) => {
     const u = await ownUnit(req.org!.id, paramsOf(req, orgIdParams).id);
     const b = bodyOf(req, unitPatch);
+    const dp = displayProblem(b.display ?? u.display, b.width !== undefined ? b.width : u.width, b.width !== undefined ? b.height : u.height);
+    if (dp) throw badRequest(dp);
     const after = (await db.query(
       `UPDATE ad_units SET name = COALESCE($2, name), formats = COALESCE($3, formats), width = CASE WHEN $4::boolean THEN $5 ELSE width END, height = CASE WHEN $4::boolean THEN $6 ELSE height END,
-         responsive = COALESCE($7, responsive), position = COALESCE($8, position), updated_at = now() WHERE id = $1 RETURNING *`,
-      [u.id, b.name ?? null, b.formats ?? null, b.width !== undefined, b.width ?? null, b.height ?? null, b.responsive ?? null, b.position ?? null])).rows[0];
+         responsive = COALESCE($7, responsive), position = COALESCE($8, position), display = COALESCE($9, display), no_fill = COALESCE($10, no_fill), updated_at = now() WHERE id = $1 RETURNING *`,
+      [u.id, b.name ?? null, b.formats ?? null, b.width !== undefined, b.width ?? null, b.height ?? null, b.responsive ?? null, b.position ?? null, b.display ?? null, b.noFill ?? null])).rows[0];
     await audit(db, req, { action: 'unit.update', resourceType: 'ad_unit', resourceId: u.id, orgId: req.org!.id, before: serializeUnit(u), after: serializeUnit(after) });
     invalidateServingCache(app.ctx);
     return { data: serializeUnit(after) };

@@ -14,7 +14,8 @@ import { decideConsent, type ConsentReason, type ConsentSignals } from './consen
  * Postgres transaction, when an impression or click becomes billable.
  */
 export interface SiteSnap { id: string; orgId: string; domain: string; allowedDomains: string[]; includeSubdomains: boolean; category: string; allowedFormats: string[]; revenueShareBps: number; blockedCategories: string[]; floorCpmMicros: bigint | null; floorCpcMicros: bigint | null; premiumOnly: boolean }
-export interface UnitSnap { id: string; siteId: string; key: string; formats: string[]; width: number | null; height: number | null; responsive: boolean }
+export interface UnitSnap { id: string; siteId: string; key: string; formats: string[]; width: number | null; height: number | null; responsive: boolean; display: UnitDisplay }
+export type UnitDisplay = 'inline' | 'anchor' | 'rail_left' | 'rail_right' | 'interstitial';
 export interface CreativeSnap extends CreativeCandidate { snapshot: { headline?: string; body?: string; cta?: string; storageKey?: string | null; altText?: string; displayUrl?: string; sponsorName?: string; destinationUrl: string } }
 export interface CampaignSnap extends CampaignCandidate { caps: Array<{ scope: 'visitor' | 'page'; max: number; window: number }>; orgCaps: Array<{ max: number; window: number }>; creatives: CreativeSnap[] }
 
@@ -48,7 +49,7 @@ async function loadSnapshot(ctx: AppContext): Promise<Snapshot> {
   }
   const units = new Map<string, UnitSnap>();
   const unitRows = (await ctx.db.query(`SELECT u.* FROM ad_units u JOIN sites s ON s.id = u.site_id WHERE u.status = 'active' AND NOT u.admin_blocked AND s.status = 'approved'`)).rows;
-  for (const u of unitRows) units.set(`${u.site_id}:${u.key}`, { id: u.id, siteId: u.site_id, key: u.key, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive });
+  for (const u of unitRows) units.set(`${u.site_id}:${u.key}`, { id: u.id, siteId: u.site_id, key: u.key, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, display: u.display ?? 'inline' });
 
   const camps = (await ctx.db.query(
     `SELECT c.*, o.tier AS org_tier, t.countries, t.devices, t.site_categories, t.keywords, t.include_site_ids, t.exclude_site_ids, t.include_unit_ids, t.exclude_unit_ids, t.require_personalized
@@ -135,6 +136,8 @@ export interface ServeRequest {
 export interface ServeMeta { ip: string; ipHash: string; ua: string; origin: string | null; country: string; requestId: string; secGpc?: boolean }
 export interface ServedAd {
   slot: string;
+  /** How the tag shows this placement; absent when the slot is unknown. */
+  display?: UnitDisplay;
   ad: null | { format: 'image' | 'text' | 'native'; token: string; clickUrl: string; width: number | null; height: number | null; image?: { url: string; alt: string }; text?: { headline: string; body: string; cta: string; displayUrl: string }; native?: { imageUrl: string; alt: string; headline: string; body: string; cta: string; displayUrl: string; sponsor: string } };
 }
 export interface ServeLog { deliveries: Array<{ claims: DeliveryClaims; ipHash: string; uaHash: string | null }>; counters: Array<{ unitId: string; field: 'requests' | 'filled' | 'no_fill' | 'cap_rejects' | 'budget_rejects' | 'blocked' }>; day: string }
@@ -215,7 +218,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     if (!chosen) {
       const budgetRejected = result.rejected.some((r) => r.reason === 'budget' || r.reason === 'daily_budget' || r.reason === 'pacing');
       log.counters.push({ unitId: unit.id, field: capRejected ? 'cap_rejects' : budgetRejected ? 'budget_rejects' : 'no_fill' });
-      ads.push({ slot, ad: null });
+      ads.push({ slot, display: unit.display, ad: null });
       continue;
     }
     const c = chosen.campaign as CampaignSnap;
@@ -233,6 +236,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     const snapC = cr.snapshot;
     ads.push({
       slot,
+      display: unit.display,
       ad: {
         format: cr.format, token, clickUrl: `${ctx.config.PUBLIC_API_URL}/api/v1/click?t=${encodeURIComponent(token)}`, width: cr.width, height: cr.height,
         ...(cr.format === 'image' && snapC.storageKey ? { image: { url: ctx.storage.publicUrl(snapC.storageKey), alt: snapC.altText ?? snapC.headline ?? 'Advertisement' } } : {}),

@@ -111,6 +111,28 @@ are excluded as invalid traffic afterwards, the top-up is not recalculated
 automatically. Finance staff can correct it with a manual adjustment, which is
 audited.
 
+## Placement types and reserved space
+
+Each ad unit has a `display`: `inline`, `anchor`, `rail_left`, `rail_right` or
+`interstitial` (migration 0009). The publisher snippet carries it as
+`data-bn-display`, and `/serve` returns it per slot so the tag follows the
+server's setting.
+
+- **Inline** snippets reserve space up front: `aspect-ratio` for fixed sizes,
+  `min-height` (capped by viewport width) for responsive units with a typical
+  size. With `no_fill = keep_space` an empty slot keeps that space instead of
+  collapsing, so nothing below it moves.
+- **Anchor**: one per page, fixed to the bottom, closable; the tag pads the
+  page body by the bar's height so the end of the page stays reachable. At most
+  120 px tall.
+- **Side rails**: fixed beside the content, requested only when the viewport
+  leaves room for a 1024 px content column plus the rail on both sides. At most
+  300 px wide.
+- **Interstitial**: requested only when the visitor follows a link to another
+  page of the same site. The tag waits at most 1.5 s for an ad, otherwise it
+  navigates straight away. It shows a clear "Continue to page" button (Escape
+  and a backdrop click also continue), at most once per 10 minutes per tab.
+
 ## Consent (TCF v2.2, GPP, US Privacy, GPC)
 
 The ad tag collects signals from the page's CMPs and sends them with each

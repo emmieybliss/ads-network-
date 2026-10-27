@@ -24,6 +24,10 @@
 - It stores a visitor id in `localStorage` only after the server says
   personalization is allowed, and deletes it as soon as any signal goes against
   it.
+- Interstitial placements keep one timestamp in `sessionStorage` (`bn_ist`,
+  cleared when the tab closes) so they show at most once every 10 minutes. It
+  holds no identifier. Where GDPR applies without consent to store information
+  (TCF purpose 1), interstitials are not shown at all.
 - Without consent, ads are contextual: they are chosen from the page, placement
   and site category only.
 - It does not try to bypass consent decisions, browser privacy protections or ad

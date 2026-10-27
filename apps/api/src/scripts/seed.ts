@@ -217,13 +217,16 @@ async function main() {
       { key: 'demo-leaderboard', name: 'Header leaderboard', w: 728, h: 90, pos: 'header', formats: ['image'] },
       { key: 'demo-sidebar', name: 'Sidebar text unit', w: null as number | null, h: null as number | null, pos: 'sidebar', formats: ['text'] },
       { key: 'demo-native', name: 'In-article native unit', w: null as number | null, h: null as number | null, pos: 'in_content', formats: ['native'] },
-    ];
+      { key: 'demo-anchor', name: 'Sticky bottom anchor', w: 728, h: 90, pos: 'footer', formats: ['image'], display: 'anchor', responsive: true },
+      { key: 'demo-rail', name: 'Right side rail', w: 160, h: 600, pos: 'sidebar', formats: ['image'], display: 'rail_right' },
+      { key: 'demo-interstitial', name: 'Between-pages interstitial', w: null as number | null, h: null as number | null, pos: 'other', formats: ['native'], display: 'interstitial' },
+    ] as Array<{ key: string; name: string; w: number | null; h: number | null; pos: string; formats: string[]; display?: string; responsive?: boolean }>;
     const units: Record<string, string> = {};
     for (const u of unitSpecs) {
       units[u.key] = (await c.query<{ id: string }>(
-        `INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active') RETURNING id`,
-        [site, u.key, u.name, u.formats, u.w, u.h, u.w === null, u.pos],
+        `INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position, display, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active') RETURNING id`,
+        [site, u.key, u.name, u.formats, u.w, u.h, u.responsive ?? u.w === null, u.pos, u.display ?? 'inline'],
       )).rows[0]!.id;
     }
     await c.query(
@@ -236,7 +239,7 @@ async function main() {
     const payment = (await c.query<{ id: string }>(
       `INSERT INTO payments (id, org_id, provider, idempotency_key, amount_micros, fee_micros, currency, status, refunded_micros, created_by)
        VALUES (gen_random_uuid(), $1, 'dev_simulated', $2, $3, 0, $4, 'pending', 0, $5) RETURNING id`,
-      [advOrg, `seed-${randomToken(8)}`, toMicros('1000').toString(), CURRENCY, advUser],
+      [advOrg, `seed-${randomToken(8)}`, toMicros('2000').toString(), CURRENCY, advUser],
     )).rows[0]!.id;
     await confirmPayment(c, { paymentId: payment, actor: system, feeBps: 0, providerRef: 'demo-seed', note: 'Simulated demo funding. No money moved.', invoicePrefix: 'DEMO' });
 
@@ -250,6 +253,17 @@ async function main() {
        VALUES ($1, $2, 'image/png', $3, 728, 90, $4, $5)
        ON CONFLICT (storage_key) DO UPDATE SET storage_key = EXCLUDED.storage_key RETURNING id`,
       [advOrg, sha, png.byteLength, storageKey, advUser],
+    )).rows[0]!.id;
+
+    const railPng = demoBannerPng(160, 600);
+    const railSha = createHash('sha256').update(railPng).digest('hex');
+    const railKey = `creatives/${advOrg}/${railSha}.png`;
+    await new LocalStorage(storageDir, '').put(railKey, railPng);
+    const railAsset = (await c.query<{ id: string }>(
+      `INSERT INTO assets (org_id, sha256, mime_type, size_bytes, width, height, storage_key, created_by)
+       VALUES ($1, $2, 'image/png', $3, 160, 600, $4, $5)
+       ON CONFLICT (storage_key) DO UPDATE SET storage_key = EXCLUDED.storage_key RETURNING id`,
+      [advOrg, railSha, railPng.byteLength, railKey, advUser],
     )).rows[0]!.id;
 
     const nativePng = demoBannerPng(600, 314);
@@ -269,7 +283,10 @@ async function main() {
       { name: `Banner campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '2.50', lifetime: '400', daily: '40', unit: 'demo-leaderboard', format: 'image' as const },
       { name: `Text ad campaign ${DEMO_TAG}`, model: 'cpc' as const, rate: '0.20', lifetime: '300', daily: '30', unit: 'demo-sidebar', format: 'text' as const },
       { name: `Native ad campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '4.00', lifetime: '200', daily: '20', unit: 'demo-native', format: 'native' as const },
-    ];
+      { name: `Anchor campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '2.00', lifetime: '150', daily: '15', unit: 'demo-anchor', format: 'image' as const },
+      { name: `Side rail campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '2.00', lifetime: '150', daily: '15', unit: 'demo-rail', format: 'image' as const, rail: true },
+      { name: `Interstitial campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '5.00', lifetime: '150', daily: '15', unit: 'demo-interstitial', format: 'native' as const },
+    ] as Array<{ name: string; model: 'cpm' | 'cpc'; rate: string; lifetime: string; daily: string; unit: string; format: 'image' | 'text' | 'native'; rail?: boolean }>;
     for (const s of specs) {
       const camp = (await c.query<{ id: string }>(
         `INSERT INTO campaigns (org_id, name, status, pricing_model, rate_micros, currency, lifetime_budget_micros, daily_budget_micros, timezone, start_at, pacing, priority, submitted_at, approved_at, created_by)
@@ -281,7 +298,9 @@ async function main() {
       await reserveCampaignBudget(c, camp, system);
 
       const dest = 'https://example.com/demo-offer';
-      const v = s.format === 'image'
+      const v = s.format === 'image' && s.rail
+        ? { headline: null, body: null, cta: null, asset: railAsset, w: 160, h: 600, alt: 'Demo advertisement skyscraper', sponsor: null, snapshot: { format: 'image', assetId: railAsset, storageKey: railKey, width: 160, height: 600, destinationUrl: dest, displayUrl: 'example.com', altText: 'Demo advertisement skyscraper' } }
+        : s.format === 'image'
         ? { headline: null, body: null, cta: null, asset, w: 728, h: 90, alt: 'Demo advertisement banner', sponsor: null, snapshot: { format: 'image', assetId: asset, storageKey, width: 728, height: 90, destinationUrl: dest, displayUrl: 'example.com', altText: 'Demo advertisement banner' } }
         : s.format === 'native'
           ? { headline: 'Demo native advertisement', body: 'A sample native ad served by your local BlissNova demo. It is labelled Sponsored with the advertiser name.', cta: 'Learn more', asset: nativeAsset, w: 600, h: 314, alt: 'Demo native advertisement image', sponsor: `Demo Advertiser Co ${DEMO_TAG}`,

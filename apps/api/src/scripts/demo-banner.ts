@@ -65,9 +65,18 @@ export function demoBannerPng(width = 728, height = 90): Buffer {
       }));
     });
   };
-  const top = Math.round(height / 2) - 31; // the two lines are vertically centred
-  text('DEMO ADVERTISEMENT', 4, top, [255, 255, 255]);
-  text('SAMPLE CREATIVE', 2, top + 44, [224, 231, 255]);
+  if (width >= 440) {
+    const top = Math.round(height / 2) - 31; // the two lines are vertically centred
+    text('DEMO ADVERTISEMENT', 4, top, [255, 255, 255]);
+    text('SAMPLE CREATIVE', 2, top + 44, [224, 231, 255]);
+  } else {
+    // Narrow formats such as a 160x600 skyscraper: one word per line.
+    const top = Math.round(height / 2) - 66;
+    text('DEMO', 4, top, [255, 255, 255]);
+    text('AD', 4, top + 36, [255, 255, 255]);
+    text('SAMPLE', 2, top + 84, [224, 231, 255]);
+    text('CREATIVE', 2, top + 104, [224, 231, 255]);
+  }
   const raw = Buffer.alloc((width * 3 + 1) * height);
   for (let y = 0; y < height; y++) px.copy(raw, y * (width * 3 + 1) + 1, y * width * 3, (y + 1) * width * 3);
   const ihdr = Buffer.alloc(13);

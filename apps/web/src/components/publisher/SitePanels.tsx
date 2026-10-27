@@ -184,6 +184,13 @@ export function SubmitPanel({ orgId, site, onChange }: { orgId: string; site: Si
 }
 
 const POSITIONS = ['header', 'sidebar', 'in_content', 'footer', 'other'];
+const DISPLAYS: Record<string, { label: string; hint: string }> = {
+  inline: { label: 'In the page', hint: 'Shows where you paste the snippet.' },
+  anchor: { label: 'Anchor (sticky bottom bar)', hint: 'A bar fixed to the bottom of the screen that visitors can close. The page gets matching space at the bottom so nothing is hidden. At most 120 px tall; one per page.' },
+  rail_left: { label: 'Side rail, left', hint: 'Fixed beside your content, only on screens wide enough to leave the content clear. At most 300 px wide.' },
+  rail_right: { label: 'Side rail, right', hint: 'Fixed beside your content, only on screens wide enough to leave the content clear. At most 300 px wide.' },
+  interstitial: { label: 'Interstitial (between pages)', hint: 'Full screen when a visitor follows a link to another of your pages, with a clear "Continue" button. At most once every 10 minutes per visitor tab, and never where GDPR applies without consent.' },
+};
 
 export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: string }) {
   const res = useApi<{ data: any[] }>(`/orgs/${orgId}/sites/${siteId}/units`);
@@ -196,7 +203,7 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
     if (!edit) return;
     setBusy(true);
     setError(null);
-    const body = { name: edit.name, formats: edit.formats, responsive: edit.responsive, width: edit.responsive ? null : Number(edit.width) || null, height: edit.responsive ? null : Number(edit.height) || null, position: edit.position };
+    const body = { name: edit.name, formats: edit.formats, responsive: edit.responsive, width: Number(edit.width) || null, height: Number(edit.height) || null, position: edit.position, display: edit.display, noFill: edit.noFill };
     try {
       if (edit.id) await patch(`/orgs/${orgId}/units/${edit.id}`, body);
       else await post(`/orgs/${orgId}/sites/${siteId}/units`, { ...body, key: edit.key });
@@ -211,19 +218,20 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
 
   return (
     <Card>
-      <CardHeader title="Placements" description="Each placement is a slot on your pages where an ad can appear." actions={<Button size="sm" onClick={() => setEdit({ key: '', name: '', formats: ['image', 'text'], responsive: true, width: '', height: '', position: 'in_content' })}><Plus className="size-4" /> Add placement</Button>} />
+      <CardHeader title="Placements" description="Each placement is a slot on your pages where an ad can appear." actions={<Button size="sm" onClick={() => setEdit({ key: '', name: '', formats: ['image', 'text'], responsive: true, width: '', height: '', position: 'in_content', display: 'inline', noFill: 'collapse' })}><Plus className="size-4" /> Add placement</Button>} />
       <Async res={res}>
         {({ data }) => <Table rows={data} rowKey={(r) => r.id} empty="No placements yet. Add one to get an ad tag." columns={[
           { key: 'n', header: 'Name', cell: (r) => <span className="font-medium">{r.name}</span> },
           { key: 'k', header: 'Slot key', cell: (r) => <code className="text-xs">{r.key}</code> },
           { key: 'f', header: 'Formats', cell: (r) => r.formats.map(humanize).join(', ') },
-          { key: 's', header: 'Size', cell: (r) => (r.responsive ? 'Responsive' : `${r.width}×${r.height}`) },
+          { key: 's', header: 'Size', cell: (r) => (r.responsive ? (r.width ? `Responsive, ${r.width}×${r.height}` : 'Responsive') : `${r.width}×${r.height}`) },
+          { key: 'd', header: 'Type', cell: (r) => DISPLAYS[r.display]?.label ?? humanize(r.display) },
           { key: 'p', header: 'Position', cell: (r) => humanize(r.position) },
           { key: 'st', header: 'Status', cell: (r) => <span className="flex gap-1"><StatusBadge status={r.status} />{r.adminBlocked && <Badge tone="danger">Blocked by network</Badge>}</span> },
           { key: 'a', header: '', cell: (r) => r.status !== 'archived' && (
             <span className="flex gap-1">
               <Button size="sm" variant="ghost" onClick={() => setEdit({ ...r, width: r.width ?? '', height: r.height ?? '' })}>Edit</Button>
-              <Button size="sm" variant="ghost" onClick={async () => { try { await patch(`/orgs/${orgId}/units/${r.id}`, { status: r.status === 'active' ? 'paused' : 'active' }); res.reload(); } catch (e) { setError(errorMessage(e)); } }}>{r.status === 'active' ? 'Pause' : 'Activate'}</Button>
+              <Button size="sm" variant="ghost" onClick={async () => { try { await post(`/orgs/${orgId}/units/${r.id}/${r.status === 'active' ? 'pause' : 'activate'}`); res.reload(); } catch (e) { setError(errorMessage(e)); } }}>{r.status === 'active' ? 'Pause' : 'Activate'}</Button>
             </span>
           ) },
         ]} />}
@@ -237,7 +245,9 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
             {!edit.id && <Field label="Slot key" htmlFor="uk" required hint="Used in the ad tag. Lowercase letters, numbers, hyphens and underscores."><Input id="uk" required pattern="^[a-z0-9][a-z0-9_-]{1,63}$" value={edit.key} onChange={(e) => setEdit({ ...edit, key: e.target.value })} placeholder="sidebar-top" /></Field>}
             <fieldset><legend className="mb-2 text-sm font-medium">Allowed formats</legend><div className="flex gap-4">{['image', 'text', 'native'].map((f) => <Checkbox key={f} label={humanize(f)} checked={edit.formats.includes(f)} onChange={(v) => setEdit({ ...edit, formats: v ? [...edit.formats, f] : edit.formats.filter((x: string) => x !== f) })} />)}</div></fieldset>
             <Checkbox label="Responsive (fits the container width)" checked={edit.responsive} onChange={(v) => setEdit({ ...edit, responsive: v })} />
-            {!edit.responsive && <div className="grid grid-cols-2 gap-3"><Field label="Width (px)" htmlFor="uw"><Input id="uw" type="number" min={1} value={edit.width} onChange={(e) => setEdit({ ...edit, width: e.target.value })} /></Field><Field label="Height (px)" htmlFor="uh"><Input id="uh" type="number" min={1} value={edit.height} onChange={(e) => setEdit({ ...edit, height: e.target.value })} /></Field></div>}
+            <div className="grid grid-cols-2 gap-3"><Field label={edit.responsive ? 'Typical width (px)' : 'Width (px)'} htmlFor="uw"><Input id="uw" type="number" min={1} value={edit.width} onChange={(e) => setEdit({ ...edit, width: e.target.value })} /></Field><Field label={edit.responsive ? 'Typical height (px)' : 'Height (px)'} htmlFor="uh" hint={edit.responsive ? 'Optional. Reserves this height so the page does not jump when the ad loads.' : undefined}><Input id="uh" type="number" min={1} value={edit.height} onChange={(e) => setEdit({ ...edit, height: e.target.value })} /></Field></div>
+            <Field label="Placement type" htmlFor="ud" hint={DISPLAYS[edit.display]?.hint}><Select id="ud" value={edit.display} onChange={(e) => setEdit({ ...edit, display: e.target.value })}>{Object.entries(DISPLAYS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</Select></Field>
+            {edit.display === 'inline' && <Field label="When no ad is available" htmlFor="unf" hint={edit.noFill === 'keep_space' ? 'The reserved space stays empty, so nothing on the page moves.' : 'The slot disappears. Content below it may move up.'}><Select id="unf" value={edit.noFill} onChange={(e) => setEdit({ ...edit, noFill: e.target.value })}><option value="collapse">Hide the slot</option><option value="keep_space">Keep the reserved space</option></Select></Field>}
             <Field label="Position on the page" htmlFor="up"><Select id="up" value={edit.position} onChange={(e) => setEdit({ ...edit, position: e.target.value })}>{POSITIONS.map((p) => <option key={p} value={p}>{humanize(p)}</option>)}</Select></Field>
           </form>
         )}

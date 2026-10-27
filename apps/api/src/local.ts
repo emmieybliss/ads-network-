@@ -121,7 +121,14 @@ const seededMarker = join(dataDir, 'seeded');
 if (!existsSync(seededMarker)) {
   console.log('Loading demo data (fictional, labelled [demo])...');
   const seedScript = resolve(import.meta.dirname, 'scripts', 'seed.js');
-  execFileSync(process.execPath, [seedScript], { stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, SEED_PASSWORD: secrets.seedPassword } });
+  try {
+    execFileSync(process.execPath, [seedScript], { stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, SEED_PASSWORD: secrets.seedPassword } });
+  } catch {
+    console.error('\nLoading the demo data failed (the error is above). Stopping. Delete the data folder to start over:', dataDir);
+    await app.close().catch(() => undefined);
+    await pg.stop().catch(() => undefined);
+    process.exit(1);
+  }
   writeFileSync(seededMarker, new Date().toISOString());
 }
 
