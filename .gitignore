@@ -7,3 +7,6 @@ coverage/
 storage/
 .DS_Store
 *.zip
+dump.rdb
+.next/
+*.tsbuildinfo

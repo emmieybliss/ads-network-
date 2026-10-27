@@ -1,10 +1,14 @@
 /**
  * BlissNova ad tag.
  *
- * Loaded by publishers as:
- *   <script async src="https://<api-host>/sdk/v1/bn.js"
- *           data-site-key="pk_..." data-api="https://<api-host>"></script>
- *   <div class="blissnova-ad" data-bn-slot="sidebar_300x250"></div>
+ * Loaded by publishers as one self-contained snippet per placement:
+ *   <div id="bn-ad-slot-sidebar_300x250" data-bn-slot="sidebar_300x250"></div>
+ *   <script async src="https://<api-host>/sdk/ads.js"
+ *           data-site-key="pk_..." data-slot="sidebar_300x250"></script>
+ *
+ * or with the script once and any number of <div data-bn-slot="..."> elements.
+ * A script with data-slot but no matching container gets one created just
+ * before it, so the snippet works even if the div is left out.
  *
  * Design notes:
  * - No framework, no dependencies, no cookies written by this script.
@@ -39,7 +43,7 @@ interface Consent {
 }
 
 const VID_KEY = 'bn_vid';
-const SLOT_SELECTOR = '.blissnova-ad[data-bn-slot]';
+const SLOT_SELECTOR = '[data-bn-slot]';
 const VIEWABLE_RATIO = 0.5;
 const VIEWABLE_MS = 1000;
 const BATCH_MS = 1500;
@@ -436,7 +440,29 @@ interface PublicApi {
   version: string;
 }
 
+const SLOT_RE = /^[a-z0-9][a-z0-9_-]{1,63}$/;
+
+/** Make sure every <script data-slot> on the page has a container to fill. */
+function ensureSlotContainers(): void {
+  const scripts = Array.prototype.slice.call(document.querySelectorAll('script[data-site-key][data-slot]')) as HTMLScriptElement[];
+  for (const sc of scripts) {
+    const slot = sc.getAttribute('data-slot') ?? '';
+    if (!SLOT_RE.test(slot)) continue;
+    if (document.querySelector(`[data-bn-slot="${slot}"]`)) continue;
+    const byId = document.getElementById(`bn-ad-slot-${slot}`);
+    if (byId) {
+      byId.setAttribute('data-bn-slot', slot);
+      continue;
+    }
+    const div = document.createElement('div');
+    div.id = `bn-ad-slot-${slot}`;
+    div.setAttribute('data-bn-slot', slot);
+    sc.parentNode?.insertBefore(div, sc);
+  }
+}
+
 (function boot() {
+  ensureSlotContainers();
   const existing = (window as unknown as { blissnova?: PublicApi }).blissnova;
   if (existing && typeof existing.refresh === 'function') {
     existing.refresh();

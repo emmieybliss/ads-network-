@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyReply, FastifyInstance, FastifyRequest } from 'fastify';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,11 +97,14 @@ export async function serveRoutes(app: FastifyInstance) {
 /** Static, cacheable public assets: the ad tag and creative images. Registered at the root (not /api/v1). */
 export async function staticRoutes(app: FastifyInstance) {
   let sdk: Buffer | null = null;
-  app.get('/sdk/v1/bn.js', { schema: { hide: true } }, async (_req, reply) => {
+  // /sdk/ads.js is the documented address; /sdk/v1/bn.js is kept for tags already pasted.
+  app.get('/sdk/ads.js', { schema: { hide: true } }, async (_req, reply) => sendSdk(reply));
+  app.get('/sdk/v1/bn.js', { schema: { hide: true } }, async (_req, reply) => sendSdk(reply));
+  async function sendSdk(reply: FastifyReply) {
     sdk ??= await readFile(SDK_PATH).catch(() => null);
     if (!sdk) return reply.status(503).type('application/javascript').send('/* BlissNova ad tag not built. Run pnpm --filter @blissnova/ad-tag build */');
     return reply.type('application/javascript; charset=utf-8').header('cache-control', 'public, max-age=300, stale-while-revalidate=86400').header('x-content-type-options', 'nosniff').send(sdk);
-  });
+  }
   app.get('/assets/*', { schema: { hide: true } }, async (req, reply) => {
     const key = (req.params as { '*': string })['*'];
     let data: Buffer | null = null;
