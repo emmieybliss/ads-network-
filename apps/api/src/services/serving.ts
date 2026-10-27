@@ -3,6 +3,7 @@ import { decide, unitCostMicros, type CampaignCandidate, type CreativeCandidate 
 import type { PlatformSettings } from '@blissnova/shared';
 import { deviceCategory, hostAuthorized, isKnownCrawler, normalizeHost, signDeliveryToken, visitorHash, type DeliveryClaims } from '@blissnova/tracking';
 import type { AppContext } from '../lib/context';
+import { decideConsent, type ConsentReason, type ConsentSignals } from './consent';
 
 /**
  * Ad-serving runtime. Holds an in-memory snapshot of approved inventory and
@@ -127,18 +128,20 @@ export interface ServeRequest {
   siteKey: string;
   units: Array<{ slot: string }>;
   page: { url: string; keywords?: string[] };
-  consent?: { personalized?: boolean; gdprApplies?: boolean };
+  consent?: ConsentSignals;
   vid?: string;
   pv: string;
 }
-export interface ServeMeta { ip: string; ipHash: string; ua: string; origin: string | null; country: string; requestId: string }
+export interface ServeMeta { ip: string; ipHash: string; ua: string; origin: string | null; country: string; requestId: string; secGpc?: boolean }
 export interface ServedAd {
   slot: string;
   ad: null | { format: 'image' | 'text' | 'native'; token: string; clickUrl: string; width: number | null; height: number | null; image?: { url: string; alt: string }; text?: { headline: string; body: string; cta: string; displayUrl: string }; native?: { imageUrl: string; alt: string; headline: string; body: string; cta: string; displayUrl: string; sponsor: string } };
 }
 export interface ServeLog { deliveries: Array<{ claims: DeliveryClaims; ipHash: string; uaHash: string | null }>; counters: Array<{ unitId: string; field: 'requests' | 'filled' | 'no_fill' | 'cap_rejects' | 'budget_rejects' | 'blocked' }>; day: string }
 
-export type ServeOutcome = { status: 'ok' | 'inactive' | 'blocked' | 'disabled'; ads: ServedAd[]; log: ServeLog | null };
+/** What the tag may do on the device: keep a visitor id only when personalization is allowed. */
+export interface ServePrivacy { personalization: boolean; reason: ConsentReason }
+export type ServeOutcome = { status: 'ok' | 'inactive' | 'blocked' | 'disabled'; ads: ServedAd[]; log: ServeLog | null; privacy?: ServePrivacy };
 
 export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMeta, settings: PlatformSettings): Promise<ServeOutcome> {
   const empty = (status: ServeOutcome['status']): ServeOutcome => ({ status, ads: req.units.map((u) => ({ slot: u.slot, ad: null })), log: null });
@@ -163,7 +166,9 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     return { ...empty('blocked'), log };
   }
 
-  const personalized = Boolean(req.consent?.personalized && settings.tracking.personalizedAllowed && req.vid && /^[A-Za-z0-9_-]{16,64}$/.test(req.vid));
+  const consent = decideConsent(req.consent, { personalizedAllowed: settings.tracking.personalizedAllowed, vendorId: ctx.config.TCF_VENDOR_ID, secGpc: !!meta.secGpc });
+  const privacy: ServePrivacy = { personalization: consent.personalized, reason: consent.reason };
+  const personalized = Boolean(consent.personalized && req.vid && /^[A-Za-z0-9_-]{16,64}$/.test(req.vid));
   const vHash = personalized ? visitorHash(ctx.config.APP_SECRET, req.vid!) : undefined;
   const device = deviceCategory(meta.ua);
   const keywords = (req.page.keywords ?? []).map((k) => k.toLowerCase().slice(0, 60)).slice(0, 20);
@@ -236,7 +241,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
       },
     });
   }
-  return { status: 'ok', ads, log };
+  return { status: 'ok', ads, log, privacy };
 }
 
 function hostOf(url: string) {

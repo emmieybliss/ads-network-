@@ -13,7 +13,15 @@ const serveBody = z.object({
   siteKey: z.string().regex(/^pk_[A-Za-z0-9]{16,40}$/),
   units: z.array(z.object({ slot: z.string().regex(/^[a-z0-9][a-z0-9_-]{1,63}$/) })).min(1).max(10),
   page: z.object({ url: z.string().max(2048), keywords: z.array(z.string().max(60)).max(20).optional() }),
-  consent: z.object({ personalized: z.boolean().optional(), gdprApplies: z.boolean().optional() }).optional(),
+  consent: z.object({
+    personalized: z.boolean().optional(),
+    gdprApplies: z.boolean().optional(),
+    tcString: z.string().max(4096).regex(/^[A-Za-z0-9_.-]*$/).optional(),
+    gpp: z.string().max(8192).regex(/^[A-Za-z0-9_.~-]*$/).optional(),
+    gppSections: z.array(z.number().int().min(-1).max(255)).max(40).optional(),
+    usp: z.string().max(4).optional(),
+    gpc: z.boolean().optional(),
+  }).optional(),
   vid: z.string().max(64).optional(),
   pv: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
 });
@@ -49,13 +57,13 @@ export async function serveRoutes(app: FastifyInstance) {
     const b = bodyOf(req, serveBody);
     const s = await ctx.settings.get();
     const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null;
-    const out = await serveAds(ctx, b, { ip: req.ip, ipHash: req.ipHash, ua: req.headers['user-agent'] ?? '', origin, country: country(req), requestId: req.id }, s);
+    const out = await serveAds(ctx, b, { ip: req.ip, ipHash: req.ipHash, ua: req.headers['user-agent'] ?? '', origin, country: country(req), requestId: req.id, secGpc: req.headers['sec-gpc'] === '1' }, s);
     if (out.log) {
       if (inline || !ctx.queues.serveLog) await writeServeLog(ctx.db, out.log);
       else await ctx.queues.serveLog.add('log', out.log);
     }
     reply.header('cache-control', 'no-store');
-    return { status: out.status, ads: out.ads };
+    return { status: out.status, ads: out.ads, privacy: out.privacy };
   });
 
   app.post('/events', { config: { rateLimit: { bucket: 'events' }, allowDuringMaintenance: true }, schema: { tags: ['ad serving'], body: eventsBody, description: 'Report rendered and viewable impressions. Accepts application/json or text/plain (sendBeacon).' } }, async (req, reply) => {

@@ -597,6 +597,9 @@
                     "type": "string",
                     "format": "email",
                     "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+                  },
+                  "sellersJsonConfidential": {
+                    "type": "boolean"
                   }
                 }
               }
@@ -2650,6 +2653,76 @@
         }
       }
     },
+    "/api/v1/orgs/{orgId}/sites/{id}/ads-txt": {
+      "get": {
+        "tags": [
+          "publisher sites"
+        ],
+        "description": "The line this site should list in its ads.txt, and the result of the last check.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "orgId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{orgId}/sites/{id}/ads-txt/check": {
+      "post": {
+        "tags": [
+          "publisher sites"
+        ],
+        "description": "Fetch the site's /ads.txt now and look for the BlissNova line.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "orgId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/api/v1/orgs/{orgId}/sites/{siteId}/units": {
       "get": {
         "tags": [
@@ -3875,6 +3948,32 @@
                         "type": "boolean"
                       },
                       "gdprApplies": {
+                        "type": "boolean"
+                      },
+                      "tcString": {
+                        "type": "string",
+                        "maxLength": 4096,
+                        "pattern": "^[A-Za-z0-9_.-]*$"
+                      },
+                      "gpp": {
+                        "type": "string",
+                        "maxLength": 8192,
+                        "pattern": "^[A-Za-z0-9_.~-]*$"
+                      },
+                      "gppSections": {
+                        "maxItems": 40,
+                        "type": "array",
+                        "items": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 255
+                        }
+                      },
+                      "usp": {
+                        "type": "string",
+                        "maxLength": 4
+                      },
+                      "gpc": {
                         "type": "boolean"
                       }
                     }

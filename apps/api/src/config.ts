@@ -16,6 +16,8 @@ const envSchema = z.object({
    * it in sellers.json. Empty = the host of PUBLIC_SITE_URL.
    */
   ADS_TXT_DOMAIN: z.string().trim().toLowerCase().regex(/^$|^[a-z0-9.-]+$/, 'ADS_TXT_DOMAIN must be a bare host name such as example.com').default(''),
+  // IAB Global Vendor List id, once the network is registered with IAB Europe. Empty: ads under GDPR stay contextual.
+  TCF_VENDOR_ID: z.preprocess((v) => (v === '' ? undefined : v), z.coerce.number().int().min(1).max(65535).optional()),
   /** Comma-separated origins allowed to call management APIs with credentials (the dashboard). */
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
   TRUST_PROXY: bool(false),

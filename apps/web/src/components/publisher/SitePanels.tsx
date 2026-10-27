@@ -1,7 +1,7 @@
 'use client';
 import { useState, type FormEvent } from 'react';
 import { CheckCircle2, FlaskConical, Plus, RefreshCw, ShieldCheck } from 'lucide-react';
-import { Alert, Async, Badge, Button, Card, CardHeader, Checkbox, CodeBlock, CopyButton, Field, Input, Modal, Select, StatusBadge, Table, Textarea } from '@/components/ui';
+import { Alert, Async, Badge, Button, Card, CardHeader, Checkbox, CodeBlock, CopyButton, DefinitionList, Field, Input, Modal, Select, StatusBadge, Table, Textarea } from '@/components/ui';
 import { useApi, useConfig } from '@/lib/hooks';
 import { ApiError, errorMessage, patch, post } from '@/lib/api';
 import { formatDate, formatNumber, humanize, timeAgo } from '@/lib/format';
@@ -267,10 +267,30 @@ export function TagPanel({ orgId, siteId }: { orgId: string; siteId: string }) {
               </div>
             )}
           </Card>
-          {data.consentNote && <Alert tone="info" title="Consent">{data.consentNote}</Alert>}
+          {data.consent && <ConsentPanel consent={data.consent} />}
         </div>
       )}
     </Async>
+  );
+}
+
+/** How the tag reads the site's consent tool, and what that means for the ads it gets. */
+function ConsentPanel({ consent }: { consent: { personalizedAllowed: boolean; tcfVendorRegistered: boolean; signals: string[] } }) {
+  return (
+    <Card>
+      <CardHeader title="Consent and privacy"
+        description="If your site uses a consent management platform (CMP), the tag reads its signals automatically. You don't need any extra code." />
+      <DefinitionList items={[
+        ['Signals read', consent.signals.join(' · ')],
+        ['Personalized ads on this network', consent.personalizedAllowed ? 'On, when the visitor\'s signals allow it' : 'Off: every ad is contextual'],
+        ['Visitors where GDPR applies', consent.tcfVendorRegistered ? 'Personalized only with TCF consent for our vendor and purposes 1, 3 and 4' : 'Contextual ads only (the network has no IAB vendor registration yet)'],
+        ['Without a signal', 'Contextual ads that store nothing on the visitor\'s device'],
+      ]} />
+      <div className="mt-4 space-y-2 border-t border-border pt-4 text-sm text-muted">
+        <p>The tag waits up to 2 seconds for your CMP before requesting ads. An opt-out (GPC, a US opt-out of sale, sharing or targeted ads, or a TCF refusal) always means contextual ads, and any stored visitor id is removed.</p>
+        <p>No CMP? Call <code className="text-xs">window.blissnova.setConsent({'{'} personalized: true {'}'})</code> where you have consent, or <code className="text-xs">false</code> to turn personalization off. Run <code className="text-xs">window.blissnova.getPrivacy()</code> in the browser console to see what the last request was allowed to do.</p>
+      </div>
+    </Card>
   );
 }
 

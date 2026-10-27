@@ -16,8 +16,13 @@
  *   properties only. Nothing from the API is ever passed to innerHTML.
  * - Each slot renders inside a closed shadow root so publisher CSS cannot
  *   restyle (or hide) the required "Sponsored" label.
- * - A visitor id is stored in localStorage only while consent allows
- *   personalisation; revoking consent deletes it.
+ * - Consent: the tag reads an IAB TCF v2.2 CMP (__tcfapi), a GPP CMP
+ *   (__gpp), the US Privacy API (__uspapi) and Global Privacy Control, and
+ *   sends the signals with each ad request. The server decides whether the
+ *   ad may be personalized. Until a CMP has answered (or 2 seconds pass) no
+ *   ad is requested.
+ * - A visitor id is stored in localStorage only after the server says
+ *   personalization is allowed; any signal against it deletes the id.
  * - Any failure collapses the slot quietly. We never block page rendering and
  *   we never retry in a loop.
  */
@@ -37,11 +42,23 @@ interface AdPayload {
 interface ServeResponse {
   status: 'ok' | 'inactive' | 'blocked' | 'disabled';
   ads: Array<{ slot: string; ad: AdPayload | null }>;
+  privacy?: { personalization: boolean; reason: string };
 }
 interface Consent {
   personalized: boolean;
   gdprApplies?: boolean;
 }
+/** Signals read from consent management platforms on the page. */
+interface CmpSignals {
+  gdprApplies?: boolean;
+  tcString?: string;
+  storageConsent?: boolean; // TCF purpose 1
+  gpp?: string;
+  gppSections?: number[];
+  usp?: string;
+  gpc?: boolean;
+}
+type CmpFn = (...args: unknown[]) => void;
 
 const VID_KEY = 'bn_vid';
 const SLOT_SELECTOR = '[data-bn-slot]';
@@ -49,6 +66,7 @@ const VIEWABLE_RATIO = 0.5;
 const VIEWABLE_MS = 1000;
 const BATCH_MS = 1500;
 const MAX_BATCH = 20;
+const CMP_TIMEOUT_MS = 2000;
 
 /* ------------------------------------------------------------------ utils */
 
@@ -76,13 +94,14 @@ function store(): Storage | null {
   }
 }
 
-function readVid(consent: Consent): string | undefined {
-  if (!consent.personalized) return undefined;
+/** The stored visitor id; a new one is created only when `create` is set. */
+function readVid(create: boolean): string | undefined {
   const s = store();
   if (!s) return undefined;
   try {
     let v = s.getItem(VID_KEY);
     if (!v || !/^[A-Za-z0-9_-]{16,64}$/.test(v)) {
+      if (!create) return undefined;
       v = randomId(22);
       s.setItem(VID_KEY, v);
     }
@@ -130,6 +149,70 @@ function keywords(): string[] | undefined {
   return out.length ? out : undefined;
 }
 
+/* ---------------------------------------------------------------- consent */
+
+function cmpFn(name: string): CmpFn | null {
+  const f = (window as unknown as Record<string, unknown>)[name];
+  return typeof f === 'function' ? (f as CmpFn) : null;
+}
+
+/**
+ * Listen to the CMPs on the page. `update` gets every change; the returned
+ * promise settles when each CMP present has given a usable answer, or after
+ * CMP_TIMEOUT_MS, whichever is first.
+ */
+function watchCmps(update: (s: CmpSignals) => void): Promise<void> {
+  const waits: Array<Promise<void>> = [];
+  const gpc = (navigator as unknown as { globalPrivacyControl?: boolean }).globalPrivacyControl === true;
+  if (gpc) update({ gpc: true });
+
+  const tcf = cmpFn('__tcfapi');
+  if (tcf) {
+    waits.push(new Promise<void>((done) => {
+      try {
+        tcf('addEventListener', 2, (d: { gdprApplies?: boolean; tcString?: string; eventStatus?: string; purpose?: { consents?: Record<string, boolean> } } | null, ok: boolean) => {
+          if (!ok || !d) return;
+          update({ gdprApplies: d.gdprApplies, tcString: d.tcString || undefined, storageConsent: d.purpose?.consents?.['1'] === true });
+          // cmpuishown: the visitor has not chosen yet; keep waiting for that.
+          if (d.gdprApplies === false || d.eventStatus === 'tcloaded' || d.eventStatus === 'useractioncomplete') done();
+        });
+      } catch { done(); }
+    }));
+  }
+
+  const gppApi = cmpFn('__gpp');
+  if (gppApi) {
+    waits.push(new Promise<void>((done) => {
+      const take = (raw: unknown) => {
+        const r = raw as { pingData?: unknown } | null;
+        const p = (r && typeof r === 'object' && 'pingData' in r ? r.pingData : r) as { gppString?: string; applicableSections?: number[]; signalStatus?: string } | null;
+        if (!p || typeof p !== 'object') return;
+        if (typeof p.gppString === 'string') update({ gpp: p.gppString || undefined, gppSections: Array.isArray(p.applicableSections) ? p.applicableSections.slice(0, 40) : undefined });
+        if (p.signalStatus !== 'not ready') done();
+      };
+      try {
+        gppApi('addEventListener', (d: unknown, ok: boolean) => { if (ok) take(d); });
+        gppApi('ping', (d: unknown, ok: boolean) => { if (ok !== false) take(d); });
+      } catch { done(); }
+    }));
+  }
+
+  const usp = cmpFn('__uspapi');
+  if (usp) {
+    waits.push(new Promise<void>((done) => {
+      try {
+        usp('getUSPData', 1, (d: { uspString?: string } | null, ok: boolean) => {
+          if (ok && d && typeof d.uspString === 'string') update({ usp: d.uspString });
+          done();
+        });
+      } catch { done(); }
+    }));
+  }
+
+  if (!waits.length) return Promise.resolve();
+  return Promise.race([Promise.all(waits).then(() => undefined), new Promise<void>((r) => setTimeout(r, CMP_TIMEOUT_MS))]);
+}
+
 /* ------------------------------------------------------------- the runtime */
 
 class Tag {
@@ -138,6 +221,10 @@ class Tag {
   private readonly pv = randomId(16);
   private consent: Consent = { personalized: false };
   private consentSet = false;
+  private cmp: CmpSignals = {};
+  private cmpReady: Promise<void> = Promise.resolve();
+  /** The server's last word on personalization for this visitor. */
+  private privacy: { personalization: boolean; reason: string } | null = null;
   private readonly queue: Array<{ id: string; type: 'render' | 'viewable'; t: string }> = [];
   private flushTimer: number | null = null;
   private readonly seen = new WeakSet<Element>();
@@ -153,16 +240,37 @@ class Tag {
   /** Publisher API: window.blissnova.setConsent({ personalized: true }). */
   setConsent(c: Partial<Consent> | boolean): void {
     const next: Consent = typeof c === 'boolean' ? { personalized: c } : { personalized: !!c.personalized, gdprApplies: c.gdprApplies };
-    const was = this.consent.personalized;
     this.consent = next;
     this.consentSet = true;
-    if (was && !next.personalized) dropVid();
+    if (!next.personalized) dropVid();
     if (this.started) this.scan();
+  }
+
+  /** Publisher API: what the last ad request was allowed to do, for debugging consent setups. */
+  getPrivacy() {
+    const c = this.cmp;
+    return {
+      personalization: this.privacy?.personalization ?? false,
+      reason: this.privacy?.reason ?? 'pending',
+      signals: { tcf: c.tcString !== undefined || c.gdprApplies !== undefined, gdprApplies: c.gdprApplies, gpp: !!c.gpp, usp: c.usp, gpc: !!c.gpc, publisher: this.consentSet ? this.consent.personalized : undefined },
+    };
+  }
+
+  /** Whether the device may hold a visitor id right now, from the page's own signals. */
+  private deviceStorageAllowed(): boolean {
+    if (this.cmp.gpc) return false;
+    if (this.cmp.gdprApplies && !this.cmp.storageConsent) return false;
+    if (this.consentSet && !this.consent.personalized) return false;
+    return this.privacy?.personalization !== false;
   }
 
   start(): void {
     if (this.started) return;
     this.started = true;
+    this.cmpReady = watchCmps((s) => {
+      this.cmp = { ...this.cmp, ...s };
+      if (!this.deviceStorageAllowed()) dropVid();
+    });
     this.scan();
     // Slots added later (infinite scroll, client-side routing) are picked up.
     try {
@@ -232,7 +340,10 @@ class Tag {
       slots.push(slot);
     }
     if (!slots.length) return;
+    await this.cmpReady;
 
+    const c = this.cmp;
+    const storageOk = this.deviceStorageAllowed();
     let res: ServeResponse;
     try {
       const r = await fetch(`${this.api}/api/v1/serve`, {
@@ -244,8 +355,12 @@ class Tag {
           siteKey: this.siteKey,
           units: slots.map((slot) => ({ slot })),
           page: { url: pageUrl(), keywords: keywords() },
-          consent: this.consentSet ? this.consent : undefined,
-          vid: readVid(this.consent),
+          consent: {
+            personalized: this.consentSet ? this.consent.personalized : undefined,
+            gdprApplies: c.gdprApplies ?? (this.consentSet ? this.consent.gdprApplies : undefined),
+            tcString: c.tcString, gpp: c.gpp, gppSections: c.gppSections, usp: c.usp, gpc: c.gpc || undefined,
+          },
+          vid: storageOk ? readVid(this.privacy?.personalization === true) : undefined,
           pv: this.pv,
         }),
       });
@@ -254,6 +369,12 @@ class Tag {
     } catch {
       for (const el of byslot.values()) collapse(el);
       return;
+    }
+    if (res.privacy) {
+      this.privacy = res.privacy;
+      // Allowed: keep an id for the next requests. Not allowed: remove any stored one.
+      if (res.privacy.personalization && this.deviceStorageAllowed()) readVid(true);
+      else dropVid();
     }
 
     for (const entry of res.ads ?? []) {
@@ -486,6 +607,7 @@ const SHADOW_CSS = `
 
 interface PublicApi {
   setConsent(c: Partial<Consent> | boolean): void;
+  getPrivacy(): ReturnType<Tag['getPrivacy']>;
   refresh(): void;
   version: string;
 }
@@ -541,6 +663,7 @@ function ensureSlotContainers(): void {
 
   const api_: PublicApi = {
     setConsent: (c) => tag.setConsent(c),
+    getPrivacy: () => tag.getPrivacy(),
     refresh: () => tag.refresh(),
     version: '1',
   };

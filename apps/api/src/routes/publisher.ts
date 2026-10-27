@@ -339,7 +339,11 @@ export async function publisherRoutes(app: FastifyInstance) {
           'For several placements on one page, load the script once and add one <div data-bn-slot="..."> per placement.',
           'Any site that can include HTML can use the tag; no plugin is required.',
         ],
-        consentNote: 'By default the tag requests contextual (non-personalized) ads and stores nothing on the visitor\'s device. To allow personalization where you have consent, call window.blissnova.setConsent({ personalized: true }) from your consent tool.',
+        consent: {
+          personalizedAllowed: (await app.ctx.settings.get()).tracking.personalizedAllowed,
+          tcfVendorRegistered: config.TCF_VENDOR_ID !== undefined,
+          signals: ['IAB TCF v2.2 (__tcfapi)', 'IAB GPP (__gpp): US national and US Privacy sections', 'US Privacy API (__uspapi)', 'Global Privacy Control'],
+        },
       },
     };
   });

@@ -111,6 +111,20 @@ are excluded as invalid traffic afterwards, the top-up is not recalculated
 automatically. Finance staff can correct it with a manual adjustment, which is
 audited.
 
+## Consent (TCF v2.2, GPP, US Privacy, GPC)
+
+The ad tag collects signals from the page's CMPs and sends them with each
+`/serve` request; it does not decide anything itself. `services/consent.ts`
+decodes TCF v2 TC strings (core segment: purposes and vendor consents), GPP
+headers (Fibonacci-coded section ids), the GPP US national section and US
+Privacy strings, and returns `{ personalized, reason }`. Serving uses a visitor
+id only when that is true, and the response tells the tag
+(`privacy.personalization`) whether it may keep one. GPP sections the server
+cannot decode yet count as an opt-out. TCF consent needs `TCF_VENDOR_ID`; the
+network has no IAB registration, so it is unset by default. The demo site's
+`/consent-test` page answers the IAB APIs with fixed test signals to show each
+outcome.
+
 ## ads.txt and sellers.json
 
 Each publisher's seller id is its organization id. The site's Ad tag tab
