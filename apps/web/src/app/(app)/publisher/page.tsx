@@ -21,11 +21,13 @@ export default function PublisherOverview() {
           const none = !t.validImpressions && !data.requests?.requests;
           return (
             <div className="space-y-5">
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
                 <Stat label="Estimated earnings (30 days)" value={money(t.earningsMicros)} definition="Your share of valid billable events. Final amounts are confirmed at settlement and can be reduced if traffic is later found invalid." />
                 <Stat label="Pending (in hold)" value={money(data.pendingMicros)} />
                 <Stat label="Available for payout" value={money(data.availableMicros)} hint={<Link className="text-primary hover:underline" href="/publisher/earnings">Payouts</Link>} />
                 <Stat label="RPM" value={money(t.rpmMicros)} definition="Estimated earnings per 1,000 valid impressions." />
+                <Stat label="Page RPM" value={money(data.pageRpmMicros)} definition="Estimated earnings per 1,000 page views. A page view is a page where the ad tag asked for at least one ad." hint={<Link className="text-primary hover:underline" href="/publisher/reports#pages">By page</Link>} />
+                <Stat label="Page views" value={formatNumber(data.pageviews)} />
                 <Stat label="Ad requests" value={formatNumber(data.requests?.requests)} />
                 <Stat label="Fill rate" value={data.requests?.fillRate == null ? '—' : formatPercent(data.requests.fillRate, 1)} definition="Requests that received an ad. Fill depends on advertiser demand and is never guaranteed." />
                 <Stat label="Valid impressions" value={formatNumber(t.validImpressions)} />

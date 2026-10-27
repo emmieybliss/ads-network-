@@ -40,6 +40,9 @@
 - The user agent is reduced to a device category and a hash.
 - Country comes only from a CDN header you configure. Otherwise it is "ZZ".
 - The page host and path are stored, without the query string or fragment.
+  Page view counts per path (for page RPM) are daily totals with no visitor
+  data; the page view id is kept in Redis for 30 minutes only to avoid double
+  counting.
 
 ## Retention (configurable in Admin, Settings)
 

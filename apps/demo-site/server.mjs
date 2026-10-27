@@ -28,9 +28,11 @@ const slot = (key, extra = '', div = '') => `<div id="bn-ad-slot-${key}" data-bn
 <script async src="${esc(apiUrl)}/sdk/ads.js" data-site-key="${esc(siteKey)}" data-slot="${key}"${extra}></script>`;
 
 const ARTICLES = {
-  1: { title: 'Five small habits for a calmer workday', next: 2 },
-  2: { title: 'A beginner\'s guide to keeping houseplants alive', next: 1 },
+  1: { title: 'Five small habits for a calmer workday', path: '/calmer-workday', next: 2 },
+  2: { title: 'A beginner\'s guide to keeping houseplants alive', path: '/houseplants-guide', next: 1 },
 };
+// Each article has its own path so per-page reports can tell them apart.
+const ARTICLE_BY_PATH = { '/': 1, '/index.html': 1, [ARTICLES[1].path]: 1, [ARTICLES[2].path]: 2 };
 
 // Generic sample text for the long demo article; fictional and for layout only.
 const LONG = [
@@ -94,7 +96,7 @@ ${LONG.map((t) => `    <p>${esc(t)}</p>`).join('\n')}
     ${n === 2 ? `<script async src="${esc(apiUrl)}/sdk/ads.js" data-site-key="${esc(siteKey)}" data-auto="1"></script>` : ''}
 `}
     <p>Other placement types: a <strong>sticky anchor</strong> at the bottom of the screen (close it with ×), a <strong>side rail</strong> on the right on wide screens, and an <strong>interstitial</strong> that appears when you follow the link below to the next article. The interstitial shows at most once every 10 minutes in a tab.</p>
-    <p><a href="/?article=${ARTICLES[n].next}" id="next-article">Read the next article: ${esc(ARTICLES[ARTICLES[n].next].title)}</a></p>
+    <p><a href="${ARTICLES[ARTICLES[n].next].path}" id="next-article">Read the next article: ${esc(ARTICLES[ARTICLES[n].next].title)}</a></p>
     <p><a href="${esc(webUrl)}/publisher">Open the publisher dashboard</a> · <a href="${esc(webUrl)}/advertiser">Open the advertiser dashboard</a></p>
   </article>
   <aside>
@@ -239,7 +241,12 @@ createServer((req, res) => {
     return;
   }
   const consentKind = url.pathname === '/consent-test' ? (Object.hasOwn(SCENARIOS, url.searchParams.get('cmp') ?? '') ? url.searchParams.get('cmp') : 'none') : null;
-  if (url.pathname !== '/' && url.pathname !== '/index.html' && !consentKind) {
+  if (url.searchParams.get('article') === '2') {
+    res.writeHead(301, { location: ARTICLES[2].path }).end();
+    return;
+  }
+  const article = ARTICLE_BY_PATH[url.pathname];
+  if (!article && !consentKind) {
     res.writeHead(404, { 'content-type': 'text/plain' }).end('Not found');
     return;
   }
@@ -248,5 +255,5 @@ createServer((req, res) => {
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'strict-origin-when-cross-origin',
-  }).end(consentKind ? consentPage(consentKind) : page(url.searchParams.get('article') === '2' ? 2 : 1));
+  }).end(consentKind ? consentPage(consentKind) : page(article));
 }).listen(port, () => console.log(`Demo publisher site on http://localhost:${port} (also http://demo-publisher.localhost:${port})`));

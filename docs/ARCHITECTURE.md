@@ -147,6 +147,26 @@ places one next to an existing slot or after the last paragraph. The inserted
 slots are ordinary slots of that placement, so serving, labels, caps and
 reports are unchanged. Pausing the placement turns automatic ads off.
 
+## Page views and page RPM
+
+Page RPM is estimated earnings per 1,000 page views, the main number
+publishers compare networks by. A page view here is a page where the ad tag
+asked for at least one ad: the first `/serve` request carrying a new page
+view id (`pv`, made by the tag per page load) adds one to `page_views` for
+that day, site and path; later requests with the same id within 30 minutes
+are not counted again (a Redis `SET NX` key). Pages without the tag are not
+seen, so this is lower than an analytics tool's count.
+
+The path (no host, query string or fragment, at most 300 characters) goes into
+the signed delivery token (`pp`), so every event of that ad, including clicks,
+records `ad_events.page_path`. The daily aggregation job rebuilds
+`page_daily_stats` (valid impressions, valid clicks, publisher earnings per
+site and path) alongside `daily_stats`. `GET /orgs/:orgId/reports/pages`
+combines the two and returns page views, impressions per page view, CTR,
+estimated earnings and page RPM per page; `/reports/pages/export` gives the
+same as CSV. The publisher overview shows page views and page RPM, and the
+Reports page has a Pages tab. Migration 0011.
+
 ## Consent (TCF v2.2, GPP, US Privacy, GPC)
 
 The ad tag collects signals from the page's CMPs and sends them with each

@@ -63,7 +63,14 @@ async function org(c: PoolClient, name: string, type: 'advertiser' | 'publisher'
   return id;
 }
 
-interface SampleSpec { campaignId: string; creativeId: string; unitId: string; pricing: 'cpm' | 'cpc'; rateMicros: bigint; perDay: [number, number]; ctr: number }
+// Demo-site pages each placement appears on (the demo home page shows the first article).
+const SAMPLE_PAGES: Record<string, string[]> = {
+  'demo-native': ['/', '/calmer-workday'],
+  'demo-auto': ['/houseplants-guide'],
+  default: ['/', '/', '/calmer-workday', '/houseplants-guide'],
+};
+
+interface SampleSpec { campaignId: string; creativeId: string; unitId: string; pricing: 'cpm' | 'cpc'; rateMicros: bigint; perDay: [number, number]; ctr: number; pages: string[] }
 
 /**
  * Two weeks of generated sample events for the demo campaigns, inserted as
@@ -87,24 +94,24 @@ async function sampleHistory(c: PoolClient, specs: SampleSpec[], ctx: { siteId: 
                   (ARRAY['US','US','US','GB','CA','DE','IN','ZZ'])[1 + floor(random() * 8)::int] AS country,
                   (ARRAY['desktop','desktop','mobile','mobile','tablet'])[1 + floor(random() * 5)::int] AS device,
                   random() < 0.03 AS invalid, random() < 0.66 AS viewable, random() < $9::float AS clicked,
-                  md5(random()::text) AS visitor
+                  md5(random()::text) AS visitor, ($15::text[])[1 + floor(random() * cardinality($15::text[]))::int] AS page
            FROM generate_series(1, $2::int)
          ), ev AS (
-           SELECT delivery, at, country, device, visitor, 'served' AS type, false AS invalid FROM d
-           UNION ALL SELECT delivery, at + interval '1 second', country, device, visitor, 'render', invalid FROM d
-           UNION ALL SELECT delivery, at + interval '3 seconds', country, device, visitor, 'viewable', false FROM d WHERE viewable AND NOT invalid
-           UNION ALL SELECT delivery, at + interval '20 seconds', country, device, visitor, 'click', false FROM d WHERE clicked AND NOT invalid
+           SELECT delivery, at, country, device, visitor, page, 'served' AS type, false AS invalid FROM d
+           UNION ALL SELECT delivery, at + interval '1 second', country, device, visitor, page, 'render', invalid FROM d
+           UNION ALL SELECT delivery, at + interval '3 seconds', country, device, visitor, page, 'viewable', false FROM d WHERE viewable AND NOT invalid
+           UNION ALL SELECT delivery, at + interval '20 seconds', country, device, visitor, page, 'click', false FROM d WHERE clicked AND NOT invalid
          )
          INSERT INTO ad_events (client_event_id, delivery_id, type, status, invalid_reason, ivt_score, billable, cost_micros, publisher_micros, currency,
-                                campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, page_host, occurred_at, received_at)
+                                campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, page_host, page_path, occurred_at, received_at)
          SELECT 'demo-sample:' || gen_random_uuid(), delivery, type, CASE WHEN invalid THEN 'invalid' ELSE 'valid' END, CASE WHEN invalid THEN 'anomaly_score' END,
                 CASE WHEN invalid THEN 75 ELSE 0 END,
                 NOT invalid AND ((type = 'render' AND $10::bigint > 0) OR (type = 'click' AND $11::bigint > 0)),
                 CASE WHEN invalid THEN 0 WHEN type = 'render' THEN $10::bigint WHEN type = 'click' THEN $11::bigint ELSE 0 END,
                 CASE WHEN invalid THEN 0 WHEN type = 'render' THEN $10::bigint * $12::int / 10000 WHEN type = 'click' THEN $11::bigint * $12::int / 10000 ELSE 0 END,
-                $13, $3, $4, $5, $6, $7, $8, visitor, md5(visitor), country, device, $14, at, at
+                $13, $3, $4, $5, $6, $7, $8, visitor, md5(visitor), country, device, $14, page, at, at
          FROM ev`,
-        [day, renders, s.campaignId, s.creativeId, ctx.advOrg, ctx.siteId, s.unitId, ctx.pubOrg, s.ctr, costPerImp.toString(), costPerClick.toString(), ctx.shareBps, CURRENCY, DEMO_SITE_DOMAIN],
+        [day, renders, s.campaignId, s.creativeId, ctx.advOrg, ctx.siteId, s.unitId, ctx.pubOrg, s.ctr, costPerImp.toString(), costPerClick.toString(), ctx.shareBps, CURRENCY, DEMO_SITE_DOMAIN, s.pages],
       );
       await c.query(
         `INSERT INTO campaign_daily_spend (campaign_id, day, spent_micros, impressions, clicks)
@@ -114,6 +121,18 @@ async function sampleHistory(c: PoolClient, specs: SampleSpec[], ctx: { siteId: 
         [s.campaignId, day],
       );
     }
+    // Each sample campaign serves at most one ad per page view, so a page's
+    // views are the most ads any one campaign served on it that day.
+    await c.query(
+      `INSERT INTO page_views (day, site_id, page_path, views)
+       SELECT $1::date, $2, page_path, max(n) FROM (
+         SELECT page_path, campaign_id, count(*) AS n FROM ad_events
+         WHERE site_id = $2 AND type = 'served' AND page_path IS NOT NULL AND occurred_at >= $1::date AND occurred_at < $1::date + 1
+         GROUP BY page_path, campaign_id) u
+       GROUP BY page_path
+       ON CONFLICT (day, site_id, page_path) DO UPDATE SET views = EXCLUDED.views`,
+      [day, ctx.siteId],
+    );
   }
   for (const s of specs) {
     await c.query(
@@ -327,7 +346,7 @@ async function main() {
     if (sampleDays > 0) {
       days = await sampleHistory(c, campaigns.map((x) => ({
         campaignId: x.id, creativeId: x.creativeId, unitId: units[x.unit]!, pricing: x.pricing, rateMicros: x.rate,
-        perDay: x.pricing === 'cpm' ? [600, 1400] : [300, 700], ctr: x.pricing === 'cpm' ? 0.006 : 0.012,
+        perDay: x.pricing === 'cpm' ? [600, 1400] : [300, 700], ctr: x.pricing === 'cpm' ? 0.006 : 0.012, pages: SAMPLE_PAGES[x.unit] ?? SAMPLE_PAGES.default!,
       })), { siteId: site, advOrg, pubOrg, shareBps }, sampleDays);
       for (const x of campaigns) await settleCampaign(c, x.id, holdDays);
     }

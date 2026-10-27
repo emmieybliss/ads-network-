@@ -23,6 +23,7 @@ export interface DeliveryClaims {
   cur: string;
   sh: number;  // publisher revenue share bps at decision time
   ph: string;  // page host the ad was served to
+  pp?: string; // page path (no query or fragment), for per-page reports
   co: string;  // country
   dv: string;  // device category
   ct: boolean; // contextual (non-personalized) delivery

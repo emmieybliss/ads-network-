@@ -89,3 +89,41 @@ export async function requestStats(db: Pool, publisherOrgId: string | null, f: R
   const req = Number(r.requests);
   return { requests: req, filled: Number(r.filled), noFill: Number(r.no_fill), capRejects: Number(r.cap_rejects), budgetRejects: Number(r.budget_rejects), blocked: Number(r.blocked), fillRate: req ? (Number(r.filled) / req) * 100 : null };
 }
+
+/**
+ * Per-page report for a publisher. Page views come from page_views (pages
+ * where the tag asked for at least one ad); earnings come from validated
+ * events in page_daily_stats. Page RPM = estimated earnings / page views x 1000.
+ */
+export async function pageReport(db: Pool, publisherOrgId: string, f: ReportFilters, limit = 200) {
+  const params = [f.from, f.to, publisherOrgId, f.siteId ?? null];
+  const src = `(SELECT day, site_id, page_path, views, 0::bigint AS imps, 0::bigint AS clicks, 0::bigint AS micros FROM page_views
+                UNION ALL
+                SELECT day, site_id, page_path, 0, valid_impressions, valid_clicks, publisher_micros FROM page_daily_stats) p
+               JOIN sites s ON s.id = p.site_id
+               WHERE p.day BETWEEN $1::date AND $2::date AND s.org_id = $3 AND ($4::uuid IS NULL OR s.id = $4)`;
+  const sums = `sum(p.views)::bigint AS views, sum(p.imps)::bigint AS imps, sum(p.clicks)::bigint AS clicks, sum(p.micros)::bigint AS micros`;
+  const rows = (await db.query(`SELECT s.id AS site_id, s.domain, p.page_path, ${sums} FROM ${src} GROUP BY 1, 2, 3 ORDER BY micros DESC, views DESC, 3 LIMIT ${limit}`, params)).rows;
+  const totals = (await db.query(`SELECT ${sums} FROM ${src}`, params)).rows[0];
+  return { totals: pageShape(totals), rows: rows.map((r) => ({ siteId: r.site_id, domain: r.domain, path: r.page_path, ...pageShape(r) })) };
+}
+
+function pageShape(r: Record<string, string | null>) {
+  const views = Number(r.views ?? 0);
+  const imps = Number(r.imps ?? 0);
+  const micros = BigInt(r.micros ?? 0);
+  return {
+    pageviews: views, validImpressions: imps, validClicks: Number(r.clicks ?? 0), ctr: ctr(Number(r.clicks ?? 0), imps),
+    impressionsPerPageview: views ? imps / views : null,
+    earningsMicros: micros.toString(), pageRpmMicros: views ? ((micros * 1000n) / BigInt(views)).toString() : null,
+  };
+}
+
+/** Page views for the publisher's dashboard (all pages, optionally one site). */
+export async function pageviewTotal(db: Pool, publisherOrgId: string, f: ReportFilters) {
+  const r = (await db.query(
+    `SELECT COALESCE(sum(v.views), 0)::bigint AS views FROM page_views v JOIN sites s ON s.id = v.site_id
+     WHERE v.day BETWEEN $1::date AND $2::date AND s.org_id = $3 AND ($4::uuid IS NULL OR s.id = $4)`,
+    [f.from, f.to, publisherOrgId, f.siteId ?? null])).rows[0];
+  return Number(r.views);
+}

@@ -1,13 +1,16 @@
 'use client';
-import { useState } from 'react';
-import { Field, PageHeader, Select } from '@/components/ui';
+import { useEffect, useState } from 'react';
+import { Field, PageHeader, Select, Tabs } from '@/components/ui';
 import { ReportExplorer } from '@/components/ReportExplorer';
+import { PageReport } from '@/components/publisher/PageReport';
 import { useApi } from '@/lib/hooks';
 import { useOrg } from '@/lib/session';
 
 export default function PublisherReports() {
   const org = useOrg();
   const [siteId, setSiteId] = useState('');
+  const [tab, setTab] = useState('performance');
+  useEffect(() => { if (window.location.hash === '#pages') setTab('pages'); }, []);
   const sites = useApi<{ data: Array<{ id: string; name: string; domain: string }> }>(`/orgs/${org.id}/sites`);
   return (
     <>
@@ -19,7 +22,10 @@ export default function PublisherReports() {
           </Select>
         </Field>
       } />
-      <ReportExplorer orgId={org.id} audience="publisher" currency={org.currency} filters={{ siteId: siteId || undefined }} />
+      <Tabs tabs={[{ id: 'performance', label: 'Performance' }, { id: 'pages', label: 'Pages' }]} active={tab} onChange={setTab} />
+      {tab === 'pages'
+        ? <PageReport orgId={org.id} currency={org.currency} siteId={siteId || undefined} />
+        : <ReportExplorer orgId={org.id} audience="publisher" currency={org.currency} filters={{ siteId: siteId || undefined }} />}
     </>
   );
 }
