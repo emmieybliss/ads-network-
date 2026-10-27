@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "description": "BlissNova Ad Network - multi-publisher advertising platform by BlissNova Technologies",
   "packageManager": "pnpm@10.28.0",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev:api": "pnpm --filter @blissnova/api dev",
     "dev:worker": "pnpm --filter @blissnova/worker dev",
@@ -23,9 +25,18 @@
     "audit": "pnpm audit --prod"
   },
   "devDependencies": {
+    "@blissnova/ad-decision": "workspace:*",
+    "@blissnova/api": "workspace:*",
+    "@blissnova/billing": "workspace:*",
+    "@blissnova/database": "workspace:*",
+    "@blissnova/shared": "workspace:*",
+    "@blissnova/tracking": "workspace:*",
     "@types/node": "^22.10.0",
+    "fastify": "^5.12.7",
+    "ioredis": "^5.11.1",
+    "pg": "^8.23.1",
+    "tsx": "^4.19.0",
     "typescript": "5.9.3",
-    "vitest": "^3.2.7",
-    "tsx": "^4.19.0"
+    "vitest": "^3.2.7"
   }
 }

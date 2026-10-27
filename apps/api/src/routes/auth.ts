@@ -91,9 +91,11 @@ export async function authRoutes(app: FastifyInstance) {
     const token = await issueUserToken(app, user.id, 'verify_email', 24);
     await queueEmail(app.ctx, b.email, 'verify_email', { name: b.name, link: `${config.PUBLIC_SITE_URL}/verify-email?token=${token}` });
     await audit(db, req, { action: 'user.register', resourceType: 'user', resourceId: user.id, actorUserId: user.id });
-    const session = await createSession(app, req, user.id, false);
-    setSessionCookies(reply, session, config.SESSION_TTL_HOURS, config.COOKIE_SECURE);
-    return reply.status(201).send({ user: await profile(app, user.id) });
+    // Deliberately identical to the "address already registered" response above,
+    // down to the status code, and deliberately without a session: anything that
+    // differs between the two paths tells an attacker which addresses exist.
+    // The person signs in after following the verification link.
+    return reply.status(202).send({ status: 'pending_verification', message: 'Check your email to continue.' });
   });
 
   app.post('/auth/login', { config: rl, schema: { tags: ['auth'], body: loginBody } }, async (req, reply) => {
