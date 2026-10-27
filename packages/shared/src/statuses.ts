@@ -53,7 +53,13 @@ export const AD_UNIT_STATUSES = ['active', 'paused', 'archived'] as const;
 export const PRICING_MODELS = ['cpm', 'cpc', 'flat'] as const;
 export type PricingModel = (typeof PRICING_MODELS)[number];
 export const DEVICE_TYPES = ['desktop', 'mobile', 'tablet', 'other'] as const;
-export const AD_FORMATS = ['image', 'text'] as const;
+export const AD_FORMATS = ['image', 'text', 'native'] as const;
+export type AdFormat = (typeof AD_FORMATS)[number];
+export const ORG_TIERS = ['standard', 'premium'] as const;
+export type OrgTier = (typeof ORG_TIERS)[number];
+/** How a premium publisher's minimum earnings are honoured. */
+export const EARNINGS_MODES = ['floor', 'guarantee'] as const;
+export type EarningsMode = (typeof EARNINGS_MODES)[number];
 export const VERIFICATION_METHODS = ['dns_txt', 'html_file', 'meta_tag'] as const;
 
 /** Event state model. A served ad is never an impression on its own. */

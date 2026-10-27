@@ -33,7 +33,7 @@ export const settingsSchema = z.object({
     defaultMaxPerPage: z.number().int().min(0).max(20).default(1),
   }).prefault({}),
   creatives: z.object({
-    allowedFormats: z.array(z.enum(['image', 'text'])).default(['image', 'text']),
+    allowedFormats: z.array(z.enum(['image', 'text', 'native'])).default(['image', 'text', 'native']),
     maxUploadBytes: z.number().int().min(10_000).max(5_000_000).default(300_000),
     allowedImageTypes: z.array(z.enum(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])).default(['image/png', 'image/jpeg', 'image/gif', 'image/webp']),
     allowedDestinationProtocols: z.array(z.enum(['https:', 'http:'])).default(['https:']),

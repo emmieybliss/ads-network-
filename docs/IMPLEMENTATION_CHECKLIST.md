@@ -47,13 +47,20 @@ deployment.
 - [x] Vitest suite: unit, integration and security
 - [x] README, ARCHITECTURE, DEPLOYMENT, OPERATIONS, SECURITY, PRIVACY, TROUBLESHOOTING
 
+## Premium tiers and native ads
+- [x] Premium tier for advertisers and publishers, set by admins with a reason, step-up and an audit entry
+- [x] Per-publisher earnings minimum per 1,000 impressions and per click, as a price floor or a capped network-funded guarantee
+- [x] Nightly guarantee top-ups through the ledger, idempotent, held like other earnings, with reconciliation check 9
+- [x] Premium-advertisers-only inventory
+- [x] Native ad format: creative editor, review, serving, tag rendering with a "Sponsored · sponsor" line, demo placement
+
 ## Verified
 Runs on 27 Oct 2026, in the build container with local PostgreSQL 16 and Redis 7,
 not on the owner's PC:
-- `pnpm test`: 14 files, 323 tests passed
+- `pnpm test`: 15 files, 346 tests passed
 - `scripts/e2e-demo.mjs` passed against the bundled processes and against the Docker Compose stack
 - `scripts/acceptance-ui.mjs` passed against the Docker Compose stack
-- seed: all eight ledger reconciliation checks passed
+- seed: all nine ledger reconciliation checks passed
 
 ## Not done
 - [ ] Deployment to a public server (no domain yet)

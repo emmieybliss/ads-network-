@@ -16,7 +16,7 @@ import { invalidateServingCache } from '../services/serving';
 const listQuery = pageQuery.extend({ status: z.string().max(40).optional() });
 const creativeBody = z.object({
   name: z.string().trim().min(1).max(160),
-  format: z.enum(['image', 'text']),
+  format: z.enum(['image', 'text', 'native']),
   headline: z.string().trim().min(1).max(90).optional(),
   body: z.string().trim().max(200).optional(),
   cta: z.string().trim().max(30).optional(),
@@ -24,6 +24,8 @@ const creativeBody = z.object({
   altText: z.string().trim().max(200).optional(),
   destinationUrl: z.string().max(2048),
   displayUrl: z.string().trim().max(100).optional(),
+  /** Native ads only: the brand shown as "Sponsored by …". */
+  sponsorName: z.string().trim().min(1).max(60).optional(),
 });
 const creativePatch = creativeBody.partial().omit({ format: true });
 
@@ -228,7 +230,7 @@ export async function advertiserRoutes(app: FastifyInstance) {
     return { data: rows.map((r) => serializeCreative(r, r.storage_key ? app.ctx.storage.publicUrl(r.storage_key) : null)) };
   });
 
-  async function validateCreativeInput(orgId: string, format: 'image' | 'text', b: Partial<z.infer<typeof creativeBody>>) {
+  async function validateCreativeInput(orgId: string, format: 'image' | 'text' | 'native', b: Partial<z.infer<typeof creativeBody>>) {
     const s = await app.ctx.settings.get();
     if (!s.creatives.allowedFormats.includes(format)) throw badRequest(`${format} creatives are not currently accepted`);
     const destination = b.destinationUrl !== undefined ? validateDestinationUrl(b.destinationUrl, s, await blockedDomains(), !app.ctx.config.isProd && app.ctx.config.NODE_ENV === 'development') : undefined;
@@ -250,12 +252,13 @@ export async function advertiserRoutes(app: FastifyInstance) {
     const { destination, asset } = await validateCreativeInput(req.org!.id, b.format, b);
     if (b.format === 'image' && !asset) throw badRequest('Image creatives need an uploaded image');
     if (b.format === 'text' && !b.headline) throw badRequest('Text creatives need a headline');
+    if (b.format === 'native' && (!asset || !b.headline || !b.sponsorName)) throw badRequest('Native ads need an image, a headline and the sponsor name shown to readers');
     const status = camp.status === 'draft' || camp.status === 'rejected' ? 'draft' : 'pending_review';
     const row = await tx(app.ctx, async (c) => {
       const cr = (await c.query(
-        `INSERT INTO creatives (campaign_id, org_id, name, format, status, headline, body, cta, asset_id, width, height, destination_url, display_url, alt_text, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
-        [id, req.org!.id, b.name, b.format, status, b.headline ?? null, b.body ?? null, b.cta ?? null, asset?.id ?? null, asset?.width ?? null, asset?.height ?? null, destination, b.displayUrl ?? null, b.altText ?? null, user.id])).rows[0];
+        `INSERT INTO creatives (campaign_id, org_id, name, format, status, headline, body, cta, asset_id, width, height, destination_url, display_url, alt_text, sponsor_name, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+        [id, req.org!.id, b.name, b.format, status, b.headline ?? null, b.body ?? null, b.cta ?? null, asset?.id ?? null, asset?.width ?? null, asset?.height ?? null, destination, b.displayUrl ?? null, b.altText ?? null, b.format === 'native' ? b.sponsorName! : null, user.id])).rows[0];
       const key = asset ? (await c.query('SELECT storage_key FROM assets WHERE id = $1', [asset.id])).rows[0].storage_key : null;
       await c.query('INSERT INTO creative_versions (creative_id, version, snapshot, created_by) VALUES ($1, 1, $2, $3)', [cr.id, JSON.stringify(creativeSnapshot(cr, key)), user.id]);
       await audit(c, req, { action: 'creative.create', resourceType: 'creative', resourceId: cr.id, orgId: req.org!.id, after: b });
@@ -275,15 +278,16 @@ export async function advertiserRoutes(app: FastifyInstance) {
       if (cr.status === 'archived') throw conflict('Archived creatives cannot be edited');
       const { destination, asset } = await validateCreativeInput(req.org!.id, cr.format, b);
       if (cr.format === 'image' && b.assetId === undefined && !cr.asset_id) throw badRequest('Image creatives need an uploaded image');
+      if (cr.format !== 'native' && b.sponsorName !== undefined) throw badRequest('Only native ads have a sponsor name');
       const draftCampaign = ['draft', 'rejected'].includes(cr.campaign_status);
       // Editing creates a new version. A previously approved version keeps serving until the new one is approved.
       const status = draftCampaign ? 'draft' : 'pending_review';
       const upd = (await c.query(
         `UPDATE creatives SET name = COALESCE($2, name), headline = COALESCE($3, headline), body = COALESCE($4, body), cta = COALESCE($5, cta),
            asset_id = COALESCE($6, asset_id), width = COALESCE($7, width), height = COALESCE($8, height), destination_url = COALESCE($9, destination_url),
-           display_url = COALESCE($10, display_url), alt_text = COALESCE($11, alt_text), version = version + 1, status = $12, rejection_reason = NULL, updated_at = now()
+           display_url = COALESCE($10, display_url), alt_text = COALESCE($11, alt_text), sponsor_name = COALESCE($13, sponsor_name), version = version + 1, status = $12, rejection_reason = NULL, updated_at = now()
          WHERE id = $1 RETURNING *`,
-        [id, b.name ?? null, b.headline ?? null, b.body ?? null, b.cta ?? null, asset?.id ?? null, asset?.width ?? null, asset?.height ?? null, destination ?? null, b.displayUrl ?? null, b.altText ?? null, status])).rows[0];
+        [id, b.name ?? null, b.headline ?? null, b.body ?? null, b.cta ?? null, asset?.id ?? null, asset?.width ?? null, asset?.height ?? null, destination ?? null, b.displayUrl ?? null, b.altText ?? null, status, b.sponsorName ?? null])).rows[0];
       const key = upd.asset_id ? (await c.query('SELECT storage_key FROM assets WHERE id = $1', [upd.asset_id])).rows[0].storage_key : null;
       await c.query('INSERT INTO creative_versions (creative_id, version, snapshot, created_by) VALUES ($1, $2, $3, $4)', [id, upd.version, JSON.stringify(creativeSnapshot(upd, key)), user.id]);
       await audit(c, req, { action: 'creative.update', resourceType: 'creative', resourceId: id, orgId: req.org!.id, before: cr, after: upd });

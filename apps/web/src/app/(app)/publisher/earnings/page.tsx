@@ -1,10 +1,10 @@
 'use client';
 import { useState, type FormEvent } from 'react';
-import { Alert, Async, Button, Card, CardHeader, Field, Input, Modal, PageHeader, Select, Stat, StatusBadge, Table } from '@/components/ui';
+import { Alert, Async, Badge, Button, Card, CardHeader, Field, Input, Modal, PageHeader, Select, Stat, StatusBadge, Table } from '@/components/ui';
 import { useApi } from '@/lib/hooks';
 import { useOrg, useSession } from '@/lib/session';
 import { errorMessage, idempotencyKey, post, put } from '@/lib/api';
-import { formatDate, formatMicros, humanize } from '@/lib/format';
+import { formatDate, formatMicros, formatNumber, humanize } from '@/lib/format';
 
 function PayoutProfile({ orgId }: { orgId: string }) {
   const res = useApi<{ data: { method: string; display_label: string; updated_at: string } | null }>(`/orgs/${orgId}/payout-profile`);
@@ -69,6 +69,34 @@ export default function Earnings() {
               <Stat label="Payout in progress" value={money(data.processingMicros)} />
               <Stat label="Paid to date" value={money(data.paidMicros)} />
             </div>
+            {data.premium?.tier === 'premium' && (
+              <Card>
+                <CardHeader title={<span className="flex items-center gap-2">Premium publisher <Badge tone="info">Premium</Badge></span>}
+                  description={data.premium.earningsMode === 'floor'
+                    ? 'Only ads that pay at least your minimum, after revenue share, are shown on your sites. This can mean fewer ads fill your placements.'
+                    : data.premium.earningsMode === 'guarantee'
+                      ? 'If your valid earnings for a day fall below your minimum, the network tops them up from its own funds, up to a monthly cap. Top-ups follow the same hold period as other earnings.'
+                      : 'Your account has premium status.'} />
+                <dl className="grid grid-cols-2 gap-3 text-sm lg:grid-cols-4">
+                  {data.premium.minCpmMicros && <div><dt className="text-muted">Minimum per 1,000 impressions</dt><dd className="font-medium">{money(data.premium.minCpmMicros)}</dd></div>}
+                  {data.premium.minCpcMicros && <div><dt className="text-muted">Minimum per click</dt><dd className="font-medium">{money(data.premium.minCpcMicros)}</dd></div>}
+                  {data.premium.earningsMode === 'guarantee' && <div><dt className="text-muted">Monthly top-up cap</dt><dd className="font-medium">{money(data.premium.guaranteeMonthlyCapMicros)}</dd></div>}
+                  {data.premium.premiumAdvertisersOnly && <div><dt className="text-muted">Advertisers</dt><dd className="font-medium">Premium only</dd></div>}
+                </dl>
+                {data.premium.earningsMode === 'guarantee' && (
+                  <div className="mt-4">
+                    <Table rows={data.guarantees ?? []} rowKey={(r: any) => r.day} empty="No guarantee days calculated yet. They are calculated each night for the previous day." columns={[
+                      { key: 'd', header: 'Day', cell: (r: any) => formatDate(r.day) },
+                      { key: 'i', header: 'Valid impressions', align: 'right', cell: (r: any) => formatNumber(r.impressions) },
+                      { key: 'c', header: 'Valid clicks', align: 'right', cell: (r: any) => formatNumber(r.clicks) },
+                      { key: 'e', header: 'Earned', align: 'right', cell: (r: any) => money(r.earnedMicros) },
+                      { key: 'q', header: 'Minimum', align: 'right', cell: (r: any) => money(r.requiredMicros) },
+                      { key: 't', header: 'Top-up', align: 'right', cell: (r: any) => <>{money(r.topupMicros)}{r.capped && <Badge tone="warning" className="ml-1">Cap reached</Badge>}</> },
+                    ]} />
+                  </div>
+                )}
+              </Card>
+            )}
             <div className="grid gap-5 lg:grid-cols-2">
               <PayoutProfile orgId={org.id} />
               <Card>

@@ -258,7 +258,75 @@ export async function finalizeEarnings(client: PoolClient, now = new Date()) {
     await client.query('UPDATE settlements SET finalized_at = now(), finalize_txn_id = $2 WHERE id = $1', [s.id, txnId]);
     count++;
   }
+  // Guarantee top-ups follow the same hold period as the earnings they top up.
+  const tops = await client.query(
+    `SELECT * FROM publisher_guarantees WHERE finalized_at IS NULL AND topup_micros > 0 AND hold_until <= $1 ORDER BY hold_until LIMIT 500 FOR UPDATE SKIP LOCKED`, [now]);
+  for (const g of tops.rows) {
+    const txnId = (await post(client, {
+      type: 'earnings_finalize', currency: g.currency, idempotencyKey: `finalize-guarantee:${g.id}`, reference: { type: 'publisher_guarantee', id: g.id },
+      actor: { type: 'system' }, reason: 'Hold period ended; guaranteed top-up finalized',
+      entries: transfer({ kind: 'publisher_pending', orgId: g.org_id }, { kind: 'publisher_available', orgId: g.org_id }, big(g.topup_micros)),
+    })).id;
+    await client.query('UPDATE publisher_guarantees SET finalized_at = now(), finalize_txn_id = $2 WHERE id = $1', [g.id, txnId]);
+    count++;
+  }
   return count;
+}
+
+export interface GuaranteeResult { orgId: string; day: string; required: bigint; earned: bigint; shortfall: bigint; topup: bigint; capped: boolean; created: boolean }
+
+/**
+ * Network-funded minimum earnings for a premium publisher in guarantee mode,
+ * for one finished UTC day. The publisher's actual share of valid, billable
+ * events on CPM campaigns (impressions) and CPC campaigns (clicks) is
+ * compared with the minimum per 1,000 impressions and per click; the
+ * shortfall is paid from the network's guarantee expense, limited by the
+ * remaining monthly cap. Pricing models without a minimum are ignored.
+ * One record per organization and day, so re-running is a no-op.
+ */
+export async function applyGuarantee(client: PoolClient, orgId: string, day: string, holdDays: number): Promise<GuaranteeResult | null> {
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`guarantee:${orgId}:${day}`]);
+  const existing = (await client.query('SELECT * FROM publisher_guarantees WHERE org_id = $1 AND day = $2', [orgId, day])).rows[0];
+  if (existing) {
+    return { orgId, day, required: big(existing.required_micros), earned: big(existing.earned_micros), shortfall: big(existing.shortfall_micros), topup: big(existing.topup_micros), capped: existing.capped, created: false };
+  }
+  const o = (await client.query(
+    `SELECT currency, earnings_mode, tier, min_cpm_micros, min_cpc_micros, guarantee_monthly_cap_micros FROM organizations WHERE id = $1 AND type = 'publisher'`, [orgId])).rows[0];
+  if (!o || o.earnings_mode !== 'guarantee' || o.tier !== 'premium') return null;
+  const minCpm = o.min_cpm_micros === null ? null : big(o.min_cpm_micros);
+  const minCpc = o.min_cpc_micros === null ? null : big(o.min_cpc_micros);
+  const agg = (await client.query<{ imps: string; clicks: string; earned_cpm: string; earned_cpc: string }>(
+    `SELECT count(*) FILTER (WHERE e.type = 'render' AND c.pricing_model = 'cpm')::text AS imps,
+            count(*) FILTER (WHERE e.type = 'click' AND c.pricing_model = 'cpc')::text AS clicks,
+            COALESCE(sum(e.publisher_micros) FILTER (WHERE e.type = 'render' AND c.pricing_model = 'cpm'), 0)::text AS earned_cpm,
+            COALESCE(sum(e.publisher_micros) FILTER (WHERE e.type = 'click' AND c.pricing_model = 'cpc'), 0)::text AS earned_cpc
+     FROM ad_events e JOIN campaigns c ON c.id = e.campaign_id
+     WHERE e.publisher_org_id = $1 AND e.status = 'valid' AND e.billable AND e.excluded_at IS NULL AND e.currency = $3
+       AND e.occurred_at >= $2::date AND e.occurred_at < $2::date + 1`, [orgId, day, o.currency])).rows[0]!;
+  const imps = big(agg.imps);
+  const clicks = big(agg.clicks);
+  const required = (minCpm !== null ? (minCpm * imps) / 1000n : 0n) + (minCpc !== null ? minCpc * clicks : 0n);
+  const earned = (minCpm !== null ? big(agg.earned_cpm) : 0n) + (minCpc !== null ? big(agg.earned_cpc) : 0n);
+  const shortfall = required > earned ? required - earned : 0n;
+  const used = big((await client.query<{ used: string }>(
+    `SELECT COALESCE(sum(topup_micros), 0)::text AS used FROM publisher_guarantees WHERE org_id = $1 AND date_trunc('month', day) = date_trunc('month', $2::date)`, [orgId, day])).rows[0]!.used);
+  const cap = big(o.guarantee_monthly_cap_micros);
+  const room = cap > used ? cap - used : 0n;
+  const topup = shortfall < room ? shortfall : room;
+  const id = (await client.query<{ id: string }>('SELECT gen_random_uuid() AS id')).rows[0]!.id;
+  let txnId: string | null = null;
+  if (topup > 0n) {
+    txnId = (await post(client, {
+      type: 'guarantee_topup', currency: o.currency, idempotencyKey: `guarantee:${orgId}:${day}`, reference: { type: 'publisher_guarantee', id },
+      actor: { type: 'system' }, reason: `Guaranteed minimum earnings for ${day}`,
+      entries: [{ account: { kind: 'guarantee_expense' }, amount: topup }, { account: { kind: 'publisher_pending', orgId }, amount: -topup }],
+    })).id;
+  }
+  await client.query(
+    `INSERT INTO publisher_guarantees (id, org_id, day, currency, min_cpm_micros, min_cpc_micros, impressions, clicks, earned_micros, required_micros, shortfall_micros, topup_micros, capped, ledger_txn_id, hold_until)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now() + make_interval(days => $15))`,
+    [id, orgId, day, o.currency, minCpm?.toString() ?? null, minCpc?.toString() ?? null, imps.toString(), clicks.toString(), earned.toString(), required.toString(), shortfall.toString(), topup.toString(), topup < shortfall, txnId, holdDays]);
+  return { orgId, day, required, earned, shortfall, topup, capped: topup < shortfall, created: true };
 }
 
 /**

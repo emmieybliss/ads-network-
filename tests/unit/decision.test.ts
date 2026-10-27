@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dayFraction, decide, effectiveDailyBudget, pacingAllows, unitCostMicros, type CampaignCandidate, type RequestContext } from '@blissnova/ad-decision';
+import { dayFraction, decide, effectiveDailyBudget, meetsFloor, pacingAllows, unitCostMicros, type CampaignCandidate, type RequestContext } from '@blissnova/ad-decision';
 import { toMicros } from '@blissnova/shared';
 
 const NOW = Date.UTC(2026, 5, 15, 12, 0, 0);
@@ -205,6 +205,64 @@ describe('ad decision engine', () => {
         ],
       });
       expect(decide([c], ctx()).ranked[0]!.creative.id).toBe('right');
+    });
+  });
+
+  describe('native ads', () => {
+    it('serves a native creative in any size of unit that accepts native', () => {
+      const c = campaign({ creatives: [{ id: 'n1', format: 'native', width: null, height: null }] });
+      const r = decide([c], ctx({ unitFormats: ['native'], siteAllowedFormats: ['image', 'text', 'native'], unitWidth: 728, unitHeight: 90 }));
+      expect(r.ranked[0]!.creative.id).toBe('n1');
+    });
+
+    it('does not serve native where the unit or the site does not allow it', () => {
+      const c = campaign({ creatives: [{ id: 'n1', format: 'native', width: null, height: null }] });
+      expect(reasonFor(decide([c], ctx()), 'c1')).toBe('no_creative');
+      expect(reasonFor(decide([c], ctx({ unitFormats: ['native'] })), 'c1')).toBe('no_creative');
+    });
+  });
+
+  describe('premium publishers', () => {
+    // A $20 CPM at a 60% share pays the publisher $12 per 1,000 impressions.
+    const share = { revenueShareBps: 6000 };
+
+    it('serves only campaigns whose publisher share meets the CPM floor', () => {
+      const rich = campaign({ id: 'rich', rateMicros: toMicros('20') });
+      const poor = campaign({ id: 'poor', rateMicros: toMicros('10') });
+      const r = decide([rich, poor], ctx({ ...share, floorCpmMicros: toMicros('10') }));
+      expect(r.ranked.map((x) => x.campaign.id)).toEqual(['rich']);
+      expect(reasonFor(r, 'poor')).toBe('below_floor');
+    });
+
+    it('treats a share exactly at the floor as meeting it', () => {
+      expect(meetsFloor({ pricingModel: 'cpm', rateMicros: toMicros('16.666667') }, { ...share, floorCpmMicros: toMicros('10') })).toBe(true);
+      expect(meetsFloor({ pricingModel: 'cpm', rateMicros: toMicros('16.666666') }, { ...share, floorCpmMicros: toMicros('10') })).toBe(false);
+    });
+
+    it('applies the CPC floor to CPC campaigns only', () => {
+      const cpc = campaign({ id: 'cpc', pricingModel: 'cpc', rateMicros: toMicros('0.50') });
+      const cpm = campaign({ id: 'cpm', rateMicros: toMicros('2') });
+      const r = decide([cpc, cpm], ctx({ ...share, floorCpcMicros: toMicros('0.40') }));
+      expect(reasonFor(r, 'cpc')).toBe('below_floor'); // 0.50 x 60% = 0.30
+      expect(r.ranked.map((x) => x.campaign.id)).toEqual(['cpm']); // no CPM floor set
+    });
+
+    it('never applies a floor to flat-rate sponsorships', () => {
+      expect(meetsFloor({ pricingModel: 'flat', rateMicros: 1n }, { ...share, floorCpmMicros: toMicros('10'), floorCpcMicros: toMicros('1') })).toBe(true);
+    });
+
+    it('fills nothing rather than serve below the floor', () => {
+      const r = decide([campaign({ rateMicros: toMicros('5') })], ctx({ ...share, floorCpmMicros: toMicros('10') }));
+      expect(r.ranked).toHaveLength(0);
+    });
+
+    it('serves only premium advertisers when the publisher asks for that', () => {
+      const p = campaign({ id: 'p', premium: true });
+      const s = campaign({ id: 's' });
+      const r = decide([p, s], ctx({ premiumOnly: true }));
+      expect(r.ranked.map((x) => x.campaign.id)).toEqual(['p']);
+      expect(reasonFor(r, 's')).toBe('premium_only');
+      expect(decide([p, s], ctx()).ranked).toHaveLength(2);
     });
   });
 

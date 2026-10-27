@@ -82,7 +82,7 @@ Docker Compose stack.
 9. The admin approves the creative and the campaign.
 
 **Other checks**
-- Seed: all eight ledger reconciliation checks pass.
+- Seed: all nine ledger reconciliation checks pass.
 - API and worker production bundles start and pass `/ready`.
 
 **Built in the UI but not each clicked through**
@@ -101,7 +101,7 @@ Docker Compose stack.
 
 | Command | Result |
 | --- | --- |
-| `pnpm test` (Vitest: unit, integration, security) | 14 files, **323 of 323 passed** |
+| `pnpm test` (Vitest: unit, integration, security) | 15 files, **346 of 346 passed** |
 | `pnpm -r typecheck` | no errors |
 | `next build` (web) | succeeded |
 | `pnpm audit --prod` | 26 advisories found, fixed by upgrading nodemailer and @fastify/swagger-ui and overriding postcss; now **no known vulnerabilities** |

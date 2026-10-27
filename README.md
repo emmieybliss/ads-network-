@@ -45,13 +45,13 @@ Demo logins (password is `SEED_PASSWORD` in `.env.demo`):
 
 The seed creates:
 
-- a verified, approved demo website (`demo-publisher.localhost`, also allowed on `localhost`) with two placements;
-- two active campaigns funded by a **simulated** payment (no money moves);
+- a verified, approved demo website (`demo-publisher.localhost`, also allowed on `localhost`) with three placements (banner, text and native);
+- three active campaigns funded by a **simulated** payment (no money moves);
 - 14 days of generated sample statistics.
 
 Everything is labelled `[demo]`, and the dashboards show a demo-data notice.
 
-**Try the whole flow:** open http://localhost:3100. A banner and a text ad load
+**Try the whole flow:** open http://localhost:3100. A banner, a text ad and a native ad load
 through `/sdk/ads.js`. Click one, wait about a minute (the worker refreshes
 reports every minute), then refresh the publisher or advertiser reports. Today's
 row goes up. Repeated views from one browser hit frequency caps, and very fast

@@ -62,7 +62,8 @@ ${slot('demo-leaderboard')}
   <article>
     <h2>Five small habits for a calmer workday</h2>
     <div class="byline">By the Demo Gazette desk · sample article</div>
-    <p>This page exists so you can watch the BlissNova ad tag work end to end. Above, a leaderboard placement requests an image ad. In the sidebar, a text placement requests a text ad. Both use the same short snippet any publisher can paste into a page.</p>
+    <p>This page exists so you can watch the BlissNova ad tag work end to end. Above, a leaderboard placement requests an image ad. In the sidebar, a text placement requests a text ad. Below this paragraph, an in-article placement requests a native ad, which matches the page's layout but is always marked "Sponsored" with the advertiser's name. All three use the same short snippet any publisher can paste into a page.</p>
+    ${slot('demo-native')}
     <p>When an ad renders, the tag reports a render receipt. When at least half of the ad stays visible for a second, it reports a viewable impression. Clicking the ad goes through the network's click endpoint, which records a click before sending you on to the advertiser.</p>
     <p>Open the publisher or advertiser dashboard in another tab and refresh it after viewing and clicking: today's numbers update from the recorded events. Repeated views from the same browser are limited by frequency caps, and very fast or repeated clicks are filtered as invalid, exactly as on a live site.</p>
     <p>The tag does not read cookies or store identifiers unless the page signals consent for personalized ads. This demo page does not, so all ads here are contextual.</p>

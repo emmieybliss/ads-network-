@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: 'For advertisers', description: 'Run 
 const POINTS = [
   [Target, 'Reach the right pages', 'Target by country, device, content category and keywords, and include or exclude specific publishers and placements.'],
   [Wallet, 'Stay in control of spend', 'Prepaid funding, a reserved budget per campaign, daily limits and pacing. A campaign can never spend more than its budget.'],
-  [FileCheck2, 'Creative review and versions', 'Image banners and text ads are validated, reviewed and versioned. Only approved versions serve.'],
+  [FileCheck2, 'Creative review and versions', 'Image banners, native ads and text ads are validated, reviewed and versioned. Only approved versions serve.'],
   [BarChart3, 'Reporting you can audit', 'Impressions, viewable impressions, clicks, CTR, spend, eCPM and eCPC by day, publisher, placement, device and country.'],
   [ShieldCheck, 'Invalid traffic is not billed', 'Duplicates, replays, crawlers and abnormal bursts are excluded before billing, and later exclusions are refunded.'],
   [Gauge, 'Frequency and pacing', 'Cap how often a visitor sees your ads and spread delivery evenly across the day.'],

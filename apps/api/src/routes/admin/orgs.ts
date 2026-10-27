@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { toMicros } from '@blissnova/shared';
 import { balance, releaseCampaignReserve } from '@blissnova/billing';
 import { audit } from '../../lib/audit';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/errors';
-import { bodyOf, idParams, paramsOf, queryOf } from '../../lib/http';
+import { bodyOf, idParams, moneyString, paramsOf, queryOf } from '../../lib/http';
 import { tx } from '../../lib/tx';
 import { requireUser } from '../../plugins/auth';
 import { notifyOrg } from '../../services/notifications';
@@ -11,6 +12,16 @@ import { invalidateServingCache } from '../../services/serving';
 import { adminList, guard, meta, mgmt, reasonOptional, reasonRequired, sortSql, Where } from './common';
 
 const shareBody = z.object({ revenueShareBps: z.number().int().min(0).max(10000).nullable(), reason: z.string().trim().min(3).max(1000) });
+const premiumBody = z.object({
+  tier: z.enum(['standard', 'premium']),
+  /** Publishers only. null removes the earnings minimum. */
+  earningsMode: z.enum(['floor', 'guarantee']).nullable().default(null),
+  minCpm: moneyString.nullable().default(null),
+  minCpc: moneyString.nullable().default(null),
+  guaranteeMonthlyCap: moneyString.nullable().default(null),
+  premiumAdvertisersOnly: z.boolean().default(false),
+  reason: z.string().trim().min(3).max(1000),
+});
 const restrictionsBody = z.object({
   restrictions: z.object({
     allowedPricingModels: z.array(z.enum(['cpm', 'cpc', 'flat'])).optional(),
@@ -33,7 +44,7 @@ export async function adminOrgRoutes(app: FastifyInstance) {
     if (q.q) w.add('o.name ILIKE ?', `%${q.q}%`);
     const total = Number((await db.query(`SELECT count(*)::int AS n FROM organizations o ${w.sql}`, w.params)).rows[0].n);
     const rows = (await db.query(
-      `SELECT o.id, o.name, o.type, o.status, o.status_reason, o.country, o.currency, o.revenue_share_bps, o.created_at,
+      `SELECT o.id, o.name, o.type, o.status, o.status_reason, o.country, o.currency, o.revenue_share_bps, o.tier, o.earnings_mode, o.created_at,
          (SELECT count(*) FROM memberships m WHERE m.org_id = o.id)::int AS members,
          (SELECT count(*) FROM campaigns c WHERE c.org_id = o.id AND c.status IN ('active', 'scheduled'))::int AS live_campaigns,
          (SELECT count(*) FROM sites s WHERE s.org_id = o.id AND s.status = 'approved')::int AS approved_sites
@@ -45,7 +56,7 @@ export async function adminOrgRoutes(app: FastifyInstance) {
     const { id } = paramsOf(req, idParams);
     const o = (await db.query('SELECT * FROM organizations WHERE id = $1', [id])).rows[0];
     if (!o) throw notFound();
-    const [members, campaigns, sites, payments, payouts, auditRows, notes] = await Promise.all([
+    const [members, campaigns, sites, payments, payouts, auditRows, notes, guarantees] = await Promise.all([
       db.query(`SELECT u.id, u.name, u.email, u.status, m.role FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = $1`, [id]),
       db.query(`SELECT id, name, status, pricing_model, lifetime_budget_micros, spent_micros, start_at, end_at FROM campaigns WHERE org_id = $1 ORDER BY created_at DESC LIMIT 100`, [id]),
       db.query(`SELECT id, name, domain, status, verified_at FROM sites WHERE org_id = $1 ORDER BY created_at DESC`, [id]),
@@ -53,11 +64,12 @@ export async function adminOrgRoutes(app: FastifyInstance) {
       db.query(`SELECT id, amount_micros, status, created_at FROM payouts WHERE org_id = $1 ORDER BY created_at DESC LIMIT 50`, [id]),
       db.query(`SELECT a.action, a.reason, a.created_at, u.name AS actor FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_user_id WHERE a.org_id = $1 ORDER BY a.created_at DESC LIMIT 50`, [id]),
       db.query(`SELECT n.id, n.body, n.created_at, a.name AS author FROM admin_notes n JOIN users a ON a.id = n.author_id WHERE n.subject_type = 'organization' AND n.subject_id = $1 ORDER BY n.created_at DESC`, [id]),
+      db.query(`SELECT to_char(day, 'YYYY-MM-DD') AS day, impressions::text, clicks::text, earned_micros::text, required_micros::text, topup_micros::text, capped FROM publisher_guarantees WHERE org_id = $1 ORDER BY day DESC LIMIT 60`, [id]),
     ]);
     const kinds = o.type === 'advertiser' ? ['advertiser_wallet'] as const : ['publisher_pending', 'publisher_available', 'publisher_payout_processing'] as const;
     const balances: Record<string, string> = {};
     for (const k of kinds) balances[k] = (await balance(db as never, { kind: k, orgId: id }, o.currency)).toString();
-    return { data: { ...o, members: members.rows, campaigns: campaigns.rows, sites: sites.rows, payments: payments.rows, payouts: payouts.rows, audit: auditRows.rows, notes: notes.rows, balances } };
+    return { data: { ...o, members: members.rows, campaigns: campaigns.rows, sites: sites.rows, payments: payments.rows, payouts: payouts.rows, audit: auditRows.rows, notes: notes.rows, guarantees: guarantees.rows, balances } };
   });
 
   const statusAction = (action: 'approve' | 'reject' | 'suspend' | 'reinstate', perm: 'admin:orgs:review' | 'admin:orgs:suspend', from: string[], to: string, needReason: boolean) =>
@@ -105,6 +117,42 @@ export async function adminOrgRoutes(app: FastifyInstance) {
     if (o.type !== 'publisher') throw badRequest('Revenue share applies to publishers');
     await db.query('UPDATE organizations SET revenue_share_bps = $2, updated_at = now() WHERE id = $1', [id, b.revenueShareBps]);
     await audit(db, req, { action: 'organization.revenue_share', resourceType: 'organization', resourceId: id, orgId: id, before: { bps: o.revenue_share_bps }, after: { bps: b.revenueShareBps }, reason: b.reason });
+    invalidateServingCache(ctx);
+    return { ok: true };
+  });
+
+  // Premium tier, plus a premium publisher's earnings minimum: a price floor
+  // (only ads that pay enough serve) or a network-funded guarantee with a
+  // monthly cap. Money-affecting, so it needs pricing rights and step-up.
+  app.patch('/admin/orgs/:id/premium', { config: mgmt, preHandler: guard('admin:pricing:manage', { stepUp: true }), schema: { tags: ['admin: organizations'], params: idParams, body: premiumBody } }, async (req) => {
+    const { id } = paramsOf(req, idParams);
+    const b = bodyOf(req, premiumBody);
+    const o = (await db.query('SELECT type, tier, earnings_mode, min_cpm_micros, min_cpc_micros, guarantee_monthly_cap_micros, premium_advertisers_only FROM organizations WHERE id = $1', [id])).rows[0];
+    if (!o) throw notFound();
+    const micros = (v: string | null) => (v === null ? null : toMicros(v));
+    const next = {
+      tier: b.tier,
+      earningsMode: b.earningsMode,
+      minCpmMicros: b.earningsMode ? micros(b.minCpm) : null,
+      minCpcMicros: b.earningsMode ? micros(b.minCpc) : null,
+      guaranteeCapMicros: b.earningsMode === 'guarantee' ? micros(b.guaranteeMonthlyCap) : null,
+      premiumOnly: b.premiumAdvertisersOnly,
+    };
+    if (o.type === 'advertiser' && (next.earningsMode || next.premiumOnly)) throw badRequest('Earnings minimums and premium-only inventory apply to publishers');
+    if ((next.earningsMode || next.premiumOnly) && next.tier !== 'premium') throw badRequest('Only premium publishers can have an earnings minimum or premium-only inventory');
+    if (next.earningsMode && !next.minCpmMicros && !next.minCpcMicros) throw badRequest('Set a minimum per 1,000 impressions, per click, or both');
+    if ((next.minCpmMicros !== null && next.minCpmMicros <= 0n) || (next.minCpcMicros !== null && next.minCpcMicros <= 0n)) throw badRequest('Minimums must be greater than zero');
+    if (next.earningsMode === 'guarantee' && next.guaranteeCapMicros === null) throw badRequest('A guarantee needs a monthly cap on network-funded top-ups');
+    await tx(ctx, async (c) => {
+      await c.query(
+        `UPDATE organizations SET tier = $2, earnings_mode = $3, min_cpm_micros = $4, min_cpc_micros = $5, guarantee_monthly_cap_micros = $6, premium_advertisers_only = $7, updated_at = now() WHERE id = $1`,
+        [id, next.tier, next.earningsMode, next.minCpmMicros?.toString() ?? null, next.minCpcMicros?.toString() ?? null, next.guaranteeCapMicros?.toString() ?? null, next.premiumOnly]);
+      await audit(c, req, {
+        action: 'organization.premium', resourceType: 'organization', resourceId: id, orgId: id, reason: b.reason,
+        before: { tier: o.tier, earningsMode: o.earnings_mode, minCpmMicros: o.min_cpm_micros, minCpcMicros: o.min_cpc_micros, guaranteeCapMicros: o.guarantee_monthly_cap_micros, premiumOnly: o.premium_advertisers_only },
+        after: { ...next, minCpmMicros: next.minCpmMicros?.toString() ?? null, minCpcMicros: next.minCpcMicros?.toString() ?? null, guaranteeCapMicros: next.guaranteeCapMicros?.toString() ?? null },
+      });
+    });
     invalidateServingCache(ctx);
     return { ok: true };
   });

@@ -51,5 +51,11 @@ export async function reconcile(db: Pool | PoolClient): Promise<ReconciliationCh
     WHERE e.amount_micros <> s.charge_micros LIMIT 50`);
   checks.push({ name: 'Settlement records match their ledger charge', ok: settlementSums.rowCount === 0, detail: `${settlementSums.rowCount} mismatched settlement(s)`, rows: settlementSums.rows });
 
+  const guarantees = await db.query(`
+    SELECT g.id FROM publisher_guarantees g LEFT JOIN ledger_entries e ON e.transaction_id = g.ledger_txn_id
+      LEFT JOIN ledger_accounts a ON a.id = e.account_id AND a.kind = 'publisher_pending'
+    WHERE g.topup_micros > 0 GROUP BY g.id, g.topup_micros HAVING COALESCE(-SUM(e.amount_micros) FILTER (WHERE a.id IS NOT NULL), 0) <> g.topup_micros LIMIT 50`);
+  checks.push({ name: 'Guarantee top-ups match their ledger postings', ok: guarantees.rowCount === 0, detail: `${guarantees.rowCount} mismatched top-up(s)`, rows: guarantees.rows });
+
   return checks;
 }

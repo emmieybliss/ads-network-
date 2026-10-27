@@ -41,7 +41,7 @@ const submitBody = z.object({
 const unitBody = z.object({
   key: z.string().regex(/^[a-z0-9][a-z0-9_-]{1,63}$/, 'Use lowercase letters, numbers, hyphens and underscores'),
   name: z.string().trim().min(1).max(120),
-  formats: z.array(z.enum(['image', 'text'])).min(1).default(['image', 'text']),
+  formats: z.array(z.enum(['image', 'text', 'native'])).min(1).default(['image', 'text']),
   width: z.number().int().min(1).max(2000).nullable().optional(),
   height: z.number().int().min(1).max(2000).nullable().optional(),
   responsive: z.boolean().default(true),
@@ -409,9 +409,16 @@ export async function publisherRoutes(app: FastifyInstance) {
     const unsettled = (await db.query<{ t: string }>(`SELECT COALESCE(sum(publisher_micros), 0)::text AS t FROM ad_events WHERE publisher_org_id = $1 AND billable AND settlement_id IS NULL`, [req.org!.id])).rows[0]!.t;
     const settlements = (await db.query(`SELECT id, event_count, charge_micros, publisher_micros, reversed_publisher_micros, hold_until, finalized_at, created_at FROM settlements WHERE publisher_org_id = $1 ORDER BY created_at DESC LIMIT 100`, [req.org!.id])).rows;
     const settings = await app.ctx.settings.get();
+    const terms = (await db.query('SELECT tier, earnings_mode, min_cpm_micros, min_cpc_micros, guarantee_monthly_cap_micros, premium_advertisers_only FROM organizations WHERE id = $1', [req.org!.id])).rows[0];
+    const guarantees = (await db.query(`SELECT to_char(day, 'YYYY-MM-DD') AS day, impressions, clicks, earned_micros, required_micros, shortfall_micros, topup_micros, capped, hold_until, finalized_at FROM publisher_guarantees WHERE org_id = $1 ORDER BY day DESC LIMIT 60`, [req.org!.id])).rows;
     return {
       data: {
         currency: cur,
+        premium: {
+          tier: terms.tier, earningsMode: terms.earnings_mode, minCpmMicros: terms.min_cpm_micros, minCpcMicros: terms.min_cpc_micros,
+          guaranteeMonthlyCapMicros: terms.guarantee_monthly_cap_micros, premiumAdvertisersOnly: terms.premium_advertisers_only,
+        },
+        guarantees: guarantees.map((g) => ({ day: g.day, impressions: Number(g.impressions), clicks: Number(g.clicks), earnedMicros: g.earned_micros, requiredMicros: g.required_micros, shortfallMicros: g.shortfall_micros, topupMicros: g.topup_micros, capped: g.capped, holdUntil: g.hold_until, finalizedAt: g.finalized_at })),
         estimatedUnsettledMicros: unsettled,
         pendingMicros: pending.toString(),
         availableMicros: available.toString(),

@@ -22,7 +22,7 @@
  *   we never retry in a loop.
  */
 
-type Format = 'image' | 'text';
+type Format = 'image' | 'text' | 'native';
 
 interface AdPayload {
   format: Format;
@@ -32,6 +32,7 @@ interface AdPayload {
   height: number | null;
   image?: { url: string; alt: string };
   text?: { headline: string; body: string; cta: string; displayUrl: string };
+  native?: { imageUrl: string; alt: string; headline: string; body: string; cta: string; displayUrl: string; sponsor: string };
 }
 interface ServeResponse {
   status: 'ok' | 'inactive' | 'blocked' | 'disabled';
@@ -329,6 +330,49 @@ class Tag {
       box.appendChild(b);
       box.appendChild(meta);
       link.appendChild(box);
+    } else if (ad.format === 'native' && ad.native) {
+      // Native ads match the flow of the page but always say who paid for them,
+      // above the headline, so they cannot pass as editorial content.
+      const n = ad.native;
+      frame.classList.add('bn-native-ad');
+      const img = document.createElement('img');
+      img.className = 'bn-native-img';
+      img.src = n.imageUrl;
+      img.alt = n.alt;
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.addEventListener('error', () => collapse(host));
+      const box = document.createElement('div');
+      box.className = 'bn-native';
+      const disclosure = document.createElement('div');
+      disclosure.className = 'bn-disclosure';
+      disclosure.textContent = n.sponsor ? `Sponsored · ${n.sponsor}` : 'Sponsored';
+      const h = document.createElement('div');
+      h.className = 'bn-headline';
+      h.textContent = n.headline;
+      box.appendChild(disclosure);
+      box.appendChild(h);
+      if (n.body) {
+        const b = document.createElement('div');
+        b.className = 'bn-body';
+        b.textContent = n.body;
+        box.appendChild(b);
+      }
+      const meta = document.createElement('div');
+      meta.className = 'bn-meta';
+      const url = document.createElement('span');
+      url.className = 'bn-url';
+      url.textContent = n.displayUrl;
+      meta.appendChild(url);
+      if (n.cta) {
+        const cta = document.createElement('span');
+        cta.className = 'bn-cta';
+        cta.textContent = n.cta;
+        meta.appendChild(cta);
+      }
+      box.appendChild(meta);
+      link.appendChild(img);
+      link.appendChild(box);
     } else {
       collapse(host);
       return;
@@ -340,7 +384,8 @@ class Tag {
     label.setAttribute('aria-hidden', 'false');
 
     frame.appendChild(link);
-    frame.appendChild(label);
+    // Native ads carry their disclosure in the card itself.
+    if (ad.format !== 'native') frame.appendChild(label);
     mount.appendChild(frame);
 
     // A render is reported as soon as the creative is in the document.
@@ -426,11 +471,15 @@ const SHADOW_CSS = `
 .bn-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px}
 .bn-url{color:#6b7280;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bn-cta{flex:none;font-size:12px;font-weight:600;color:#1d4ed8}
+.bn-native-img{display:block;width:100%;aspect-ratio:1.91/1;object-fit:cover;border:0;background:#f3f4f6}
+.bn-native{padding:12px 14px 14px}
+.bn-disclosure{font-size:11px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:#6b7280;margin-bottom:6px}
 .bn-label{position:absolute;right:0;bottom:0;padding:2px 6px;font:500 10px/1.3 system-ui,sans-serif;letter-spacing:.02em;color:#6b7280;background:rgba(255,255,255,.92);border-top-left-radius:6px}
 @media (prefers-color-scheme:dark){
 .bn-ad{color:#e5e7eb;background:#111827;border-color:rgba(255,255,255,.12)}
 .bn-body{color:#9ca3af}.bn-url{color:#9ca3af}.bn-cta{color:#93b4fd}
-.bn-label{color:#9ca3af;background:rgba(17,24,39,.92)}}
+.bn-label{color:#9ca3af;background:rgba(17,24,39,.92)}
+.bn-disclosure{color:#9ca3af}.bn-native-img{background:#1f2937}}
 `;
 
 /* ------------------------------------------------------------- bootstrap */

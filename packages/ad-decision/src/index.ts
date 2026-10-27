@@ -18,11 +18,13 @@ export interface Targeting {
   requirePersonalized: boolean;
 }
 
-export interface CreativeCandidate { id: string; format: 'image' | 'text'; width: number | null; height: number | null }
+export interface CreativeCandidate { id: string; format: 'image' | 'text' | 'native'; width: number | null; height: number | null }
 
 export interface CampaignCandidate {
   id: string;
   orgId: string;
+  /** The advertiser organization is premium (may buy premium-only inventory). */
+  premium?: boolean;
   status: string;
   priority: number;          // 1..10 advertiser priority + admin boost
   pricingModel: 'cpm' | 'cpc' | 'flat';
@@ -57,13 +59,25 @@ export interface RequestContext {
   blockedCountries: string[];
   excludeCampaignIds: string[];
   cpcEnabled: boolean;
+  /** Publisher's revenue share on this site, in basis points. Used for earnings floors. */
+  revenueShareBps?: number;
+  /**
+   * Price floor for a premium publisher: the publisher's share of a CPM rate
+   * (per 1,000 impressions) or a CPC rate (per click) must reach these
+   * minimums. null means no minimum for that pricing model.
+   */
+  floorCpmMicros?: bigint | null;
+  floorCpcMicros?: bigint | null;
+  /** Inventory reserved for premium advertisers. */
+  premiumOnly?: boolean;
   /** Estimated spend today per campaign (micros), from Redis counters. */
   spentToday: (campaignId: string) => bigint;
 }
 
 export type RejectReason =
   | 'status' | 'schedule' | 'budget' | 'daily_budget' | 'pacing' | 'country' | 'device' | 'site_category'
-  | 'keywords' | 'site_list' | 'unit_list' | 'personalization' | 'no_creative' | 'pricing_disabled' | 'already_on_page' | 'blocked_country';
+  | 'keywords' | 'site_list' | 'unit_list' | 'personalization' | 'no_creative' | 'pricing_disabled' | 'already_on_page' | 'blocked_country'
+  | 'premium_only' | 'below_floor';
 
 export interface RankedCandidate { campaign: CampaignCandidate; creative: CreativeCandidate; score: number; tiebreak: string }
 export interface DecisionResult { ranked: RankedCandidate[]; rejected: Array<{ campaignId: string; reason: RejectReason }> }
@@ -116,9 +130,18 @@ export function pacingAllows(c: CampaignCandidate, spentToday: bigint, now: numb
   return { ok: true, ratio };
 }
 
+/** The publisher's share of one unit of the campaign's price, compared with the floor for that pricing model. */
+export function meetsFloor(c: Pick<CampaignCandidate, 'pricingModel' | 'rateMicros'>, ctx: Pick<RequestContext, 'floorCpmMicros' | 'floorCpcMicros' | 'revenueShareBps'>): boolean {
+  const floor = c.pricingModel === 'cpm' ? ctx.floorCpmMicros : c.pricingModel === 'cpc' ? ctx.floorCpcMicros : null;
+  if (floor === null || floor === undefined) return true; // no minimum for this model (flat-rate sponsorships are negotiated)
+  const share = BigInt(Math.max(0, Math.min(10_000, ctx.revenueShareBps ?? 0)));
+  return (c.rateMicros * share) / 10_000n >= floor;
+}
+
 function creativeFits(cr: CreativeCandidate, ctx: RequestContext): boolean {
   if (!ctx.unitFormats.includes(cr.format) || !ctx.siteAllowedFormats.includes(cr.format)) return false;
-  if (cr.format === 'text') return true;
+  // Text and native ads lay themselves out in the slot; only image banners need matching dimensions.
+  if (cr.format === 'text' || cr.format === 'native') return true;
   if (!cr.width || !cr.height) return false;
   if (ctx.unitWidth && ctx.unitHeight) {
     if (cr.width === ctx.unitWidth && cr.height === ctx.unitHeight) return true;
@@ -153,6 +176,8 @@ export function decide(candidates: CampaignCandidate[], ctx: RequestContext): De
     if (ctx.now < c.startAt || (c.endAt !== null && ctx.now >= c.endAt)) { reject(c, 'schedule'); continue; }
     if (c.pricingModel === 'cpc' && !ctx.cpcEnabled) { reject(c, 'pricing_disabled'); continue; }
     if (ctx.excludeCampaignIds.includes(c.id)) { reject(c, 'already_on_page'); continue; }
+    if (ctx.premiumOnly && !c.premium) { reject(c, 'premium_only'); continue; }
+    if (!meetsFloor(c, ctx)) { reject(c, 'below_floor'); continue; }
     const cost = unitCostMicros(c);
     if (c.spentMicros + cost > c.lifetimeBudgetMicros || c.spentMicros >= c.lifetimeBudgetMicros) { reject(c, 'budget'); continue; }
     if (ctx.blockedCountries.includes(ctx.country)) { reject(c, 'blocked_country'); continue; }

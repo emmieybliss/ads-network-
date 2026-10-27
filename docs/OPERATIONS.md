@@ -52,7 +52,7 @@ tar xzf storage-YYYY-MM-DD.tgz -C /data
 ```
 
 Test a restore regularly. After restoring, run reconciliation in Admin, Finance,
-Summary: all eight checks should pass.
+Summary: all nine checks should pass.
 
 For the Docker demo, `scripts/reset-demo.sh` deletes the demo volumes. Back up
 first if you changed anything you want to keep:

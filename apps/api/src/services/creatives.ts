@@ -52,11 +52,11 @@ export function serializeCreative(c: Record<string, any>, assetUrl: string | nul
   return {
     id: c.id, campaignId: c.campaign_id, name: c.name, format: c.format, status: c.status, version: c.version, approvedVersion: c.approved_version,
     headline: c.headline, body: c.body, cta: c.cta, assetId: c.asset_id, imageUrl: assetUrl, width: c.width, height: c.height,
-    destinationUrl: c.destination_url, displayUrl: c.display_url, altText: c.alt_text, rejectionReason: c.rejection_reason,
+    destinationUrl: c.destination_url, displayUrl: c.display_url, altText: c.alt_text, sponsorName: c.sponsor_name ?? null, rejectionReason: c.rejection_reason,
     createdAt: c.created_at, updatedAt: c.updated_at,
   };
 }
 
 export function creativeSnapshot(c: Record<string, any>, storageKey: string | null) {
-  return { name: c.name, format: c.format, headline: c.headline, body: c.body, cta: c.cta, assetId: c.asset_id, storageKey, width: c.width, height: c.height, destinationUrl: c.destination_url, displayUrl: c.display_url, altText: c.alt_text };
+  return { name: c.name, format: c.format, headline: c.headline, body: c.body, cta: c.cta, assetId: c.asset_id, storageKey, width: c.width, height: c.height, destinationUrl: c.destination_url, displayUrl: c.display_url, altText: c.alt_text, sponsorName: c.sponsor_name ?? null };
 }

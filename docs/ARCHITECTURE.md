@@ -73,11 +73,52 @@ All amounts are integer **micros** (1/1,000,000 of the currency unit) stored as
 - Entries are append-only. A trigger refuses UPDATE and DELETE.
 - Every posting has an idempotency key.
 - Corrections are new adjustment transactions with a reason and an audit record. Nothing is silently modified or deleted.
-- Eight reconciliation checks run on demand from the admin finance page.
+- Nine reconciliation checks run on demand from the admin finance page.
 
 Payment confirmation comes from the provider's webhook, or from finance staff for
 bank transfers. A browser redirect from a payment page never credits an
 account.
+
+## Premium tiers and earnings minimums
+
+Organizations are `standard` or `premium`. An admin with pricing rights changes
+this in Admin, Organizations. The change needs a reason and step-up, and it is
+audited.
+
+A premium **publisher** can also have an earnings minimum, set per publisher,
+for the publisher's share per 1,000 impressions and/or per click:
+
+- **Price floor** (`earnings_mode = floor`). The decision engine drops any
+  campaign whose rate times the publisher's revenue share is below the minimum
+  (reason `below_floor`). No network money is involved. The trade-off is that
+  fewer ads may fill.
+- **Guarantee** (`earnings_mode = guarantee`). Every eligible ad serves. Each
+  night the worker compares the previous day's valid earnings with the minimum
+  (`applyGuarantee` in `packages/billing`):
+  - It counts only valid, billable, non-excluded CPM renders and CPC clicks.
+  - It pays the shortfall from the platform's `guarantee_expense` account into
+    `publisher_pending`, capped by the publisher's monthly cap.
+  - It records the day in `publisher_guarantees`.
+  - It is idempotent per publisher and day.
+  - Top-ups follow the normal hold period before they become available.
+  - Reconciliation check 9 confirms that every top-up matches its ledger posting.
+
+A premium publisher can also accept only premium advertisers (`premium_only`).
+
+Nothing is promised to publishers without an agreement. The marketing site says
+so. Limitation: a top-up is calculated once per day. If events from that day
+are excluded as invalid traffic afterwards, the top-up is not recalculated
+automatically. Finance staff can correct it with a manual adjustment, which is
+audited.
+
+## Native ads
+
+A native creative has an image, a headline, optional body and call to action,
+and a required sponsor name. The tag renders it inside the same closed shadow
+root as the other formats, as a card that follows the page's light or dark
+scheme. The card always starts with a "Sponsored · {sponsor}" line above the
+headline, so it cannot be mistaken for editorial content. Publishers opt in per
+site and per placement through the `native` format.
 
 ## Sites and verification
 
@@ -115,7 +156,7 @@ as money, suspensions and settings, require a reason and recent re-authenticatio
   straight to `active`, or to `scheduled` if its start date is in the future.
 - **Reports are near real time, not instant.** Live events appear after the
   next aggregation run, which happens within about one minute.
-- **Images only for uploaded creatives** (PNG, JPEG, GIF, WEBP, checked by magic
+- **Formats are image, text and native.** Images only for uploaded creatives (PNG, JPEG, GIF, WEBP, checked by magic
   bytes). SVG and HTML creatives are not accepted, so no advertiser markup or
   script runs on publisher pages.
 - **Country** comes from a trusted CDN header (`GEO_COUNTRY_HEADER`). No GeoIP

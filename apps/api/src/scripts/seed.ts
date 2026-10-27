@@ -216,6 +216,7 @@ async function main() {
     const unitSpecs = [
       { key: 'demo-leaderboard', name: 'Header leaderboard', w: 728, h: 90, pos: 'header', formats: ['image'] },
       { key: 'demo-sidebar', name: 'Sidebar text unit', w: null as number | null, h: null as number | null, pos: 'sidebar', formats: ['text'] },
+      { key: 'demo-native', name: 'In-article native unit', w: null as number | null, h: null as number | null, pos: 'in_content', formats: ['native'] },
     ];
     const units: Record<string, string> = {};
     for (const u of unitSpecs) {
@@ -251,11 +252,23 @@ async function main() {
       [advOrg, sha, png.byteLength, storageKey, advUser],
     )).rows[0]!.id;
 
+    const nativePng = demoBannerPng(600, 314);
+    const nativeSha = createHash('sha256').update(nativePng).digest('hex');
+    const nativeKey = `creatives/${advOrg}/${nativeSha}.png`;
+    await new LocalStorage(storageDir, '').put(nativeKey, nativePng);
+    const nativeAsset = (await c.query<{ id: string }>(
+      `INSERT INTO assets (org_id, sha256, mime_type, size_bytes, width, height, storage_key, created_by)
+       VALUES ($1, $2, 'image/png', $3, 600, 314, $4, $5)
+       ON CONFLICT (storage_key) DO UPDATE SET storage_key = EXCLUDED.storage_key RETURNING id`,
+      [advOrg, nativeSha, nativePng.byteLength, nativeKey, advUser],
+    )).rows[0]!.id;
+
     // --- campaigns -------------------------------------------------------------
     const campaigns: Array<{ id: string; name: string; creativeId: string; unit: string; pricing: 'cpm' | 'cpc'; rate: bigint }> = [];
     const specs = [
       { name: `Banner campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '2.50', lifetime: '400', daily: '40', unit: 'demo-leaderboard', format: 'image' as const },
       { name: `Text ad campaign ${DEMO_TAG}`, model: 'cpc' as const, rate: '0.20', lifetime: '300', daily: '30', unit: 'demo-sidebar', format: 'text' as const },
+      { name: `Native ad campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '4.00', lifetime: '200', daily: '20', unit: 'demo-native', format: 'native' as const },
     ];
     for (const s of specs) {
       const camp = (await c.query<{ id: string }>(
@@ -267,15 +280,19 @@ async function main() {
       await c.query(`INSERT INTO campaign_history (campaign_id, actor_id, action, after, reason) VALUES ($1, $2, 'admin_approve', '{"status":"active"}'::jsonb, 'Demo seed')`, [camp, adminUser]);
       await reserveCampaignBudget(c, camp, system);
 
-      const isImage = s.format === 'image';
-      const snapshot = isImage
-        ? { format: 'image', assetId: asset, storageKey, width: 728, height: 90, destinationUrl: 'https://example.com/demo-offer', displayUrl: 'example.com', altText: 'Demo advertisement banner' }
-        : { format: 'text', headline: 'Demo text advertisement', body: 'A sample text ad served by your local BlissNova demo.', cta: 'Learn more', destinationUrl: 'https://example.com/demo-offer', displayUrl: 'example.com' };
+      const dest = 'https://example.com/demo-offer';
+      const v = s.format === 'image'
+        ? { headline: null, body: null, cta: null, asset, w: 728, h: 90, alt: 'Demo advertisement banner', sponsor: null, snapshot: { format: 'image', assetId: asset, storageKey, width: 728, height: 90, destinationUrl: dest, displayUrl: 'example.com', altText: 'Demo advertisement banner' } }
+        : s.format === 'native'
+          ? { headline: 'Demo native advertisement', body: 'A sample native ad served by your local BlissNova demo. It is labelled Sponsored with the advertiser name.', cta: 'Learn more', asset: nativeAsset, w: 600, h: 314, alt: 'Demo native advertisement image', sponsor: `Demo Advertiser Co ${DEMO_TAG}`,
+              snapshot: { format: 'native', assetId: nativeAsset, storageKey: nativeKey, width: 600, height: 314, headline: 'Demo native advertisement', body: 'A sample native ad served by your local BlissNova demo. It is labelled Sponsored with the advertiser name.', cta: 'Learn more', sponsorName: `Demo Advertiser Co ${DEMO_TAG}`, destinationUrl: dest, displayUrl: 'example.com', altText: 'Demo native advertisement image' } }
+          : { headline: 'Demo text advertisement', body: 'A sample text ad served by your local BlissNova demo.', cta: 'Learn more', asset: null, w: null, h: null, alt: null, sponsor: null, snapshot: { format: 'text', headline: 'Demo text advertisement', body: 'A sample text ad served by your local BlissNova demo.', cta: 'Learn more', destinationUrl: dest, displayUrl: 'example.com' } };
+      const snapshot = v.snapshot;
+      const label = s.format === 'image' ? 'Banner' : s.format === 'native' ? 'Native ad' : 'Text ad';
       const cr = (await c.query<{ id: string }>(
-        `INSERT INTO creatives (campaign_id, org_id, name, format, status, version, approved_version, headline, body, cta, asset_id, width, height, destination_url, display_url, alt_text, created_by)
-         VALUES ($1, $2, $3, $4, 'approved', 1, 1, $5, $6, $7, $8, $9, $10, 'https://example.com/demo-offer', 'example.com', $11, $12) RETURNING id`,
-        [camp, advOrg, `${isImage ? 'Banner' : 'Text ad'} ${DEMO_TAG}`, s.format, isImage ? null : snapshot.headline, isImage ? null : (snapshot as { body: string }).body, isImage ? null : (snapshot as { cta: string }).cta,
-          isImage ? asset : null, isImage ? 728 : null, isImage ? 90 : null, isImage ? 'Demo advertisement banner' : null, advUser],
+        `INSERT INTO creatives (campaign_id, org_id, name, format, status, version, approved_version, headline, body, cta, asset_id, width, height, destination_url, display_url, alt_text, sponsor_name, created_by)
+         VALUES ($1, $2, $3, $4, 'approved', 1, 1, $5, $6, $7, $8, $9, $10, $11, 'example.com', $12, $13, $14) RETURNING id`,
+        [camp, advOrg, `${label} ${DEMO_TAG}`, s.format, v.headline, v.body, v.cta, v.asset, v.w, v.h, dest, v.alt, v.sponsor, advUser],
       )).rows[0]!.id;
       await c.query(`INSERT INTO creative_versions (creative_id, version, snapshot, created_by) VALUES ($1, 1, $2, $3)`, [cr, JSON.stringify(snapshot), advUser]);
       campaigns.push({ id: camp, name: s.name, creativeId: cr, unit: s.unit, pricing: s.model, rate: toMicros(s.rate) });

@@ -9,11 +9,11 @@ import type { PoolClient } from 'pg';
  */
 export type AccountKind =
   | 'cash_clearing' | 'advertiser_wallet' | 'campaign_reserve' | 'publisher_pending' | 'publisher_available'
-  | 'publisher_payout_processing' | 'platform_revenue' | 'platform_fees' | 'adjustments';
+  | 'publisher_payout_processing' | 'platform_revenue' | 'platform_fees' | 'adjustments' | 'guarantee_expense';
 
 export type TxnType =
   | 'payment' | 'campaign_reserve' | 'campaign_release' | 'ad_charge' | 'charge_reversal' | 'earnings_finalize'
-  | 'payout_approve' | 'payout_paid' | 'payout_failed' | 'refund' | 'adjustment';
+  | 'payout_approve' | 'payout_paid' | 'payout_failed' | 'refund' | 'adjustment' | 'guarantee_topup';
 
 export interface AccountRef { kind: AccountKind; orgId?: string | null; campaignId?: string | null }
 

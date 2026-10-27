@@ -85,7 +85,7 @@ export default async function HomePage() {
         <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
           <Feature icon={Megaphone} title="Campaign builder">Objectives, start and end dates, lifetime and daily budgets, and CPM, flat-rate or (where enabled) CPC pricing.</Feature>
           <Feature icon={Target} title="Targeting">Country, device, contextual category, keyword, publisher and placement targeting, with exclusions.</Feature>
-          <Feature icon={FileCheck2} title="Creative review">Upload image banners or write text ads. Every creative is versioned and reviewed before it serves.</Feature>
+          <Feature icon={FileCheck2} title="Creative review">Upload image banners and native ads, or write text ads. Every creative is versioned and reviewed before it serves.</Feature>
           <Feature icon={Wallet} title="Prepaid budgets">Fund your account, reserve budget per campaign, and see every charge in an itemised ledger.</Feature>
         </div>
         <div className="mt-8"><Link href="/advertisers" className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline">More for advertisers <ArrowRight className="size-4" /></Link></div>
@@ -100,6 +100,7 @@ export default async function HomePage() {
             <Bullet>Earnings shown as estimated until the review hold ends, then finalised. Nothing is rounded up.</Bullet>
             <Bullet>Payout requests, payout history and invalid-traffic decisions you can see and appeal.</Bullet>
             <Bullet>Block categories or advertisers you do not want on your pages.</Bullet>
+            <Bullet>Premium publisher programme: by individual agreement, the network can set a minimum you earn per 1,000 impressions or per click, either as a price floor or as a capped top-up. No minimum applies without an agreement.</Bullet>
           </ul>
           <div className="rounded-2xl border border-border bg-surface p-5 shadow-[var(--shadow-card)]">
             <p className="text-sm font-medium text-fg">Your ad tag</p>
@@ -115,14 +116,15 @@ export default async function HomePage() {
 
       {/* 5. Ad formats */}
       <Section id="formats" eyebrow="Ad formats" title="Formats that respect the page" intro="Every ad renders in an isolated container with a visible “Sponsored” label. Advertiser scripts never run on publisher pages." tinted>
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           <Feature icon={ImageIcon} title="Display banners">Standard IAB sizes such as 300×250, 728×90 and 320×50.</Feature>
           <Feature icon={LayoutPanelTop} title="Responsive display">Creatives that scale to the width of the placement.</Feature>
           <Feature icon={Type} title="Text ads">Headline, description and call to action, styled to sit cleanly in content.</Feature>
           <Feature icon={Newspaper} title="In-article">Placed between paragraphs, loaded only as the reader approaches.</Feature>
           <Feature icon={Rows3} title="In-feed sponsored">Clearly labelled sponsored entries in lists and feeds.</Feature>
+          <Feature icon={Newspaper} title="Native ads">An image, headline and description that follow the look of the page, always marked “Sponsored” with the advertiser’s name.</Feature>
         </div>
-        <p className="mt-6 text-sm text-muted">Native, recommendation widgets and video are on the roadmap. They will carry the same sponsored labelling.</p>
+        <p className="mt-6 text-sm text-muted">Recommendation widgets and video are on the roadmap. They will carry the same sponsored labelling.</p>
       </Section>
 
       {/* 6. How the network works */}

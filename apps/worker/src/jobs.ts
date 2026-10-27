@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import type { Redis } from 'ioredis';
-import { finalizeEarnings, issueInvoice, releaseCampaignReserve, settleCampaign } from '@blissnova/billing';
+import { applyGuarantee, finalizeEarnings, issueInvoice, releaseCampaignReserve, settleCampaign } from '@blissnova/billing';
 import { withTransaction } from '@blissnova/database';
 import { formatMoney, type PlatformSettings } from '@blissnova/shared';
 import { aggregateDay, allocateFlatRate } from '@blissnova/api/services/events';
@@ -116,11 +116,27 @@ export async function detectAnomalies(ctx: JobCtx) {
   return created;
 }
 
+/** Guaranteed minimum earnings for premium publishers, for one finished UTC day. Idempotent per organization and day. */
+export async function applyGuarantees(ctx: JobCtx, day = yesterday()) {
+  const s = await ctx.settings();
+  const orgs = (await ctx.db.query<{ id: string }>(`SELECT id FROM organizations WHERE type = 'publisher' AND tier = 'premium' AND earnings_mode = 'guarantee'`)).rows;
+  let topups = 0;
+  for (const o of orgs) {
+    const r = await withTransaction(ctx.db, (cl) => applyGuarantee(cl, o.id, day, s.publishers.earningsHoldDays));
+    if (r?.created && r.topup > 0n) {
+      topups++;
+      await ctx.notify(o.id, { type: 'guarantee_topup', title: 'Guaranteed minimum applied', body: `Your earnings for ${day} were topped up to your guaranteed minimum${r.capped ? ' (limited by the monthly cap)' : ''}.`, link: '/publisher/earnings', roles: ['owner', 'manager'] }).catch(() => undefined);
+    }
+  }
+  return topups;
+}
+
 /** Flat-rate allocation for the previous day, monthly statements, payment expiry and retention purge. */
 export async function dailyMaintenance(ctx: JobCtx) {
   const s = await ctx.settings();
   const flat = await allocateFlatRate(ctx.db, yesterday());
   if (flat) await aggregateDay(ctx.db, yesterday());
+  const guaranteeTopups = await applyGuarantees(ctx);
   await ctx.db.query(`UPDATE payments SET status = 'cancelled', failure_reason = 'Expired without confirmation', updated_at = now() WHERE status = 'pending' AND created_at < now() - interval '14 days'`);
   // Raw events past retention are removed only once settled or non-billable; aggregates and settlements keep long-term history.
   const purged = await ctx.db.query(`DELETE FROM ad_events WHERE occurred_at < now() - make_interval(days => $1) AND (settlement_id IS NOT NULL OR NOT billable)`, [s.tracking.rawEventRetentionDays]);
@@ -147,5 +163,5 @@ export async function dailyMaintenance(ctx: JobCtx) {
       if (inv) statements++;
     }
   }
-  return { flat, purged: purged.rowCount, statements };
+  return { flat, guaranteeTopups, purged: purged.rowCount, statements };
 }

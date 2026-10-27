@@ -2,8 +2,9 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
-import { Alert, Async, Button, Card, CardHeader, DefinitionList, Field, Input, PageHeader, ReasonDialog, StatusBadge } from '@/components/ui';
+import { Alert, Async, Badge, Button, Card, CardHeader, DefinitionList, Field, Input, PageHeader, ReasonDialog, StatusBadge } from '@/components/ui';
 import { NotesPanel, ReasonAction, SimpleTable } from '@/components/admin/kit';
+import { PremiumCard } from '@/components/admin/PremiumCard';
 import { useApi } from '@/lib/hooks';
 import { useSession } from '@/lib/session';
 import { patch } from '@/lib/api';
@@ -23,7 +24,7 @@ export default function OrgDetail() {
         const suspend = canAdmin('admin:orgs:suspend');
         return (
           <>
-            <PageHeader back={{ href: '/admin/orgs', label: 'Organizations' }} title={<span className="flex items-center gap-2">{o.name} <StatusBadge status={o.status} /></span>} description={`${humanize(o.type)} · ${o.currency}${o.country ? ` · ${o.country}` : ''}`}
+            <PageHeader back={{ href: '/admin/orgs', label: 'Organizations' }} title={<span className="flex items-center gap-2">{o.name} <StatusBadge status={o.status} />{o.tier === 'premium' && <Badge tone="info">Premium</Badge>}</span>} description={`${humanize(o.type)} · ${o.currency}${o.country ? ` · ${o.country}` : ''}`}
               actions={
                 <div className="flex flex-wrap gap-2">
                   {review && ['pending', 'rejected'].includes(o.status) && <ReasonAction label="Approve" title={`Approve ${o.name}`} path={`/admin/orgs/${id}/approve`} variant="primary" requireReason={false} onDone={res.reload} />}
@@ -48,6 +49,7 @@ export default function OrgDetail() {
                   </div>
                 )}
               </Card>
+              <PremiumCard key={`${o.tier}-${o.earnings_mode}-${o.min_cpm_micros}-${o.min_cpc_micros}`} org={o} canEdit={canAdmin('admin:pricing:manage')} onSaved={res.reload} />
               <Card>
                 <CardHeader title="Members" />
                 <SimpleTable rows={o.members} rowKey={(r: any) => r.id} columns={[

@@ -17,6 +17,7 @@ export default function Orgs() {
           { key: 'n', header: 'Organization', cell: (r) => <span className="font-medium">{r.name}</span> },
           { key: 't', header: 'Type', cell: (r) => humanize(r.type) },
           { key: 's', header: 'Status', cell: (r) => <StatusBadge status={r.status} /> },
+          { key: 'tier', header: 'Tier', cell: (r) => (r.tier === 'premium' ? (r.earnings_mode ? `Premium · ${r.earnings_mode === 'floor' ? 'floor' : 'guarantee'}` : 'Premium') : 'Standard') },
           { key: 'm', header: 'Members', align: 'right', cell: (r) => r.members },
           { key: 'l', header: 'Live campaigns / approved sites', align: 'right', cell: (r) => (r.type === 'advertiser' ? r.live_campaigns : r.approved_sites) },
           { key: 'rs', header: 'Revenue share', cell: (r) => (r.type === 'publisher' ? (r.revenue_share_bps != null ? bpsToPercent(r.revenue_share_bps) : 'Default') : '—') },
