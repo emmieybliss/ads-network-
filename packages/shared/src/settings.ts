@@ -40,10 +40,44 @@ export const settingsSchema = z.object({
   }).prefault({}),
   publishers: z.object({
     requireDomainVerification: z.boolean().default(true),
-    requireSiteReview: z.boolean().default(true),
+    /** Version label of the publisher policies a site owner accepts at submission. Bump it when the policies change. */
+    policyVersion: z.string().min(1).max(40).default('2026-10'),
     defaultRevenueShareBps: z.number().int().min(0).max(10000).default(7000),
     earningsHoldDays: z.number().int().min(0).max(120).default(30),
     minimumPayoutMicros: z.string().regex(/^\d+$/).default('50000000'),
+  }).prefault({}),
+  verification: z.object({
+    /** How long a verification challenge stays valid before a new token must be issued. */
+    challengeTtlHours: z.number().int().min(1).max(24 * 30).default(24 * 7),
+    /** Verification checks allowed per hostname per hour, across every account. */
+    maxChecksPerHostPerHour: z.number().int().min(1).max(500).default(30),
+    /** When true, a DNS TXT proof covers subdomains of the verified hostname. File and meta-tag proofs only ever cover the hostname itself. */
+    dnsProofCoversSubdomains: z.boolean().default(true),
+    allowedMethods: z.array(z.enum(['dns_txt', 'html_file', 'meta_tag'])).min(1).default(['dns_txt', 'html_file', 'meta_tag']),
+  }).prefault({}),
+  /**
+   * Publisher eligibility rules. Reviewers see these as a checklist. Thresholds
+   * are left unset by default: the operator decides them, they are not invented here.
+   */
+  eligibility: z.object({
+    minMonthlyPageviews: z.number().int().min(0).nullable().default(null),
+    requireOriginalContent: z.boolean().default(true),
+    requirePrivacyPolicy: z.boolean().default(true),
+    requireContactInformation: z.boolean().default(true),
+    requireTrafficIntegrity: z.boolean().default(true),
+    prohibitedCategories: z.array(z.string().max(40)).max(100).default([]),
+    /** ISO country codes; empty means every country is accepted. */
+    allowedCountries: z.array(z.string().regex(/^[A-Z]{2}$/)).max(250).default([]),
+    /** Language codes; empty means every language is accepted. */
+    allowedLanguages: z.array(z.string().regex(/^[a-z]{2,3}$/)).max(200).default([]),
+    prohibitedContent: z.array(z.string().max(200)).max(50).default([
+      'Illegal content or services',
+      'Adult or sexually explicit material',
+      'Hate, harassment or violence',
+      'Copyright-infringing material',
+      'Malware, deceptive downloads or phishing',
+    ]),
+    notes: z.string().max(4000).default(''),
   }).prefault({}),
   pricing: z.object({
     cpmEnabled: z.boolean().default(true),
@@ -87,7 +121,7 @@ export const settingsSchema = z.object({
 });
 
 export type PlatformSettings = z.infer<typeof settingsSchema>;
-export const SETTINGS_GROUPS = ['tracking', 'ivt', 'frequency', 'creatives', 'publishers', 'pricing', 'api', 'platform', 'branding', 'email'] as const;
+export const SETTINGS_GROUPS = ['tracking', 'ivt', 'frequency', 'creatives', 'publishers', 'verification', 'eligibility', 'pricing', 'api', 'platform', 'branding', 'email'] as const;
 export type SettingsGroup = (typeof SETTINGS_GROUPS)[number];
 
 export function defaultSettings(): PlatformSettings {
@@ -101,5 +135,7 @@ export function publicSettings(s: PlatformSettings) {
     platform: { maintenanceMode: s.platform.maintenanceMode, maintenanceMessage: s.platform.maintenanceMessage, registrationOpen: s.platform.registrationOpen },
     pricing: { cpmEnabled: s.pricing.cpmEnabled, cpcEnabled: s.pricing.cpcEnabled, flatEnabled: s.pricing.flatEnabled, defaultCurrency: s.pricing.defaultCurrency, enabledCurrencies: s.pricing.enabledCurrencies, minCampaignBudgetMicros: s.pricing.minCampaignBudgetMicros, minCpmMicros: s.pricing.minCpmMicros, minCpcMicros: s.pricing.minCpcMicros },
     creatives: s.creatives,
+    eligibility: s.eligibility,
+    verification: { allowedMethods: s.verification.allowedMethods, challengeTtlHours: s.verification.challengeTtlHours },
   };
 }

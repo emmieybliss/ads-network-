@@ -37,7 +37,7 @@ declare module 'fastify' {
 export interface BuildOptions {
   config?: AppConfig;
   /** Override pieces of the context in tests. */
-  overrides?: Partial<Pick<AppContext, 'db' | 'redis' | 'mailer'>>;
+  overrides?: Partial<Pick<AppContext, 'db' | 'redis' | 'mailer' | 'verifier'>>;
   logger?: boolean;
 }
 
@@ -66,6 +66,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     storage: new LocalStorage(config.STORAGE_DIR, config.PUBLIC_API_URL),
     tokens: parseKeyring(config.TRACKING_TOKEN_KEYS),
     payments: new PaymentProviderRegistry(config),
+    verifier: opts.overrides?.verifier ?? {},
     log: app.log,
   };
   app.decorate('ctx', ctx);

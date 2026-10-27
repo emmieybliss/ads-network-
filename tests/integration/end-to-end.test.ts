@@ -14,8 +14,18 @@ import { TEST_PASSWORD, makeUser, setSettings, uniq } from '../helpers/fixtures'
 
 let h: Harness;
 
+/** Stand-in DNS for the verification step; everything else in the journey is real. */
+const txtRecords = new Map<string, string[][]>();
+const resolver = {
+  resolveTxt: async (name: string) => {
+    const r = txtRecords.get(name);
+    if (!r) throw Object.assign(new Error('not found'), { code: 'ENOTFOUND' });
+    return r;
+  },
+};
+
 beforeAll(async () => {
-  h = await createHarness();
+  h = await createHarness({}, { overrides: { verifier: { resolver } } });
   await h.reset();
 });
 afterAll(async () => {
@@ -77,9 +87,24 @@ it('runs the whole advertiser-to-payout journey', async () => {
   // Nothing serves before the site is approved.
   expect(siteRes.body.data.status).not.toBe('approved');
 
-  const approved = await admin.post(`/api/v1/admin/sites/${siteId}/mark-verified`, { reason: 'Verified out of band for this run' });
-  expect(approved.status).toBeLessThan(300);
-  const siteApproval = await admin.post(`/api/v1/admin/sites/${siteId}/approve`, { reason: 'Content reviewed' });
+  // Domain verification with a DNS TXT record (the resolver is a stand-in for real DNS).
+  const challengeRes = await pub.cl.post(`/api/v1/orgs/${pub.orgId}/sites/${siteId}/verification/challenge`, { method: 'dns_txt' });
+  expect(challengeRes.status).toBe(201);
+  const dns = challengeRes.body.data.verification.challenge.instructions;
+  txtRecords.set(dns.recordName, [[dns.value]]);
+  const check = await pub.cl.post(`/api/v1/orgs/${pub.orgId}/sites/${siteId}/verification/check`);
+  expect(check.body.verified).toBe(true);
+  // Verification proves control of the hostname; it does not approve the site.
+  expect(check.body.data.status).toBe('verified');
+
+  const submit = await pub.cl.post(`/api/v1/orgs/${pub.orgId}/sites/${siteId}/submit`, {
+    category: 'news', description: 'Local news and long-form reporting, published daily.', language: 'en', country: 'US',
+    policyVersion: check.body.data.submission.policyVersion, acceptPolicies: true,
+  });
+  expect(submit.status, JSON.stringify(submit.body).slice(0, 300)).toBe(200);
+  expect((await pub.cl.get(`/api/v1/orgs/${pub.orgId}/sites/${siteId}/tag`)).body.data.available).toBe(false);
+  expect((await admin.post(`/api/v1/admin/sites/${siteId}/start-review`, {})).status).toBe(200);
+  const siteApproval = await admin.post(`/api/v1/admin/sites/${siteId}/approve`, { reason: 'Content reviewed', checklist: { originalContent: true, privacyPolicy: true } });
   expect(siteApproval.status).toBeLessThan(300);
 
   // ------------------------------------------------------- 5. publisher adds a unit

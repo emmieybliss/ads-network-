@@ -182,6 +182,14 @@ describe('domain authorization', () => {
     expect(hostAuthorized('www.example.org', 'example.org')).toBe(true);
   });
 
+  it('limits a host-only proof to the hostname and its www. form', () => {
+    // A file or meta-tag proof shows control of one host, not of every subdomain.
+    expect(hostAuthorized('example.org', 'example.org', [], false)).toBe(true);
+    expect(hostAuthorized('www.example.org', 'example.org', [], false)).toBe(true);
+    expect(hostAuthorized('news.example.org', 'example.org', [], false)).toBe(false);
+    expect(hostAuthorized('news.example.org', 'example.org', ['news.example.org'], false)).toBe(true);
+  });
+
   it('allows additional registered domains', () => {
     expect(hostAuthorized('other.test', 'example.org', ['other.test'])).toBe(true);
   });

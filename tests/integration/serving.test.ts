@@ -107,7 +107,7 @@ describe('ad serving', () => {
   it('refuses a site that is not approved', async () => {
     const pubUser = await makeUser(h.db);
     const pubOrg = await makeOrg(h.db, { type: 'publisher', ownerId: pubUser.id });
-    const site = await makeSite(h.db, { orgId: pubOrg, domain: 'pub.example.org', status: 'pending_verification' });
+    const site = await makeSite(h.db, { orgId: pubOrg, domain: 'pub.example.org', status: 'verification_pending' });
     const unit = await makeUnit(h.db, { siteId: site.id });
     const r = await serve({ siteKey: site.publicKey, slots: [unit.key] });
     expect(r.body.status).toBe('inactive');

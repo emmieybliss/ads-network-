@@ -6,8 +6,8 @@ import { runReport } from '../services/reports';
 import { normalizeDomain, verificationInstructions } from '../services/verification';
 
 /**
- * Machine endpoints used by the WordPress plugin. They authenticate with an
- * organization API key (Authorization: Bearer bnk_...), which the plugin keeps
+ * Server-to-server integration endpoints (for a publisher's own CMS or tooling). They authenticate with an
+ * organization API key (Authorization: Bearer bnk_...), which the integration keeps
  * server-side; only the public site key ever reaches browsers.
  */
 function requireKey(scope: string) {
@@ -39,20 +39,20 @@ export async function integrationRoutes(app: FastifyInstance) {
     return { data: { organization: org.name, type: org.type, status: org.status, scopes: k.scopes } };
   });
 
-  app.get('/integrations/wordpress/site', { config: cfg, preHandler: requireKey('site:read'), schema: { tags: ['integrations'], querystring: siteQuery, security: [{ apiKey: [] }] } }, async (req) => {
+  app.get('/integrations/site', { config: cfg, preHandler: requireKey('site:read'), schema: { tags: ['integrations'], querystring: siteQuery, security: [{ apiKey: [] }] } }, async (req) => {
     const s = await siteFor(req, queryOf(req, siteQuery).domain);
-    const v = (await db.query(`SELECT token FROM site_verifications WHERE site_id = $1 AND status <> 'superseded' ORDER BY created_at DESC LIMIT 1`, [s.id])).rows[0];
+    const v = (await db.query(`SELECT token, expires_at FROM site_verifications WHERE site_id = $1 AND status IN ('pending', 'failed') AND method = 'meta_tag' ORDER BY created_at DESC LIMIT 1`, [s.id])).rows[0];
     const units = (await db.query(`SELECT key, name, formats, width, height, responsive, position, status FROM ad_units WHERE site_id = $1 AND status <> 'archived' ORDER BY created_at`, [s.id])).rows;
     return {
       data: {
         siteKey: s.public_key, name: s.name, domain: s.domain, status: s.status, verified: Boolean(s.verified_at),
-        verification: !s.verified_at && v ? { metaTag: verificationInstructions(s.domain, v.token).meta_tag.value, token: v.token } : null,
+        verification: !s.verified_at && v ? { metaTag: verificationInstructions(s.domain, v.token).meta_tag.value, token: v.token, expiresAt: v.expires_at } : null,
         placements: units, sdkUrl: `${app.ctx.config.PUBLIC_API_URL}/sdk/v1/bn.js`, apiUrl: app.ctx.config.PUBLIC_API_URL,
       },
     };
   });
 
-  app.get('/integrations/wordpress/stats', { config: cfg, preHandler: requireKey('report:read'), schema: { tags: ['integrations'], querystring: siteQuery.merge(dateRange), security: [{ apiKey: [] }] } }, async (req) => {
+  app.get('/integrations/stats', { config: cfg, preHandler: requireKey('report:read'), schema: { tags: ['integrations'], querystring: siteQuery.merge(dateRange), security: [{ apiKey: [] }] } }, async (req) => {
     const q = queryOf(req, siteQuery.merge(dateRange));
     const s = await siteFor(req, q.domain);
     const range = resolveRange(q, 7);

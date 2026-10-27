@@ -70,14 +70,15 @@ export async function addMember(db: Db, orgId: string, userId: string, role: 'ow
 
 export async function makeSite(
   db: Db,
-  opts: { orgId: string; domain?: string; status?: string; category?: string; allowed?: string[]; revenueShareBps?: number; formats?: string[] },
+  opts: { orgId: string; domain?: string; status?: string; category?: string; allowed?: string[]; revenueShareBps?: number; formats?: string[]; scope?: 'host' | 'zone' },
 ) {
   const domain = opts.domain ?? `${uniq('s')}.example.org`;
   const publicKey = `pk_${randomBytes(15).toString('base64url').replace(/[^A-Za-z0-9]/g, '').slice(0, 20)}`;
   const status = opts.status ?? 'approved';
+  const verifiedStatus = ['verified', 'submitted', 'under_review', 'approved', 'suspended'].includes(status);
   const r = await db.query<{ id: string }>(
-    `INSERT INTO sites (org_id, name, domain, allowed_domains, category, status, public_key, allowed_formats, revenue_share_bps, verified_at, approved_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+    `INSERT INTO sites (org_id, name, domain, allowed_domains, category, status, public_key, allowed_formats, revenue_share_bps, verified_at, approved_at, verification_method, verification_scope, policy_accepted_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $11) RETURNING id`,
     [
       opts.orgId,
       `Site ${domain}`,
@@ -88,8 +89,10 @@ export async function makeSite(
       publicKey,
       opts.formats ?? ['image', 'text'],
       opts.revenueShareBps ?? null,
+      verifiedStatus ? new Date() : null,
       status === 'approved' ? new Date() : null,
-      status === 'approved' ? new Date() : null,
+      verifiedStatus ? 'dns_txt' : null,
+      verifiedStatus ? (opts.scope ?? 'zone') : null,
     ],
   );
   return { id: r.rows[0]!.id, publicKey, domain };
@@ -179,6 +182,7 @@ export async function makeCreative(
   const format = opts.format ?? 'text';
   const destination = opts.destination ?? 'https://example.com/landing';
   const status = opts.status ?? 'approved';
+  const verifiedStatus = ['verified', 'submitted', 'under_review', 'approved', 'suspended'].includes(status);
   const approvedVersion = status === 'approved' ? 1 : null;
   let assetId: string | null = null;
   if (format === 'image') {

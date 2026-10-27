@@ -75,7 +75,7 @@ export interface ProcessResult { status: 'valid' | 'invalid' | 'ignored'; reason
 
 export async function processAdmittedEvent(ctx: Pick<AppContext, 'db' | 'redis'>, e: AdmittedEvent, s: PlatformSettings, opts: { inline: boolean }): Promise<ProcessResult> {
   const c = e.claims;
-  const site = (await ctx.db.query(`SELECT s.domain, s.allowed_domains, s.status, o.status AS org_status FROM sites s JOIN organizations o ON o.id = s.org_id WHERE s.id = $1`, [c.s])).rows[0];
+  const site = (await ctx.db.query(`SELECT s.domain, s.allowed_domains, s.verification_scope, s.status, o.status AS org_status FROM sites s JOIN organizations o ON o.id = s.org_id WHERE s.id = $1`, [c.s])).rows[0];
   if (!site) return { status: 'ignored' };
   const minute = Math.floor(e.receivedAt / 60_000);
   const rate = await ctx.redis.multi().incr(`evrate:${e.ipHash}:${minute}`).expire(`evrate:${e.ipHash}:${minute}`, 120).exec();
@@ -94,7 +94,7 @@ export async function processAdmittedEvent(ctx: Pick<AppContext, 'db' | 'redis'>
     const res = await ctx.redis.multi().incr(k).expire(k, 3700).exec();
     clicksLastHour = Number(res?.[0]?.[1] ?? 0);
   }
-  const hostOk = (h: string) => hostAuthorized(h, site.domain, site.allowed_domains);
+  const hostOk = (h: string) => hostAuthorized(h, site.domain, site.allowed_domains, site.verification_scope === 'zone');
   const domainMismatch = (e.originHost !== null && e.originHost !== '' && !hostOk(e.originHost)) || (e.type === 'click' && e.referrerHost !== null && e.referrerHost !== '' && !hostOk(e.referrerHost)) || !hostOk(c.ph);
   const result = assessEvent({
     tokenExpired: e.flags.tokenExpired,

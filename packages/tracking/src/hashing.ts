@@ -22,12 +22,15 @@ export function normalizeHost(host: string): string {
   return host.trim().toLowerCase().replace(/^www\./, '').replace(/\.$/, '').replace(/:\d+$/, '');
 }
 
-/** True if `host` is the site domain, one of its subdomains, or an explicitly allowed domain. */
-export function hostAuthorized(host: string, siteDomain: string, allowed: readonly string[] = []): boolean {
+/**
+ * True if `host` may display ads for a site: the site domain (with or without
+ * www.), an explicitly allowed hostname, or, only when the ownership proof
+ * covers them (`includeSubdomains`, a DNS proof), subdomains of the site domain.
+ */
+export function hostAuthorized(host: string, siteDomain: string, allowed: readonly string[] = [], includeSubdomains = true): boolean {
   const h = normalizeHost(host);
   if (!h) return false;
-  for (const d of [siteDomain, ...allowed].map(normalizeHost)) {
-    if (h === d || h.endsWith(`.${d}`)) return true;
-  }
-  return false;
+  const main = normalizeHost(siteDomain);
+  if (h === main || (includeSubdomains && h.endsWith(`.${main}`))) return true;
+  return allowed.map(normalizeHost).some((d) => d !== '' && h === d);
 }

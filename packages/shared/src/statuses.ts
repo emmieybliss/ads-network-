@@ -22,8 +22,32 @@ export const ADMIN_CAMPAIGN_TRANSITIONS: Record<string, CampaignStatus[]> = {
 export const EDITABLE_CAMPAIGN_STATUSES: CampaignStatus[] = ['draft', 'rejected', 'paused', 'scheduled', 'active'];
 
 export const ORG_STATUSES = ['pending', 'approved', 'rejected', 'suspended'] as const;
-export const SITE_STATUSES = ['pending_verification', 'pending_review', 'approved', 'rejected', 'suspended'] as const;
+/**
+ * Publisher site lifecycle. Verification proves control of a hostname; it never
+ * approves a site on its own. Approval is a separate review step.
+ */
+export const SITE_STATUSES = ['draft', 'verification_pending', 'verified', 'submitted', 'under_review', 'approved', 'rejected', 'suspended'] as const;
 export type SiteStatus = (typeof SITE_STATUSES)[number];
+
+export const SITE_STATUS_LABELS: Record<SiteStatus, string> = {
+  draft: 'Draft',
+  verification_pending: 'Verification pending',
+  verified: 'Verified',
+  submitted: 'Submitted for review',
+  under_review: 'Under review',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  suspended: 'Suspended',
+};
+
+/** Admin site actions: action -> statuses it may be applied from. */
+export const ADMIN_SITE_TRANSITIONS: Record<string, SiteStatus[]> = {
+  'start-review': ['submitted'],
+  approve: ['submitted', 'under_review'],
+  reject: ['verification_pending', 'verified', 'submitted', 'under_review'],
+  suspend: ['approved', 'submitted', 'under_review', 'verified'],
+  reinstate: ['suspended'],
+};
 export const CREATIVE_STATUSES = ['draft', 'pending_review', 'approved', 'rejected', 'archived'] as const;
 export const AD_UNIT_STATUSES = ['active', 'paused', 'archived'] as const;
 export const PRICING_MODELS = ['cpm', 'cpc', 'flat'] as const;

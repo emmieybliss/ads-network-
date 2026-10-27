@@ -86,7 +86,7 @@ async function main() {
          ('faq', 'what-is-blissnova', 'What is the BlissNova Ad Network?', 'A multi-publisher advertising network: advertisers run campaigns, publishers place ad units on their sites, and the platform handles delivery, measurement and payouts.', 1, true),
          ('faq', 'how-are-clicks-counted', 'How are impressions and clicks counted?', 'Every delivery is recorded, then filtered for invalid traffic. Only valid events are reported and billed. Click-through rate is valid clicks divided by valid impressions.', 2, true),
          ('faq', 'when-do-publishers-get-paid', 'When do publishers get paid?', 'Earnings move from pending to available after the platform hold period, then can be requested as a payout. Payout methods and schedules are configured by the platform operator.', 3, true),
-         ('faq', 'what-do-i-need-to-start', 'What do I need to start?', 'Advertisers need a funded account balance and at least one approved creative. Publishers need a verified site and an ad unit, then paste the ad tag or install the WordPress plugin.', 4, true),
+         ('faq', 'what-do-i-need-to-start', 'What do I need to start?', 'Advertisers need a funded account balance and at least one approved creative. Publishers need a verified site and an ad unit, then paste the JavaScript ad tag into any page; no plugin is needed.', 4, true),
          ('legal', 'terms', 'Terms of service', 'Placeholder. The platform operator must supply their own terms of service before launch.', 1, false),
          ('legal', 'privacy', 'Privacy policy', 'Placeholder. The platform operator must supply their own privacy policy before launch.', 2, false)
        ON CONFLICT (kind, slug) DO NOTHING`,
@@ -96,7 +96,7 @@ async function main() {
       `INSERT INTO pricing_plans (audience, name, summary, price_label, features, cta_label, highlighted, sort_order, published) VALUES
          ('advertiser', 'CPM', 'Pay per thousand valid impressions.', 'From $1.00 CPM', ARRAY['Image and text creatives','Country, device and keyword targeting','Frequency capping','CSV reporting'], 'Start advertising', false, 1, true),
          ('advertiser', 'CPC', 'Pay per valid click.', 'From $0.05 per click', ARRAY['Click-through reporting','Invalid-click filtering','Budget pacing','Creative versioning'], 'Start advertising', true, 2, true),
-         ('publisher', 'Revenue share', 'Keep a share of the revenue your inventory earns.', 'Set per publisher', ARRAY['Site verification','Unlimited ad units','WordPress plugin','Earnings and payout tracking'], 'Become a publisher', false, 1, true)
+         ('publisher', 'Revenue share', 'Keep a share of the revenue your inventory earns.', 'Set per publisher', ARRAY['Site verification','Unlimited ad units','JavaScript ad tag for any site','Earnings and payout tracking'], 'Become a publisher', false, 1, true)
        `,
     );
 

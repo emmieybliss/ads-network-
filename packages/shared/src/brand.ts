@@ -24,7 +24,7 @@ export const DEFAULT_BRAND: BrandConfig = {
   shortName: 'BlissNova',
   companyName: 'BlissNova Technologies',
   supportEmail: 'support@example.com',
-  publicSiteUrl: 'http://localhost:5173',
+  publicSiteUrl: 'http://localhost:3000',
   apiUrl: 'http://localhost:4000',
   logoText: 'BlissNova',
   colors: { primary: '#4f46e5', primaryHover: '#4338ca', accent: '#7c3aed' },

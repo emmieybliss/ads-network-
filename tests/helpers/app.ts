@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { Redis } from 'ioredis';
-import { buildApp } from '@blissnova/api';
+import { buildApp, type BuildOptions } from '@blissnova/api';
 import { loadConfig, type AppConfig } from '@blissnova/api/config';
 import { invalidateServingCache } from '@blissnova/api/services/serving';
 import { testDatabaseUrl, testRedisUrl } from './env';
@@ -82,9 +82,10 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function createHarness(extraEnv: Record<string, string> = {}): Promise<Harness> {
-  const config = testConfig(extraEnv);
-  const app = await buildApp({ config, logger: false });
+export async function createHarness(extraEnv: Record<string, string> = {}, opts: { overrides?: BuildOptions['overrides']; config?: (c: AppConfig) => AppConfig } = {}): Promise<Harness> {
+  const base = testConfig(extraEnv);
+  const config = opts.config ? opts.config(base) : base;
+  const app = await buildApp({ config, logger: false, overrides: opts.overrides });
   await app.ready();
   const db = app.ctx.db;
   const redis = app.ctx.redis;

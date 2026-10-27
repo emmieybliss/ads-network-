@@ -164,7 +164,7 @@ describe('server-side request forgery in site verification', () => {
   });
 
   it('allows ordinary public addresses', async () => {
-    for (const ip of ['8.8.8.8', '203.0.113.9', '1.1.1.1', '2606:4700::1111']) {
+    for (const ip of ['8.8.8.8', '93.184.215.14', '1.1.1.1', '2606:4700::1111']) {
       expect(isPrivateAddress(ip), ip).toBe(false);
     }
   });
@@ -173,9 +173,9 @@ describe('server-side request forgery in site verification', () => {
     const s = await signedIn();
     const org = await makeOrg(h.db, { type: 'publisher', ownerId: s.user.id });
     // "localhost" resolves to a loopback address.
-    const site = await makeSite(h.db, { orgId: org, domain: 'localhost', status: 'pending_verification', allowed: ['localhost'] });
-    await s.cl.post(`/api/v1/orgs/${org}/sites/${site.id}/verification-token`);
-    const r = await s.cl.post(`/api/v1/orgs/${org}/sites/${site.id}/verify`, { method: 'html_file' });
+    const site = await makeSite(h.db, { orgId: org, domain: 'localhost', status: 'verification_pending', allowed: ['localhost'] });
+    expect((await s.cl.post(`/api/v1/orgs/${org}/sites/${site.id}/verification/challenge`, { method: 'html_file' })).status).toBe(201);
+    const r = await s.cl.post(`/api/v1/orgs/${org}/sites/${site.id}/verification/check`);
     // Either refused outright or reported as failed verification; what must not
     // happen is the server fetching a loopback URL and reporting success.
     expect(r.status >= 400 || r.body?.verified === false, `${r.status} ${JSON.stringify(r.body).slice(0, 200)}`).toBe(true);

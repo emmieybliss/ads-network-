@@ -12,7 +12,7 @@ import type { AppContext } from '../lib/context';
  * atomic Lua scripts. The authoritative budget check happens again, in a
  * Postgres transaction, when an impression or click becomes billable.
  */
-export interface SiteSnap { id: string; orgId: string; domain: string; allowedDomains: string[]; category: string; allowedFormats: string[]; revenueShareBps: number; blockedCategories: string[] }
+export interface SiteSnap { id: string; orgId: string; domain: string; allowedDomains: string[]; includeSubdomains: boolean; category: string; allowedFormats: string[]; revenueShareBps: number; blockedCategories: string[] }
 export interface UnitSnap { id: string; siteId: string; key: string; formats: string[]; width: number | null; height: number | null; responsive: boolean }
 export interface CreativeSnap extends CreativeCandidate { snapshot: { headline?: string; body?: string; cta?: string; storageKey?: string | null; altText?: string; displayUrl?: string; destinationUrl: string } }
 export interface CampaignSnap extends CampaignCandidate { caps: Array<{ scope: 'visitor' | 'page'; max: number; window: number }>; orgCaps: Array<{ max: number; window: number }>; creatives: CreativeSnap[] }
@@ -35,9 +35,11 @@ async function loadSnapshot(ctx: AppContext): Promise<Snapshot> {
   const sites = new Map<string, SiteSnap>();
   const siteRows = (await ctx.db.query(
     `SELECT s.*, o.revenue_share_bps AS org_share FROM sites s JOIN organizations o ON o.id = s.org_id
-     WHERE s.status = 'approved' AND o.status = 'approved' AND (s.verified_at IS NOT NULL OR NOT $1::boolean)`, [s.publishers.requireDomainVerification])).rows;
+     WHERE s.status = 'approved' AND o.status = 'approved' AND (s.verified_at IS NOT NULL OR NOT $1::boolean)
+       -- A site verified by the development simulator never serves in production, even if its row was copied there.
+       AND (NOT s.verification_simulated OR NOT $2::boolean)`, [s.publishers.requireDomainVerification, ctx.config.isProd])).rows;
   for (const r of siteRows) {
-    sites.set(r.public_key, { id: r.id, orgId: r.org_id, domain: r.domain, allowedDomains: r.allowed_domains, category: r.category, allowedFormats: r.allowed_formats, revenueShareBps: r.revenue_share_bps ?? r.org_share ?? s.publishers.defaultRevenueShareBps, blockedCategories: r.blocked_categories });
+    sites.set(r.public_key, { id: r.id, orgId: r.org_id, domain: r.domain, allowedDomains: r.allowed_domains, includeSubdomains: r.verification_scope === 'zone', category: r.category, allowedFormats: r.allowed_formats, revenueShareBps: r.revenue_share_bps ?? r.org_share ?? s.publishers.defaultRevenueShareBps, blockedCategories: r.blocked_categories });
   }
   const units = new Map<string, UnitSnap>();
   const unitRows = (await ctx.db.query(`SELECT u.* FROM ad_units u JOIN sites s ON s.id = u.site_id WHERE u.status = 'active' AND NOT u.admin_blocked AND s.status = 'approved'`)).rows;
@@ -150,7 +152,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     return empty('blocked');
   }
   const originHost = meta.origin ? (() => { try { return normalizeHost(new URL(meta.origin!).hostname); } catch { return ''; } })() : null;
-  const domainOk = hostAuthorized(pageHost, site.domain, site.allowedDomains) && (originHost === null || hostAuthorized(originHost, site.domain, site.allowedDomains));
+  const domainOk = hostAuthorized(pageHost, site.domain, site.allowedDomains, site.includeSubdomains) && (originHost === null || hostAuthorized(originHost, site.domain, site.allowedDomains, site.includeSubdomains));
   const units = req.units.map((u) => ({ slot: u.slot, unit: snap.units.get(`${site.id}:${u.slot}`) }));
   if (!domainOk || isKnownCrawler(meta.ua)) {
     for (const u of units) if (u.unit) log.counters.push({ unitId: u.unit.id, field: 'requests' }, { unitId: u.unit.id, field: 'blocked' });
