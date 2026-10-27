@@ -10,3 +10,4 @@ storage/
 dump.rdb
 .next/
 *.tsbuildinfo
+.env.demo

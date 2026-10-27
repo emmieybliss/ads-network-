@@ -5,3 +5,5 @@ packages:
 onlyBuiltDependencies:
   - "@node-rs/argon2"
   - esbuild
+overrides:
+  postcss: '>=8.5.23'

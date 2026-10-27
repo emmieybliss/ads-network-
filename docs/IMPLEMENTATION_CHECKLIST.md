@@ -1,86 +1,60 @@
-# BlissNova Ad Network — Implementation Checklist
+# BlissNova Ad Network: implementation checklist
 
-Status legend: `[x]` done and type-checked, `[~]` partially done, `[ ]` not started.
-"Done" here means the code exists and compiles. Items are only marked verified where a
-test or command was actually executed — see `docs/STATUS_REPORT.md` for what has been run.
+`[x]` = built and exercised as described in the "verified" notes; `[~]` = built,
+partially exercised; `[ ]` = not done. Nothing here claims a production
+deployment.
 
-## Platform foundation
-- [x] pnpm monorepo (`apps/*`, `packages/*`, `sdk/*`), TS 5.9 strict + `noUncheckedIndexedAccess`
-- [x] `packages/shared` — brand (env-driven, no hardcoded domain), money micros, metric
-      definitions (CTR = valid clicks / valid impressions × 100), RBAC permission matrix
-      (11 platform roles + 3 org roles), status machines, platform settings schema
-- [x] `packages/database` — 5 migration pairs (up/down), pool + transaction helper,
-      migration runner with advisory lock, CLI (`up`/`down`/`status`)
-- [x] `packages/tracking` — delivery token sign/verify (AES-256-GCM key ring), UA
-      classification, IP/visitor hashing with rotating daily salt, IVT scoring
-- [x] `packages/ad-decision` — pure deterministic decision engine (priority → expected
-      value → pacing, hash tiebreak)
-- [x] `packages/billing` — double-entry ledger (balanced-transaction constraint trigger,
-      append-only entries, idempotency keys), charge/settle/payout/adjustment operations,
-      8-check reconciliation
-- [ ] `packages/database/src/seed.ts` — demo-only seed, gated behind `SEED_DEMO_DATA`
+## Platform
+- [x] Standalone platform: no WordPress plugin or dependency
+- [x] pnpm monorepo: apps (web, api, worker, demo-site), packages (shared, database, tracking, ad-decision, billing), sdk/ad-tag
+- [x] Env-driven brand and URLs; no hardcoded domain, no localhost in production output
+- [x] 11 platform roles + 3 organization roles (RBAC matrix in `packages/shared`)
+- [x] Migrations (up/down) with an advisory-locked runner; bundled `migrate` entry point
+
+## Web (`apps/web`, Next.js 15)
+- [x] Marketing site: 16 homepage sections, advertisers, publishers, formats, requirements, pricing, docs, resources, legal, policies, abuse report
+- [x] Auth: register, login with MFA, verify email, reset password; step-up modal for sensitive actions
+- [x] Publisher portal: sites, verification (DNS/HTML/meta + dev simulator), submission with eligibility checks, placements, tag snippets, reports, earnings and payouts, policy and appeals
+- [x] Advertiser portal: campaigns (targeting, budget, schedule, caps), creatives with preview, reports, billing (payments, invoices, ledger, refunds, disputes)
+- [x] Admin control center: users, orgs, sites, domains, campaigns, creative review, finance, payouts, pricing, invalid traffic and fraud cases, security, audit, support, settings, content, system health
+- [x] Account: team, API keys, organization, security; support tickets
+- [x] Demo-data notice; development-only simulated checkout page
 
 ## API (`apps/api`, Fastify 5)
-- [x] Config with zod env validation + production guards
-- [x] App: zod schema compiler, OpenAPI/Swagger UI at `/api/docs`, CORS delegator,
-      per-bucket rate limiting, maintenance mode, `/health` + `/ready`
-- [x] Auth: argon2id, sessions + double-submit CSRF, API keys (`bnk_<prefix>_<secret>`),
-      email verification, password reset, lockout, TOTP MFA, step-up re-auth
-- [x] RBAC guards: `requireUser` / `requirePlatform` / `requireOrg(perm)` (non-members → 404)
-- [x] Orgs, memberships, invitations, API keys
-- [x] Advertiser: campaigns (+history, duplicate, lifecycle), assets, creatives + versions
-- [x] Publisher: sites (DNS/file/meta verification, SSRF-safe fetch), units, tags,
-      earnings, payout profile, payouts, fraud appeals
-- [x] Reports + CSV export (formula-injection guarded) + dashboard
-- [x] Billing: payments (Stripe REST / manual bank transfer / dev simulated), invoices,
-      ledger view, refunds, disputes, idempotent webhook handler
-- [x] Serving: `/serve`, `/events`, `/click`, public site status, ad tag + asset static routes
-- [x] Admin control center A–L: users, orgs, inventory, campaigns, finance, fraud, platform
-- [x] Integrations: WordPress site sync + stats (API-key auth)
-- [x] Scripts: `create-admin`, OpenAPI JSON generator
-- [ ] Advertiser restriction enforcement (allowed pricing models, max budget) — optional
+- [x] Auth, sessions, CSRF, API keys, MFA, step-up, rate limits, lockout
+- [x] Domain verification over an SSRF-safe fetch; development-only simulator refused in production
+- [x] Site lifecycle with configurable eligibility rules; verification alone never approves
+- [x] Campaigns and creatives with review and versions
+- [x] Serving, events and click redirect; invalid-traffic scoring; frequency caps; budget reservation
+- [x] Double-entry ledger, payments (bank transfer confirmation, Stripe written but untested against Stripe, simulated dev provider), invoices, refunds, disputes, settlement, payouts, adjustments, reconciliation
+- [x] Reports with CSV export (CTR = valid clicks / valid impressions × 100)
+- [x] OpenAPI at `/api/docs`; `docs/openapi.json` generated
+- [x] Production startup refuses unsafe configuration
 
-## Worker (`apps/worker`, BullMQ)
-- [x] Queues: events, serve-log, email, maintenance
-- [x] Jobs: aggregate refresh, campaign lifecycle, settlement, spend counter sync, budget
-      and low-balance alerts, anomaly detection, daily maintenance (flat-rate allocation,
-      payment expiry, retention purge, monthly statements)
-- [x] Schedulers (minutely / 5-minutely / daily) + heartbeat + graceful shutdown
+## Worker and ad tag
+- [x] Worker: aggregation, lifecycle, settlement, alerts, anomaly detection, retention, statements
+- [x] Ad tag `/sdk/ads.js` with `data-site-key` / `data-slot`: closed shadow root, lazy load, viewability, sendBeacon, consent API
 
-## Ad tag (`sdk/ad-tag`)
-- [ ] Vanilla TS `bn.js`: shadow DOM render, lazy load, viewability (50% / 1s),
-      batched `sendBeacon`, consent API, safe collapse on error
-- [ ] esbuild bundle to `dist/bn.js`
+## Local demo
+- [x] Demo seed (admin, advertiser, publisher, verified local site, campaigns, labelled sample statistics); refuses production
+- [x] Demo publisher website (`apps/demo-site`, port 3100)
+- [x] Dockerfile (api, worker, web, demo-site targets) and `docker-compose.yml` with health checks
+- [x] start/stop/reset scripts for bash and PowerShell
+- [x] `scripts/e2e-demo.mjs`: banner renders, impression and click recorded, dashboard updates
 
-## Dashboard (`apps/dashboard`, Vite + React)
-- [ ] Design tokens, light/dark theme
-- [ ] Marketing homepage (no fabricated metrics; pricing + FAQ from API)
-- [ ] Auth pages
-- [ ] Advertiser portal
-- [ ] Publisher portal
-- [ ] Admin app
-- [ ] Dev checkout page
+## Tests and docs
+- [x] Vitest suite: unit, integration and security
+- [x] README, ARCHITECTURE, DEPLOYMENT, OPERATIONS, SECURITY, PRIVACY, TROUBLESHOOTING
 
-## WordPress plugin (`wordpress/blissnova-ad-network`)
-- [ ] Plugin bootstrap, settings page (nonces + capability checks), server-side API key
-- [ ] Placement sync, verification meta tag injection
-- [ ] Shortcode `[blissnova_ad slot="…"]`, `blissnova_ad_render()`, Gutenberg block
-- [ ] Auto placement, exclusions, consent, stats, diagnostics, disconnect
-- [ ] `uninstall.php`, `readme.txt`, `tests/run.php`
+## Verified
+Runs on 27 Oct 2026, in the build container with local PostgreSQL 16 and Redis 7,
+not on the owner's PC:
+- `pnpm test`: 14 files, 323 tests passed
+- `scripts/e2e-demo.mjs` passed against the bundled processes and against the Docker Compose stack
+- seed: all eight ledger reconciliation checks passed
 
-## Tests
-- [ ] vitest config (test DB, `EVENT_PROCESSING=inline`)
-- [ ] Unit: money, metrics, decision engine, IVT, token, permissions, statuses
-- [ ] Integration: auth, campaign lifecycle, creative review, serving, events, billing,
-      settlement, payouts, admin flows, reports
-- [ ] Security: org isolation, CSRF, rate limits, SSRF, escalation, injection
-- [ ] Concurrency: budget races, frequency caps, event dedupe, webhook idempotency
-- [ ] End-to-end scenario + load test (`tests/load/serve.mjs`)
-
-## Ops & docs
-- [ ] `.env.example` (placeholders + localhost defaults)
-- [ ] Dockerfiles, `docker-compose.yml` (postgres, redis, mailpit, api, worker, dashboard), nginx
-- [ ] `README.md`, `docs/ARCHITECTURE.md` (incl. deviations), operations, deployment,
-      security, tracking/viewability limitations, backup/restore, incident process
-- [ ] `docs/openapi.json` generated
-- [ ] `pnpm audit`
+## Not done
+- [ ] Deployment to a public server (no domain yet)
+- [ ] Real payment provider connected and tested
+- [ ] GeoIP database (country comes from a trusted CDN header, if configured)
+- [ ] Third-party security review

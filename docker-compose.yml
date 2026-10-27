@@ -1,0 +1,112 @@
+# Local demo stack. Start it with scripts/start-demo.sh (or .ps1), which
+# generates .env.demo with random secrets first. Ports on your machine:
+#   3000 web (marketing site + dashboards)   4000 API   3100 demo publisher site
+#
+# This stack runs the API in development mode with the simulated payment
+# provider and verification simulator switched on. It is not a production
+# deployment; see docs/DEPLOYMENT.md for that.
+name: blissnova-demo
+
+x-app-env: &app-env
+  NODE_ENV: development
+  DATABASE_URL: postgres://blissnova:${POSTGRES_PASSWORD:?run scripts/start-demo first}@postgres:5432/blissnova
+  REDIS_URL: redis://redis:6379
+  PUBLIC_SITE_URL: http://localhost:3000
+  PUBLIC_API_URL: http://localhost:4000
+  CORS_ORIGINS: http://localhost:3000
+  COOKIE_SECURE: "false"
+  APP_SECRET: ${APP_SECRET:?run scripts/start-demo first}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?run scripts/start-demo first}
+  TRACKING_TOKEN_KEYS: ${TRACKING_TOKEN_KEYS:?run scripts/start-demo first}
+  STORAGE_DIR: /data/storage
+  EMAIL_PROVIDER: log
+  EVENT_PROCESSING: queue
+  ENABLE_DEV_PAYMENTS: "true"
+  ENABLE_DEV_VERIFICATION_SIMULATOR: "true"
+  LOG_LEVEL: info
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: blissnova
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/start-demo first}
+      POSTGRES_DB: blissnova
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blissnova -d blissnova"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # One-shot: apply migrations, then load demo data if it is not there yet.
+  setup:
+    build: { context: ., target: api }
+    image: blissnova-demo-api
+    environment:
+      <<: *app-env
+      SEED_PASSWORD: ${SEED_PASSWORD:?run scripts/start-demo first}
+      DEMO_SITE_KEY: ${DEMO_SITE_KEY:-pk_DemoLocalPublisherSite01}
+    volumes: [storage:/data/storage]
+    command: ["sh", "-c", "node dist/scripts/migrate.js && node dist/scripts/seed.js"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    image: blissnova-demo-api
+    environment: *app-env
+    volumes: [storage:/data/storage]
+    ports: ["4000:4000"]
+    depends_on:
+      setup: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  worker:
+    build: { context: ., target: worker }
+    image: blissnova-demo-worker
+    environment: *app-env
+    depends_on:
+      setup: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      target: web
+      args:
+        API_INTERNAL_URL: http://api:4000
+        NEXT_PUBLIC_DEMO_MODE: "true"
+    image: blissnova-demo-web
+    ports: ["3000:3000"]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+
+  demo-site:
+    build: { context: ., target: demo-site }
+    image: blissnova-demo-site
+    environment:
+      DEMO_API_URL: http://localhost:4000
+      DEMO_WEB_URL: http://localhost:3000
+      DEMO_SITE_KEY: ${DEMO_SITE_KEY:-pk_DemoLocalPublisherSite01}
+    ports: ["3100:3100"]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  storage:

@@ -27,8 +27,13 @@ const config: NextConfig = {
       { source: '/api/v1/:path*', destination: `${api}/api/v1/:path*` },
       { source: '/sdk/:path*', destination: `${api}/sdk/:path*` },
       { source: '/assets/:path*', destination: `${api}/assets/:path*` },
-      { source: '/docs/api', destination: `${api}/docs` },
+      { source: '/api/docs', destination: `${api}/api/docs` },
+      { source: '/api/docs/:path*', destination: `${api}/api/docs/:path*` },
     ];
+  },
+  async redirects() {
+    // Swagger UI loads its assets relative to /api/docs, so send readers there.
+    return [{ source: '/docs/api', destination: '/api/docs', permanent: false }];
   },
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
