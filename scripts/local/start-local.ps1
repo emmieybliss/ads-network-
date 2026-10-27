@@ -22,7 +22,13 @@ foreach ($port in 3000, 4000, 3100) {
 }
 
 # 3. pnpm: use an installed one, otherwise run the pinned version through npx.
-function Pnpm { if (Get-Command pnpm -ErrorAction SilentlyContinue) { & pnpm @args } else { & npx --yes pnpm@10.28.0 @args }; if ($LASTEXITCODE -ne 0) { Fail "pnpm $($args -join ' ') failed. Scroll up for the error." } }
+# Look for a real program only (-CommandType Application): PowerShell names are
+# case-insensitive, so a plain Get-Command would find this helper itself.
+$pnpmExe = Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+function Invoke-Pnpm {
+  if ($pnpmExe) { & $pnpmExe.Source @args } else { & npx.cmd --yes pnpm@10.28.0 @args }
+  if ($LASTEXITCODE -ne 0) { Fail "pnpm $($args -join ' ') failed. Scroll up for the error." }
+}
 
 # 4. Install and build when the code changed since the last start.
 $lockHash = (Get-FileHash pnpm-lock.yaml).Hash
@@ -32,11 +38,11 @@ $stampFile = Join-Path $env:LOCAL_DATA_DIR 'build-stamp.txt'
 $built = (Test-Path $stampFile) -and ((Get-Content $stampFile -Raw).Trim() -eq $stamp) -and (Test-Path 'apps\web\.next\BUILD_ID') -and (Test-Path 'apps\api\dist\local.js')
 if (-not $built) {
   Write-Host 'Installing packages and building BlissNova. The first time takes several minutes...' -ForegroundColor Cyan
-  Pnpm install --frozen-lockfile
-  Pnpm --filter '@blissnova/ad-tag' build
-  Pnpm --filter '@blissnova/api' build
+  Invoke-Pnpm install --frozen-lockfile
+  Invoke-Pnpm --filter '@blissnova/ad-tag' build
+  Invoke-Pnpm --filter '@blissnova/api' build
   $env:API_INTERNAL_URL = 'http://localhost:4000'; $env:NEXT_PUBLIC_DEMO_MODE = 'true'; Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
-  Pnpm --filter '@blissnova/web' build
+  Invoke-Pnpm --filter '@blissnova/web' build
   Set-Content -Path $stampFile -Value $stamp
 }
 
