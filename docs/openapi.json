@@ -1900,7 +1900,8 @@
                     "type": "string",
                     "enum": [
                       "image",
-                      "text"
+                      "text",
+                      "native"
                     ]
                   },
                   "headline": {
@@ -1932,6 +1933,11 @@
                   "displayUrl": {
                     "type": "string",
                     "maxLength": 100
+                  },
+                  "sponsorName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
                   }
                 },
                 "required": [
@@ -2018,6 +2024,11 @@
                   "displayUrl": {
                     "type": "string",
                     "maxLength": 100
+                  },
+                  "sponsorName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
                   }
                 }
               }
@@ -2703,7 +2714,8 @@
                       "type": "string",
                       "enum": [
                         "image",
-                        "text"
+                        "text",
+                        "native"
                       ]
                     }
                   },
@@ -2800,7 +2812,8 @@
                       "type": "string",
                       "enum": [
                         "image",
-                        "text"
+                        "text",
+                        "native"
                       ]
                     }
                   },
@@ -5477,6 +5490,89 @@
         }
       }
     },
+    "/api/v1/admin/orgs/{id}/premium": {
+      "patch": {
+        "tags": [
+          "admin: organizations"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tier": {
+                    "type": "string",
+                    "enum": [
+                      "standard",
+                      "premium"
+                    ]
+                  },
+                  "earningsMode": {
+                    "default": null,
+                    "nullable": true,
+                    "type": "string",
+                    "enum": [
+                      "floor",
+                      "guarantee"
+                    ]
+                  },
+                  "minCpm": {
+                    "default": null,
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^\\d{1,12}(\\.\\d{1,6})?$"
+                  },
+                  "minCpc": {
+                    "default": null,
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^\\d{1,12}(\\.\\d{1,6})?$"
+                  },
+                  "guaranteeMonthlyCap": {
+                    "default": null,
+                    "nullable": true,
+                    "type": "string",
+                    "pattern": "^\\d{1,12}(\\.\\d{1,6})?$"
+                  },
+                  "premiumAdvertisersOnly": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "tier",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/api/v1/admin/orgs/{id}/restrictions": {
       "patch": {
         "tags": [
@@ -5809,7 +5905,8 @@
                       "type": "string",
                       "enum": [
                         "image",
-                        "text"
+                        "text",
+                        "native"
                       ]
                     }
                   },
