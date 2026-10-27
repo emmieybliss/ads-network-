@@ -62,3 +62,17 @@ export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>
   }, [fn]);
   return { run, pending, error, setError };
 }
+
+export interface ClientConfig {
+  pricing: { cpmEnabled: boolean; cpcEnabled: boolean; flatEnabled: boolean; defaultCurrency: string; minCampaignBudgetMicros: string; minCpmMicros: string; minCpcMicros: string };
+  creatives: { allowedFormats: string[]; maxUploadBytes: number; allowedImageTypes: string[]; allowedSizes?: Array<[number, number]> };
+  eligibility: { minMonthlyPageviews: number | null; requireOriginalContent: boolean; requirePrivacyPolicy: boolean; requireContactInformation: boolean; requireTrafficIntegrity: boolean; prohibitedCategories: string[]; allowedCountries: string[]; allowedLanguages: string[]; prohibitedContent: string[]; notes: string };
+  verification: { allowedMethods: string[]; challengeTtlHours: number };
+  metricDefinitions: Record<string, string>;
+  brand: { productName: string; supportEmail: string; publicSiteUrl: string; apiUrl: string };
+}
+
+/** Public platform configuration (pricing minimums, creative rules, eligibility). */
+export function useConfig() {
+  return useApi<{ data: ClientConfig }>('/public/config');
+}

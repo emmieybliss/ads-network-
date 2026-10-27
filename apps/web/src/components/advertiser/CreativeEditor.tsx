@@ -1,0 +1,127 @@
+'use client';
+import { useState, type FormEvent } from 'react';
+import { Upload } from 'lucide-react';
+import { Alert, Button, Field, Input, Modal, Select, Textarea } from '@/components/ui';
+import { api, errorMessage } from '@/lib/api';
+import { useConfig } from '@/lib/hooks';
+
+export interface Creative {
+  id: string; name: string; format: 'image' | 'text'; status: string; version: number; approvedVersion: number | null;
+  headline: string | null; body: string | null; cta: string | null; assetId: string | null; imageUrl: string | null;
+  width: number | null; height: number | null; destinationUrl: string; displayUrl: string | null; altText: string | null; rejectionReason: string | null;
+}
+
+/** Visual preview of a creative as it renders in a slot, with the ad label the SDK adds. */
+export function CreativePreview({ c }: { c: Pick<Creative, 'format' | 'headline' | 'body' | 'cta' | 'imageUrl' | 'width' | 'height' | 'altText' | 'displayUrl'> }) {
+  return (
+    <div className="inline-block max-w-full rounded-lg border border-border bg-surface p-2">
+      <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted">Ad</p>
+      {c.format === 'image' ? (
+        c.imageUrl ? <img src={c.imageUrl} alt={c.altText ?? ''} width={c.width ?? undefined} height={c.height ?? undefined} className="h-auto max-w-full" /> : <div className="flex h-24 w-48 items-center justify-center bg-surface-2 text-xs text-muted">No image</div>
+      ) : (
+        <div className="w-72 max-w-full">
+          <p className="font-semibold text-fg">{c.headline || 'Headline'}</p>
+          {c.body && <p className="mt-0.5 text-sm text-fg-2">{c.body}</p>}
+          <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-muted">{c.displayUrl}</span>
+            {c.cta && <span className="rounded-md bg-primary px-2 py-1 font-medium text-primary-fg">{c.cta}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Create or edit a creative. Image creatives upload the file first, then reference the stored asset. */
+export function CreativeEditor({ open, onClose, orgId, campaignId, creative, onSaved }: { open: boolean; onClose: () => void; orgId: string; campaignId: string; creative?: Creative | null; onSaved: () => void }) {
+  const cfg = useConfig().data?.data;
+  const editing = !!creative;
+  const [f, setF] = useState({
+    name: creative?.name ?? '', format: (creative?.format ?? 'image') as 'image' | 'text', headline: creative?.headline ?? '', body: creative?.body ?? '',
+    cta: creative?.cta ?? '', destinationUrl: creative?.destinationUrl ?? 'https://', displayUrl: creative?.displayUrl ?? '', altText: creative?.altText ?? '',
+  });
+  const [asset, setAsset] = useState<{ id: string; url: string; width: number; height: number } | null>(creative?.assetId && creative.imageUrl ? { id: creative.assetId, url: creative.imageUrl, width: creative.width ?? 0, height: creative.height ?? 0 } : null);
+  const [uploading, setUploading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const set = (k: keyof typeof f, v: string) => setF((x) => ({ ...x, [k]: v }));
+
+  async function upload(file: File) {
+    setError(null);
+    if (cfg && file.size > cfg.creatives.maxUploadBytes) return setError(`The file is larger than the ${Math.round(cfg.creatives.maxUploadBytes / 1000)} KB limit.`);
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const r = await api<{ data: { id: string; url: string; width: number; height: number } }>('POST', `/orgs/${orgId}/assets`, { form });
+      setAsset(r.data);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    const body: Record<string, unknown> = {
+      name: f.name, destinationUrl: f.destinationUrl, displayUrl: f.displayUrl || undefined,
+      ...(f.format === 'image' ? { assetId: asset?.id, altText: f.altText || undefined } : { headline: f.headline, body: f.body || undefined, cta: f.cta || undefined }),
+    };
+    try {
+      if (editing) await api('PATCH', `/orgs/${orgId}/creatives/${creative!.id}`, { body });
+      else await api('POST', `/orgs/${orgId}/campaigns/${campaignId}/creatives`, { body: { ...body, format: f.format } });
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} wide title={editing ? 'Edit creative' : 'New creative'} footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" form="creative-form" loading={busy} disabled={f.format === 'image' && !asset}>{editing ? 'Save changes' : 'Add creative'}</Button></>}>
+      <form id="creative-form" onSubmit={save} className="grid gap-4 sm:grid-cols-[1fr_auto]">
+        <div className="space-y-4">
+          {error && <Alert tone="danger">{error}</Alert>}
+          {editing && creative?.status === 'approved' && <Alert tone="info">Changing an approved creative sends the new version for review. The approved version keeps serving until the change is approved.</Alert>}
+          <Field label="Name" htmlFor="cn" required hint="Only you and reviewers see this."><Input id="cn" required maxLength={160} value={f.name} onChange={(e) => set('name', e.target.value)} /></Field>
+          {!editing && (
+            <Field label="Format" htmlFor="cf">
+              <Select id="cf" value={f.format} onChange={(e) => set('format', e.target.value)}>
+                {(!cfg || cfg.creatives.allowedFormats.includes('image')) && <option value="image">Image banner</option>}
+                {(!cfg || cfg.creatives.allowedFormats.includes('text')) && <option value="text">Text ad</option>}
+              </Select>
+            </Field>
+          )}
+          {f.format === 'image' ? (
+            <>
+              <Field label="Image" htmlFor="ci" hint={cfg ? `${cfg.creatives.allowedImageTypes.map((t) => t.replace('image/', '').toUpperCase()).join(', ')}, up to ${Math.round(cfg.creatives.maxUploadBytes / 1000)} KB. Animated and scripted files are rejected.` : undefined}>
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-border-strong px-3 py-3 text-sm text-fg-2 hover:bg-surface-2">
+                  <Upload className="size-4" /> {uploading ? 'Uploading…' : asset ? `Replace image (${asset.width}×${asset.height})` : 'Choose an image'}
+                  <input id="ci" type="file" className="sr-only" accept={cfg?.creatives.allowedImageTypes.join(',') ?? 'image/*'} onChange={(e) => e.target.files?.[0] && void upload(e.target.files[0])} />
+                </label>
+              </Field>
+              <Field label="Alternative text" htmlFor="alt" hint="Describes the image for screen readers."><Input id="alt" maxLength={200} value={f.altText} onChange={(e) => set('altText', e.target.value)} /></Field>
+            </>
+          ) : (
+            <>
+              <Field label="Headline" htmlFor="hl" required><Input id="hl" required maxLength={90} value={f.headline} onChange={(e) => set('headline', e.target.value)} /></Field>
+              <Field label="Body" htmlFor="bd"><Textarea id="bd" maxLength={200} rows={2} value={f.body} onChange={(e) => set('body', e.target.value)} /></Field>
+              <Field label="Call to action" htmlFor="cta"><Input id="cta" maxLength={30} value={f.cta} onChange={(e) => set('cta', e.target.value)} placeholder="Learn more" /></Field>
+            </>
+          )}
+          <Field label="Destination URL" htmlFor="du" required hint="Where a click goes. Must be a secure https link."><Input id="du" type="url" required value={f.destinationUrl} onChange={(e) => set('destinationUrl', e.target.value)} /></Field>
+          <Field label="Display URL" htmlFor="dsp" hint="Optional, shown on text ads."><Input id="dsp" maxLength={100} value={f.displayUrl} onChange={(e) => set('displayUrl', e.target.value)} /></Field>
+        </div>
+        <div className="sm:w-80">
+          <p className="mb-2 text-sm font-medium">Preview</p>
+          <CreativePreview c={{ format: f.format, headline: f.headline, body: f.body, cta: f.cta, imageUrl: asset?.url ?? null, width: asset?.width ?? null, height: asset?.height ?? null, altText: f.altText, displayUrl: f.displayUrl }} />
+        </div>
+      </form>
+    </Modal>
+  );
+}

@@ -112,3 +112,10 @@ export function useSession(): SessionValue {
   if (!v) throw new Error('useSession must be used inside SessionProvider');
   return v;
 }
+
+/** The current organization inside a portal layout, where AppShell guarantees one exists. */
+export function useOrg(): OrgSummary {
+  const { org } = useSession();
+  if (!org) throw new Error('useOrg used outside a portal layout');
+  return org;
+}

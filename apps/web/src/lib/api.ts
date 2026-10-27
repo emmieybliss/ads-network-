@@ -24,7 +24,24 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
+type StepUpHandler = () => Promise<boolean>;
+let stepUpHandler: StepUpHandler | null = null;
+/** Registers the UI that asks for a password when the API requires recent re-authentication. */
+export function setStepUpHandler(h: StepUpHandler | null) {
+  stepUpHandler = h;
+}
+
 export async function api<T = any>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, opts: RequestOptions = {}): Promise<T> {
+  try {
+    return await request<T>(method, path, opts);
+  } catch (e) {
+    // Sensitive actions need a recent password confirmation: ask once, then retry.
+    if (e instanceof ApiError && e.code === 'step_up_required' && stepUpHandler && (await stepUpHandler())) return request<T>(method, path, opts);
+    throw e;
+  }
+}
+
+async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, opts: RequestOptions): Promise<T> {
   const headers: Record<string, string> = { accept: 'application/json', ...opts.headers };
   if (method !== 'GET') {
     const csrf = readCookie('bn_csrf');
