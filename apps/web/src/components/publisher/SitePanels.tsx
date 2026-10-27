@@ -3,7 +3,7 @@ import { useState, type FormEvent } from 'react';
 import { CheckCircle2, FlaskConical, Plus, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Alert, Async, Badge, Button, Card, CardHeader, Checkbox, CodeBlock, CopyButton, DefinitionList, Field, Input, Modal, Select, StatusBadge, Table, Textarea } from '@/components/ui';
 import { useApi, useConfig } from '@/lib/hooks';
-import { ApiError, errorMessage, patch, post } from '@/lib/api';
+import { ApiError, errorMessage, patch, post, put } from '@/lib/api';
 import { formatDate, formatNumber, humanize, timeAgo } from '@/lib/format';
 
 export const CATEGORIES = ['general', 'news', 'technology', 'business', 'finance', 'lifestyle', 'entertainment', 'sports', 'education', 'health', 'travel', 'food', 'automotive', 'gaming', 'parenting', 'real_estate', 'science', 'other'];
@@ -300,6 +300,65 @@ function ConsentPanel({ consent }: { consent: { personalizedAllowed: boolean; tc
         <p>The tag waits up to 2 seconds for your CMP before requesting ads. An opt-out (GPC, a US opt-out of sale, sharing or targeted ads, or a TCF refusal) always means contextual ads, and any stored visitor id is removed.</p>
         <p>No CMP? Call <code className="text-xs">window.blissnova.setConsent({'{'} personalized: true {'}'})</code> where you have consent, or <code className="text-xs">false</code> to turn personalization off. Run <code className="text-xs">window.blissnova.getPrivacy()</code> in the browser console to see what the last request was allowed to do.</p>
       </div>
+    </Card>
+  );
+}
+
+/** Automatic in-article placement: where and how often the tag may add ads between paragraphs. */
+export function AutoAdsPanel({ orgId, siteId, approved }: { orgId: string; siteId: string; approved: boolean }) {
+  const res = useApi<{ data: any }>(`/orgs/${orgId}/sites/${siteId}/auto-ads`);
+  const units = useApi<{ data: any[] }>(`/orgs/${orgId}/sites/${siteId}/units`);
+  const [f, setF] = useState<Record<string, any> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null);
+  const cur = f ?? res.data?.data;
+  const inline = (units.data?.data ?? []).filter((u: any) => u.display === 'inline' && u.status !== 'archived');
+
+  async function save(ev: FormEvent) {
+    ev.preventDefault();
+    if (!cur) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await put<{ data: any }>(`/orgs/${orgId}/sites/${siteId}/auto-ads`, {
+        enabled: cur.enabled, unitId: cur.unitId || null, maxAds: Number(cur.maxAds), spacing: Number(cur.spacing), firstAfter: Number(cur.firstAfter), selector: cur.selector || null,
+      });
+      res.setData(r);
+      setF(null);
+      setMsg({ tone: 'success', text: 'Saved. Pages with the automatic tag pick this up within 5 minutes.' });
+    } catch (e) {
+      setMsg({ tone: 'danger', text: errorMessage(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader title="Automatic in-article ads" description="Let the tag place ads between the paragraphs of your articles, so you don't need to paste a snippet into each one. Every ad is labelled Sponsored." />
+      {!cur ? <p className="text-sm text-muted">Loading...</p> : (
+        <form onSubmit={save} className="max-w-2xl space-y-4">
+          <Checkbox label="Place ads in articles automatically" checked={!!cur.enabled} onChange={(v) => setF({ ...cur, enabled: v })} />
+          <Field label="Placement to use" htmlFor="aa-unit" hint={inline.length ? 'An in-page placement. Its reports include the automatic ads.' : 'Add an in-page placement first.'}>
+            <Select id="aa-unit" value={cur.unitId ?? ''} onChange={(e) => setF({ ...cur, unitId: e.target.value || null })}>
+              <option value="">Choose a placement</option>
+              {inline.map((u: any) => <option key={u.id} value={u.id}>{u.name} ({u.key})</option>)}
+            </Select>
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Most ads per article" htmlFor="aa-max"><Input id="aa-max" type="number" min={1} max={6} value={cur.maxAds} onChange={(e) => setF({ ...cur, maxAds: e.target.value })} /></Field>
+            <Field label="First ad after paragraph" htmlFor="aa-first"><Input id="aa-first" type="number" min={1} max={20} value={cur.firstAfter} onChange={(e) => setF({ ...cur, firstAfter: e.target.value })} /></Field>
+            <Field label="Paragraphs between ads" htmlFor="aa-gap"><Input id="aa-gap" type="number" min={2} max={20} value={cur.spacing} onChange={(e) => setF({ ...cur, spacing: e.target.value })} /></Field>
+          </div>
+          <Field label="Article container (optional)" htmlFor="aa-sel" hint="A CSS selector such as .post-body. Leave empty and the tag finds the article itself.">
+            <Input id="aa-sel" value={cur.selector ?? ''} onChange={(e) => setF({ ...cur, selector: e.target.value })} placeholder=".post-body" />
+          </Field>
+          <p className="text-sm text-muted">Ads are never placed next to another ad slot or after the last paragraph. Short paragraphs, lists, tables and quotes are skipped.</p>
+          {approved ? <CodeBlock code={res.data!.data.loader} label="Add this once to every article page (for example in your theme's footer)" /> : <p className="text-sm text-muted">The tag becomes available once the site is approved.</p>}
+          {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
+          <Button type="submit" loading={busy}>Save automatic ads</Button>
+        </form>
+      )}
     </Card>
   );
 }

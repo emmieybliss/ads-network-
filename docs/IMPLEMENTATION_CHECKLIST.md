@@ -58,13 +58,13 @@ deployment.
 - [x] ads.txt line per publisher, on-demand check, status for admins; public sellers.json with confidential option
 - [x] IAB TCF v2.2, GPP, US Privacy and GPC consent signals, decided on the server; consent test page on the demo site
 - [x] Sticky anchor, side rail and interstitial placements; inline slots reserve their space and can keep it on no fill
-- [ ] Automatic in-article placement
+- [x] Automatic in-article placement (per-site settings, tag inserts slots between paragraphs)
 - [ ] Page RPM and per-page earnings reports
 
 ## Verified
 Runs on 27 Oct 2026, in the build container with local PostgreSQL 16 and Redis 7,
 not on the owner's PC:
-- `pnpm test`: 19 files, 385 tests passed
+- `pnpm test`: 19 files, 387 tests passed
 - `scripts/e2e-demo.mjs` passed against the bundled processes and against the Docker Compose stack
 - `scripts/acceptance-ui.mjs` passed against the Docker Compose stack
 - seed: all nine ledger reconciliation checks passed

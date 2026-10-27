@@ -219,6 +219,7 @@ async function main() {
       { key: 'demo-native', name: 'In-article native unit', w: null as number | null, h: null as number | null, pos: 'in_content', formats: ['native'] },
       { key: 'demo-anchor', name: 'Sticky bottom anchor', w: 728, h: 90, pos: 'footer', formats: ['image'], display: 'anchor', responsive: true },
       { key: 'demo-rail', name: 'Right side rail', w: 160, h: 600, pos: 'sidebar', formats: ['image'], display: 'rail_right' },
+      { key: 'demo-auto', name: 'Automatic in-article ads', w: null as number | null, h: null as number | null, pos: 'in_content', formats: ['native', 'text'] },
       { key: 'demo-interstitial', name: 'Between-pages interstitial', w: null as number | null, h: null as number | null, pos: 'other', formats: ['native'], display: 'interstitial' },
     ] as Array<{ key: string; name: string; w: number | null; h: number | null; pos: string; formats: string[]; display?: string; responsive?: boolean }>;
     const units: Record<string, string> = {};
@@ -229,6 +230,8 @@ async function main() {
         [site, u.key, u.name, u.formats, u.w, u.h, u.responsive ?? u.w === null, u.pos, u.display ?? 'inline'],
       )).rows[0]!.id;
     }
+    // Automatic in-article ads on the demo site (the second demo article uses them).
+    await c.query(`UPDATE sites SET auto_ads_enabled = true, auto_ads_unit_id = $2, auto_ads_max = 3, auto_ads_spacing = 3, auto_ads_first_after = 2 WHERE id = $1`, [site, units['demo-auto']]);
     await c.query(
       `INSERT INTO payout_profiles (org_id, method, display_label, currency, updated_by) VALUES ($1, 'bank_transfer', 'Demo account (no real details)', $2, $3)
        ON CONFLICT (org_id) DO NOTHING`,
@@ -285,6 +288,8 @@ async function main() {
       { name: `Native ad campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '4.00', lifetime: '200', daily: '20', unit: 'demo-native', format: 'native' as const },
       { name: `Anchor campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '2.00', lifetime: '150', daily: '15', unit: 'demo-anchor', format: 'image' as const },
       { name: `Side rail campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '2.00', lifetime: '150', daily: '15', unit: 'demo-rail', format: 'image' as const, rail: true },
+      { name: `In-article native campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '3.00', lifetime: '150', daily: '15', unit: 'demo-auto', format: 'native' as const },
+      { name: `In-article text campaign ${DEMO_TAG}`, model: 'cpc' as const, rate: '0.15', lifetime: '150', daily: '15', unit: 'demo-auto', format: 'text' as const },
       { name: `Interstitial campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '5.00', lifetime: '150', daily: '15', unit: 'demo-interstitial', format: 'native' as const },
     ] as Array<{ name: string; model: 'cpm' | 'cpc'; rate: string; lifetime: string; daily: string; unit: string; format: 'image' | 'text' | 'native'; rail?: boolean }>;
     for (const s of specs) {

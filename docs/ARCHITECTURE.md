@@ -133,6 +133,20 @@ server's setting.
   navigates straight away. It shows a clear "Continue to page" button (Escape
   and a backdrop click also continue), at most once per 10 minutes per tab.
 
+## Automatic in-article placement
+
+A site can turn on automatic ads (migration 0010): one in-page placement, the
+most ads per article (1 to 6), the paragraph after which the first goes, the
+paragraphs between ads, and an optional article container selector. The
+publisher adds the loader once with `data-auto="1"`. The tag then reads
+`GET /api/v1/public/sites/:siteKey/auto` (cacheable for 5 minutes), finds the
+article (the selector, a usual article container, or the element with the
+most paragraphs), counts paragraphs of real text (skipping lists, tables,
+quotes and figures), and inserts slots that reserve their space. It never
+places one next to an existing slot or after the last paragraph. The inserted
+slots are ordinary slots of that placement, so serving, labels, caps and
+reports are unchanged. Pausing the placement turns automatic ads off.
+
 ## Consent (TCF v2.2, GPP, US Privacy, GPC)
 
 The ad tag collects signals from the page's CMPs and sends them with each

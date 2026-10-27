@@ -74,6 +74,9 @@ export class Client {
   patch<T = any>(url: string, body?: unknown, headers?: Record<string, string>) {
     return this.req<T>('PATCH', url, { body, headers });
   }
+  put<T = any>(url: string, body?: unknown, headers?: Record<string, string>) {
+    return this.req<T>('PUT', url, { body, headers });
+  }
   del<T = any>(url: string, body?: unknown, headers?: Record<string, string>) {
     return this.req<T>('DELETE', url, { body, headers });
   }

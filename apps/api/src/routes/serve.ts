@@ -99,6 +99,12 @@ export async function serveRoutes(app: FastifyInstance) {
     return reply.redirect(dest.url, 302);
   });
 
+  app.get('/public/sites/:siteKey/auto', { config: { rateLimit: { bucket: 'serve' }, allowDuringMaintenance: true }, schema: { tags: ['ad serving'], params: z.object({ siteKey: z.string().regex(/^pk_[A-Za-z0-9]{16,40}$/) }), description: 'Automatic in-article placement settings, read by the ad tag when its script has data-auto.' } }, async (req, reply) => {
+    const { siteKey } = req.params as { siteKey: string };
+    reply.header('cache-control', 'public, max-age=300');
+    return autoAdsConfig(ctx, siteKey);
+  });
+
   app.get('/public/sites/:siteKey/status', { config: { rateLimit: { bucket: 'public' } }, schema: { tags: ['ad serving'], params: z.object({ siteKey: z.string().regex(/^pk_[A-Za-z0-9]{16,40}$/) }) } }, async (req) => {
     const { siteKey } = req.params as { siteKey: string };
     const snap = await getSnapshot(ctx);
@@ -106,6 +112,16 @@ export async function serveRoutes(app: FastifyInstance) {
     if (!site) return { active: false, placements: [] };
     return { active: true, placements: [...snap.units.values()].filter((u) => u.siteId === site.id).map((u) => ({ slot: u.key, width: u.width, height: u.height, formats: u.formats })) };
   });
+}
+
+/** Automatic in-article placement settings for a site, read by the ad tag. */
+export async function autoAdsConfig(ctx: { db: import('@blissnova/database').Db }, siteKey: string) {
+  const r = (await ctx.db.query(
+    `SELECT s.auto_ads_max, s.auto_ads_spacing, s.auto_ads_first_after, s.auto_ads_selector, u.key, u.width, u.height
+     FROM sites s JOIN ad_units u ON u.id = s.auto_ads_unit_id
+     WHERE s.public_key = $1 AND s.status = 'approved' AND s.auto_ads_enabled AND u.status = 'active' AND NOT u.admin_blocked AND u.display = 'inline'`, [siteKey])).rows[0];
+  if (!r) return { enabled: false as const };
+  return { enabled: true as const, slot: r.key as string, maxAds: r.auto_ads_max as number, spacing: r.auto_ads_spacing as number, firstAfter: r.auto_ads_first_after as number, selector: (r.auto_ads_selector as string | null) ?? undefined, width: r.width as number | null, height: r.height as number | null };
 }
 
 /** Static, cacheable public assets: the ad tag and creative images. Registered at the root (not /api/v1). */

@@ -32,6 +32,10 @@
  *   clear; an interstitial shows full screen when the visitor follows a link to
  *   another page of the site, at most once per 10 minutes per tab, and never
  *   where GDPR applies without consent to store that timestamp.
+ * - Automatic in-article placement: when a tag script has data-auto, the tag
+ *   reads the site's settings and adds slots between article paragraphs
+ *   (after the first N paragraphs, then every M, up to a maximum), never
+ *   next to an existing ad slot and never after the last paragraph.
  */
 
 type Format = 'image' | 'text' | 'native';
@@ -87,6 +91,40 @@ function displayOf(el: Element): Display {
 
 function railFits(width: number | null): boolean {
   return window.innerWidth >= RAIL_CONTENT_WIDTH + 2 * ((width ?? 160) + 24);
+}
+
+interface AutoConfig { enabled: boolean; slot?: string; maxAds?: number; spacing?: number; firstAfter?: number; selector?: string; width?: number | null; height?: number | null }
+
+/** The article body: the configured selector, a usual article container, or the element holding the most paragraphs. */
+function articleRoot(selector?: string): Element | null {
+  const tryQ = (q: string) => { try { return document.querySelector(q); } catch { return null; } };
+  if (selector) return tryQ(selector);
+  for (const q of ['[itemprop="articleBody"]', '.entry-content', '.post-content', 'article', 'main']) {
+    const el = tryQ(q);
+    if (el && el.querySelectorAll('p').length >= 3) return el;
+  }
+  let best: Element | null = null;
+  let most = 0;
+  const counts = new Map<Element, number>();
+  for (const p of Array.prototype.slice.call(document.querySelectorAll('p')) as Element[]) {
+    const parent = p.parentElement;
+    if (!parent) continue;
+    const n = (counts.get(parent) ?? 0) + 1;
+    counts.set(parent, n);
+    if (n > most) { most = n; best = parent; }
+  }
+  return most >= 3 ? best : null;
+}
+
+/** Paragraphs worth counting: real text, not inside an ad slot, a figure, a table or a list. */
+function articleParagraphs(root: Element): Element[] {
+  return (Array.prototype.slice.call(root.querySelectorAll('p')) as Element[]).filter((p) =>
+    (p.textContent ?? '').trim().length >= 40 && !p.closest('[data-bn-slot], figure, table, ul, ol, blockquote, aside, nav, header, footer'));
+}
+
+function nearSlot(p: Element): boolean {
+  const isSlot = (e: Element | null) => !!e && (e.hasAttribute('data-bn-slot') || !!e.querySelector?.('[data-bn-slot]') || (e.tagName === 'SCRIPT' && e.hasAttribute('data-site-key')));
+  return isSlot(p.previousElementSibling) || isSlot(p.nextElementSibling);
 }
 
 function sessionStore(): Storage | null {
@@ -263,6 +301,7 @@ class Tag {
   private anchorTaken = false;
   private interstitial: Element | null = null;
   private interstitialShown = false;
+  private autoDone = false;
 
   constructor(api: string, siteKey: string) {
     this.api = api.replace(/\/+$/, '');
@@ -304,6 +343,7 @@ class Tag {
       if (!this.deviceStorageAllowed()) dropVid();
     });
     this.scan();
+    void this.autoPlace();
     // Slots added later (infinite scroll, client-side routing) are picked up.
     try {
       new MutationObserver(() => this.scan()).observe(document.documentElement, { childList: true, subtree: true });
@@ -319,6 +359,44 @@ class Tag {
   /** Publisher API: window.blissnova.refresh() after injecting new slots. */
   refresh(): void {
     this.scan();
+    void this.autoPlace();
+  }
+
+  /** Insert slots between article paragraphs when a tag script asks for it (data-auto). */
+  private async autoPlace(): Promise<void> {
+    if (this.autoDone || !document.querySelector('script[data-site-key][data-auto]')) return;
+    this.autoDone = true;
+    let cfg: AutoConfig;
+    try {
+      const r = await fetch(`${this.api}/api/v1/public/sites/${encodeURIComponent(this.siteKey)}/auto`, { credentials: 'omit' });
+      if (!r.ok) return;
+      cfg = (await r.json()) as AutoConfig;
+    } catch {
+      return;
+    }
+    if (!cfg.enabled || !cfg.slot || !SLOT_RE.test(cfg.slot)) return;
+    const root = articleRoot(cfg.selector);
+    if (!root) return;
+    const paras = articleParagraphs(root);
+    const max = Math.min(cfg.maxAds ?? 3, 6);
+    const spacing = Math.max(cfg.spacing ?? 4, 2);
+    let next = Math.max(cfg.firstAfter ?? 3, 1) - 1;
+    let placed = 0;
+    // Stop one paragraph early: an ad is never the last thing in the article.
+    for (let i = next; i < paras.length - 1 && placed < max; i++) {
+      if (i < next) continue;
+      const p = paras[i]!;
+      if (nearSlot(p)) continue;
+      const div = document.createElement('div');
+      div.setAttribute('data-bn-slot', cfg.slot);
+      div.setAttribute('data-bn-auto', '');
+      div.style.margin = '1.5em 0';
+      if (cfg.width && cfg.height) div.style.minHeight = `min(${cfg.height}px, ${((cfg.height / cfg.width) * 100).toFixed(2)}vw)`;
+      p.parentNode?.insertBefore(div, p.nextSibling);
+      placed++;
+      next = i + spacing;
+    }
+    if (placed) this.scan();
   }
 
   private scan(): void {
@@ -387,7 +465,10 @@ class Tag {
         collapse(el);
         continue;
       }
-      if (byslot.has(slot)) continue; // one request per slot name per call
+      if (byslot.has(slot)) { // one request per slot name per call; the rest go in the next one
+        this.enqueue(el);
+        continue;
+      }
       byslot.set(slot, el);
       slots.push(slot);
     }

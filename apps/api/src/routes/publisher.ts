@@ -411,6 +411,42 @@ export async function publisherRoutes(app: FastifyInstance) {
     return { data: adsTxtView(row) };
   });
 
+  // ---------------------------------------------------------------- automatic in-article placement
+  const autoAdsBody = z.object({
+    enabled: z.boolean(),
+    unitId: z.uuid().nullable(),
+    maxAds: z.number().int().min(1).max(6),
+    spacing: z.number().int().min(2).max(20),
+    firstAfter: z.number().int().min(1).max(20),
+    // Only used with document.querySelector in the visitor's browser; a bad one just finds nothing.
+    selector: z.string().trim().max(200).nullable().optional(),
+  });
+  const autoAdsView = (s: Record<string, any>) => ({
+    enabled: s.auto_ads_enabled, unitId: s.auto_ads_unit_id, maxAds: s.auto_ads_max, spacing: s.auto_ads_spacing, firstAfter: s.auto_ads_first_after, selector: s.auto_ads_selector,
+    loader: `<script async src="${config.PUBLIC_API_URL}/sdk/ads.js" data-site-key="${s.public_key}" data-auto="1"></script>`,
+  });
+
+  app.get('/orgs/:orgId/sites/:id/auto-ads', { preHandler: requireOrg('site:read', { ...pub, allowSuspended: true }), schema: { tags: ['placements'], params: orgIdParams } }, async (req) => {
+    const s = await ownSite(req.org!.id, paramsOf(req, orgIdParams).id);
+    return { data: autoAdsView(s) };
+  });
+
+  app.put('/orgs/:orgId/sites/:id/auto-ads', { config: mgmt, preHandler: requireOrg('unit:write', pub), schema: { tags: ['placements'], params: orgIdParams, body: autoAdsBody, description: 'Let the ad tag insert ads between article paragraphs, using one in-page placement.' } }, async (req) => {
+    const s = await ownSite(req.org!.id, paramsOf(req, orgIdParams).id);
+    const b = bodyOf(req, autoAdsBody);
+    if (b.enabled && !b.unitId) throw badRequest('Choose the placement to use for automatic ads');
+    if (b.unitId) {
+      const u = (await db.query(`SELECT display, status FROM ad_units WHERE id = $1 AND site_id = $2`, [b.unitId, s.id])).rows[0];
+      if (!u || u.status === 'archived') throw badRequest('That placement does not belong to this site');
+      if (u.display !== 'inline') throw badRequest('Automatic ads need an in-page placement, not an anchor, rail or interstitial');
+    }
+    const row = (await db.query(
+      `UPDATE sites SET auto_ads_enabled = $2, auto_ads_unit_id = $3, auto_ads_max = $4, auto_ads_spacing = $5, auto_ads_first_after = $6, auto_ads_selector = $7, updated_at = now() WHERE id = $1 RETURNING *`,
+      [s.id, b.enabled, b.unitId, b.maxAds, b.spacing, b.firstAfter, b.selector || null])).rows[0];
+    await audit(db, req, { action: 'site.auto_ads', resourceType: 'site', resourceId: s.id, orgId: req.org!.id, before: autoAdsView(s), after: autoAdsView(row) });
+    return { data: autoAdsView(row) };
+  });
+
   // ---------------------------------------------------------------- ad units
   app.get('/orgs/:orgId/sites/:siteId/units', { preHandler: requireOrg('unit:read', { ...pub, allowSuspended: true }), schema: { tags: ['placements'], params: siteUnitParams } }, async (req) => {
     const { siteId } = paramsOf(req, siteUnitParams);

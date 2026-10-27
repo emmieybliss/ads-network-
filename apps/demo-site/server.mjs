@@ -32,6 +32,20 @@ const ARTICLES = {
   2: { title: 'A beginner\'s guide to keeping houseplants alive', next: 1 },
 };
 
+// Generic sample text for the long demo article; fictional and for layout only.
+const LONG = [
+  'Most houseplants that struggle indoors are not short of care. They are usually short of light, or they are getting too much water. Start by checking where the plant came from: a shade-loving fern and a sun-loving succulent need very different spots.',
+  'A simple test for light is your own shadow. Hold your hand above the place you want to put the plant at midday. A crisp shadow means bright light, a soft shadow means medium light, and no clear shadow means low light.',
+  'Water when the top few centimetres of soil are dry, not on a fixed day of the week. Push a finger into the pot. If it comes out clean and dry, water slowly until a little runs out of the drainage hole, then empty the saucer.',
+  'Pots without drainage holes are the most common cause of trouble. Water collects at the bottom, the roots sit in it, and they start to rot long before the leaves show it. If you love a decorative pot, keep the plant in a plastic nursery pot inside it.',
+  'Yellow lower leaves often mean too much water; crisp brown edges often mean too little water or very dry air. Change one thing at a time and wait two weeks before deciding whether it helped.',
+  'Feed during spring and summer only, at half the strength the label suggests. Plants grow slowly in winter and do not need the extra nutrients; feeding then mostly builds up salts in the soil.',
+  'Repot when roots circle the bottom of the pot or push out of the drainage hole, usually every one to two years. Choose a pot only a few centimetres wider. A much larger pot holds water the roots cannot reach.',
+  'Wipe dusty leaves with a damp cloth now and then. Dust blocks light, and clean leaves also make it easier to spot pests early, such as the fine webbing of spider mites under the leaves.',
+  'If a plant arrives looking sad, give it a few weeks before changing everything. Moving from a greenhouse to a living room is a big change, and most plants drop a leaf or two while they adjust.',
+  'Finally, keep a short note of when you water and feed each plant. After a month you will see a pattern, and caring for them becomes a quick weekly habit rather than guesswork.',
+];
+
 const page = (n = 1) => `<!doctype html>
 <html lang="en">
 <head>
@@ -68,11 +82,17 @@ ${slot('demo-leaderboard', '', ' style="min-height:min(90px, 12.36vw)"')}
   <article>
     <h2>${esc(ARTICLES[n].title)}</h2>
     <div class="byline">By the Demo Gazette desk · sample article</div>
+${n === 1 ? `
     <p>This page exists so you can watch the BlissNova ad tag work end to end. Above, a leaderboard placement requests an image ad. In the sidebar, a text placement requests a text ad. Below this paragraph, an in-article placement requests a native ad, which matches the page's layout but is always marked "Sponsored" with the advertiser's name. All three use the same short snippet any publisher can paste into a page.</p>
     ${slot('demo-native')}
     <p>When an ad renders, the tag reports a render receipt. When at least half of the ad stays visible for a second, it reports a viewable impression. Clicking the ad goes through the network's click endpoint, which records a click before sending you on to the advertiser.</p>
     <p>Open the publisher or advertiser dashboard in another tab and refresh it after viewing and clicking: today's numbers update from the recorded events. Repeated views from the same browser are limited by frequency caps, and very fast or repeated clicks are filtered as invalid, exactly as on a live site.</p>
     <p>The tag does not read cookies or store identifiers unless the page signals consent for personalized ads. This demo page does not, so all ads here are contextual. The <a href="/consent-test">consent test page</a> shows what happens with a consent tool.</p>
+` : `
+    <p>This second sample article shows <strong>automatic in-article ads</strong>. The page has no in-article ad snippet: its tag script carries <code>data-auto="1"</code>, and the tag adds ads between paragraphs using the site's settings (first after paragraph 2, then every 3 paragraphs, at most 3).</p>
+${LONG.map((t) => `    <p>${esc(t)}</p>`).join('\n')}
+    ${n === 2 ? `<script async src="${esc(apiUrl)}/sdk/ads.js" data-site-key="${esc(siteKey)}" data-auto="1"></script>` : ''}
+`}
     <p>Other placement types: a <strong>sticky anchor</strong> at the bottom of the screen (close it with ×), a <strong>side rail</strong> on the right on wide screens, and an <strong>interstitial</strong> that appears when you follow the link below to the next article. The interstitial shows at most once every 10 minutes in a tab.</p>
     <p><a href="/?article=${ARTICLES[n].next}" id="next-article">Read the next article: ${esc(ARTICLES[ARTICLES[n].next].title)}</a></p>
     <p><a href="${esc(webUrl)}/publisher">Open the publisher dashboard</a> · <a href="${esc(webUrl)}/advertiser">Open the advertiser dashboard</a></p>

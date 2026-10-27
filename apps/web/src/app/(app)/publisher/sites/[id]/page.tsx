@@ -3,7 +3,7 @@ import { useParams } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { SITE_STATUS_LABELS, type SiteStatus } from '@blissnova/shared';
 import { Alert, Async, Badge, Button, Card, CardHeader, DefinitionList, Field, Input, PageHeader, StatusBadge, Table, Tabs } from '@/components/ui';
-import { AdsTxtPanel, PlacementsPanel, SubmitPanel, TagPanel, VerificationPanel, type SiteDetail } from '@/components/publisher/SitePanels';
+import { AdsTxtPanel, AutoAdsPanel, PlacementsPanel, SubmitPanel, TagPanel, VerificationPanel, type SiteDetail } from '@/components/publisher/SitePanels';
 import { ReportExplorer } from '@/components/ReportExplorer';
 import { useApi } from '@/lib/hooks';
 import { useOrg } from '@/lib/session';
@@ -74,7 +74,7 @@ export default function SitePage() {
                   {s.verification.verified && <AllowedDomains orgId={org.id} site={s} onChange={set} />}
                 </>
               )}
-              {tab === 'placements' && <PlacementsPanel orgId={org.id} siteId={s.id} />}
+              {tab === 'placements' && <div className="space-y-5"><PlacementsPanel orgId={org.id} siteId={s.id} /><AutoAdsPanel orgId={org.id} siteId={s.id} approved={s.status === 'approved'} /></div>}
               {tab === 'tag' && <TagPanel orgId={org.id} siteId={s.id} />}
               {tab === 'tag' && s.verification.verified && <AdsTxtPanel orgId={org.id} siteId={s.id} />}
               {tab === 'report' && <ReportExplorer orgId={org.id} audience="publisher" currency={org.currency} filters={{ siteId: s.id }} />}
