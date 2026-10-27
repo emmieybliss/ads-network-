@@ -47,6 +47,8 @@ const WIPE = [
   'ledger_accounts',
   'ledger_transactions',
   'payments',
+  'payment_webhook_events',
+  'refunds',
   'invoices',
   'settlements',
   'payouts',
@@ -90,7 +92,21 @@ export async function createHarness(extraEnv: Record<string, string> = {}): Prom
   const reset = async () => {
     // audit_logs and campaign_history have triggers forbidding DELETE, so
     // TRUNCATE (which bypasses row triggers) is the only way to clear them.
-    await db.query(`TRUNCATE ${WIPE.join(', ')} CASCADE`);
+    //
+    // Some writes (audit entries, security events) are deliberately
+    // fire-and-forget in the request path, so one can still be in flight when
+    // the next test starts and deadlock against the TRUNCATE. Retry briefly
+    // rather than failing an unrelated test.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await db.query(`TRUNCATE ${WIPE.join(', ')} CASCADE`);
+        break;
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if ((code !== '40P01' && code !== '55P03') || attempt >= 5) throw err;
+        await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
+      }
+    }
     await redis.flushdb();
     app.ctx.settings.invalidate();
     invalidateServingCache(app.ctx);
