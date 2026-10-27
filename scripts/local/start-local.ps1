@@ -17,7 +17,7 @@ if ([int]($nodeVersion.TrimStart('v').Split('.')[0]) -lt 20) { Fail "Node.js $no
 # 2. Ports must be free
 foreach ($port in 3000, 4000, 3100) {
   if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
-    Fail "Port $port is already in use. If the demo is already running, use it or run 'Stop BlissNova demo' first. Otherwise close the program using port $port."
+    Fail "Port $port is already in use. If the BlissNova demo is already running, use it or run 'Stop BlissNova demo' first. Another local demo (for example the eSIM demo) may be using it: stop that one first."
   }
 }
 
@@ -60,10 +60,12 @@ for ($i = 0; $i -lt 150; $i++) {
 if (-not $ready) { Fail 'The API did not start within 5 minutes. Open the "BlissNova API" window from the taskbar to see why.' }
 Start-Window 'BlissNova website' 'apps\web' 'node node_modules\next\dist\bin\next start --port 3000'
 Start-Window 'BlissNova demo site' 'apps\demo-site' 'node server.mjs'
+$webReady = $false
 for ($i = 0; $i -lt 60; $i++) {
-  try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://localhost:3000).StatusCode -eq 200) { break } } catch { }
+  try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://localhost:3000).StatusCode -eq 200) { $webReady = $true; break } } catch { }
   Start-Sleep -Seconds 2
 }
+if (-not $webReady) { Fail 'The website did not start within 2 minutes. Open the "BlissNova website" window from the taskbar to see why, then run "Stop BlissNova demo".' }
 
 $secrets = Get-Content (Join-Path $env:LOCAL_DATA_DIR 'secrets.json') -Raw | ConvertFrom-Json
 Write-Host ''
