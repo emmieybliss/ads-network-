@@ -41,7 +41,7 @@ if (-not $built) {
   Invoke-Pnpm install --frozen-lockfile
   Invoke-Pnpm --filter '@blissnova/ad-tag' build
   Invoke-Pnpm --filter '@blissnova/api' build
-  $env:API_INTERNAL_URL = 'http://localhost:4000'; $env:NEXT_PUBLIC_DEMO_MODE = 'true'; Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
+  $env:API_INTERNAL_URL = 'http://127.0.0.1:4000'; $env:NEXT_PUBLIC_DEMO_MODE = 'true'; Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
   Invoke-Pnpm --filter '@blissnova/web' build
   Set-Content -Path $stampFile -Value $stamp
 }
@@ -54,7 +54,7 @@ Start-Window 'BlissNova API' 'apps\api' 'node dist\local.js'
 Write-Host 'Starting the API and its database...' -ForegroundColor Cyan
 $ready = $false
 for ($i = 0; $i -lt 150; $i++) {
-  try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://localhost:4000/ready).StatusCode -eq 200) { $ready = $true; break } } catch { }
+  try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://127.0.0.1:4000/ready).StatusCode -eq 200) { $ready = $true; break } } catch { }
   Start-Sleep -Seconds 2
 }
 if (-not $ready) { Fail 'The API did not start within 5 minutes. Open the "BlissNova API" window from the taskbar to see why.' }
@@ -62,7 +62,7 @@ Start-Window 'BlissNova website' 'apps\web' 'node node_modules\next\dist\bin\nex
 Start-Window 'BlissNova demo site' 'apps\demo-site' 'node server.mjs'
 $webReady = $false
 for ($i = 0; $i -lt 60; $i++) {
-  try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://localhost:3000).StatusCode -eq 200) { $webReady = $true; break } } catch { }
+  try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://127.0.0.1:3000).StatusCode -eq 200) { $webReady = $true; break } } catch { }
   Start-Sleep -Seconds 2
 }
 if (-not $webReady) { Fail 'The website did not start within 2 minutes. Open the "BlissNova website" window from the taskbar to see why, then run "Stop BlissNova demo".' }
