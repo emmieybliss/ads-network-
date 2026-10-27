@@ -1,0 +1,50 @@
+{
+  "name": "blissnova-ad-network",
+  "private": true,
+  "version": "0.1.0",
+  "description": "BlissNova Ad Network - standalone multi-publisher advertising platform",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:api": "pnpm --filter @blissnova/api dev",
+    "dev:worker": "pnpm --filter @blissnova/worker dev",
+    "dev:web": "pnpm --filter @blissnova/web dev",
+    "dev:demo-site": "node apps/demo-site/server.mjs",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "db:migrate": "pnpm --filter @blissnova/database migrate",
+    "db:rollback": "pnpm --filter @blissnova/database rollback",
+    "db:seed": "pnpm --filter @blissnova/api seed",
+    "admin:create": "pnpm --filter @blissnova/api create-admin",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration tests/security",
+    "load:serve": "node tests/load/serve.mjs",
+    "audit": "pnpm audit --prod",
+    "demo:start": "bash scripts/start-demo.sh",
+    "demo:stop": "bash scripts/stop-demo.sh",
+    "demo:reset": "bash scripts/reset-demo.sh",
+    "demo:local": "node apps/api/dist/local.js",
+    "demo:e2e": "node scripts/e2e-demo.mjs",
+    "openapi": "pnpm --filter @blissnova/api openapi",
+    "demo:acceptance": "node scripts/acceptance-ui.mjs"
+  },
+  "devDependencies": {
+    "@blissnova/ad-decision": "workspace:*",
+    "@blissnova/api": "workspace:*",
+    "@blissnova/billing": "workspace:*",
+    "@blissnova/database": "workspace:*",
+    "@blissnova/shared": "workspace:*",
+    "@blissnova/tracking": "workspace:*",
+    "@types/node": "^22.10.0",
+    "fastify": "^5.12.7",
+    "ioredis": "^5.11.1",
+    "pg": "^8.23.1",
+    "playwright": "1.63.0",
+    "tsx": "^4.19.0",
+    "typescript": "5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

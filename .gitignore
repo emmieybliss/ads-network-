@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+coverage/
+storage/
+.DS_Store
+*.zip
+dump.rdb
+.next/
+*.tsbuildinfo
+.env.demo
+acceptance-screenshots/
+
+# Local (no Docker) demo data
+.local-data/

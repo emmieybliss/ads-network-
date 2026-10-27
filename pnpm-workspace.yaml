@@ -1,0 +1,14 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "sdk/*"
+onlyBuiltDependencies:
+  - "@node-rs/argon2"
+  - esbuild
+  - "@embedded-postgres/linux-x64"
+  - "@embedded-postgres/linux-arm64"
+  - "@embedded-postgres/darwin-x64"
+  - "@embedded-postgres/darwin-arm64"
+  - "@embedded-postgres/windows-x64"
+overrides:
+  postcss: '>=8.5.23'
