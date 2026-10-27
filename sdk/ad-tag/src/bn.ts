@@ -276,6 +276,7 @@ class Tag {
     const host = el as HTMLElement;
     host.textContent = '';
     host.style.display = '';
+    host.setAttribute('data-bn-state', 'filled');
     const root = host.attachShadow ? host.attachShadow({ mode: 'closed' }) : null;
     const mount: Node & ParentNode = root ?? host;
 

@@ -1,64 +1,134 @@
 /**
- * Development/demo seed.
+ * Local demo seed.
  *
- * Creates clearly-labelled fictional organisations, users, sites and campaigns so
- * the portals have something to show locally. It contains no real company,
- * customer, bank or payment-provider data and must never be pointed at a
- * production database.
+ * Creates a clearly labelled, fictional demo network: one platform admin, one
+ * advertiser, one publisher, one verified local demo website with placements,
+ * two approved campaigns, and two weeks of generated sample statistics. Every
+ * organization and campaign name carries "[demo]" and every generated event
+ * carries a "demo-sample:" id, so none of it can be mistaken for real results.
+ * It contains no real company, customer, bank or payment-provider data.
  *
  * Usage:
  *   DATABASE_URL=postgres://... pnpm db:seed
  *
  * Guards:
- *   - refuses to run when NODE_ENV=production unless SEED_DEMO_DATA=yes
- *   - refuses to run if the database already holds non-demo organisations
- *     (override with SEED_FORCE=yes)
- *   - passwords come from SEED_PASSWORD, or a random one is generated and
+ *   - refuses to run when NODE_ENV=production (there is no override: demo data
+ *     never belongs in a production database)
+ *   - refuses to run if the database already holds non-demo organizations
+ *     (override with SEED_FORCE=yes on a disposable database)
+ *   - the password comes from SEED_PASSWORD, or a random one is generated and
  *     printed once; nothing is hardcoded
+ *   - set SEED_SAMPLE_DAYS=0 to skip the generated sample statistics
  */
-import { randomBytes } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { createPool, withTransaction } from '@blissnova/database';
-import { confirmPayment, reserveCampaignBudget } from '@blissnova/billing';
+import { confirmPayment, reserveCampaignBudget, settleCampaign } from '@blissnova/billing';
 import { toMicros } from '@blissnova/shared';
 import { hashPassword, randomToken } from '../lib/crypto';
+import { aggregateDay } from '../services/events';
+import { LocalStorage } from '../lib/storage';
+import { createHash } from 'node:crypto';
+import { demoBannerPng } from './demo-banner';
 
 const DEMO_TAG = '[demo]';
 const CURRENCY = 'USD';
+/** Public site key for the demo website. Site keys are public identifiers (they appear in page markup), not secrets. */
+export const DEFAULT_DEMO_SITE_KEY = 'pk_DemoLocalPublisherSite01';
+/** A reserved name (RFC 6761) that can never belong to a real publisher. */
+export const DEMO_SITE_DOMAIN = 'demo-publisher.localhost';
 
 function envFlag(name: string) {
   return (process.env[name] ?? '').toLowerCase() === 'yes';
 }
 
-function pk() {
-  return `pk_${randomBytes(15).toString('base64url').replace(/[^A-Za-z0-9]/g, '').slice(0, 20)}`;
-}
-
-async function user(c: PoolClient, email: string, name: string, hash: string) {
+async function user(c: PoolClient, email: string, name: string, hash: string, platformRole: string | null = null) {
   const r = await c.query<{ id: string }>(
-    `INSERT INTO users (email, name, password_hash, status, email_verified_at)
-     VALUES ($1, $2, $3, 'active', now())
-     ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, password_hash = EXCLUDED.password_hash
+    `INSERT INTO users (email, name, password_hash, status, email_verified_at, platform_role)
+     VALUES ($1, $2, $3, 'active', now(), $4)
+     ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, password_hash = EXCLUDED.password_hash, platform_role = EXCLUDED.platform_role
      RETURNING id`,
-    [email, name, hash],
+    [email, name, hash, platformRole],
   );
   return r.rows[0]!.id;
 }
 
-async function org(c: PoolClient, name: string, type: 'advertiser' | 'publisher', createdBy: string, extra: { website?: string; revenueShareBps?: number } = {}) {
+async function org(c: PoolClient, name: string, type: 'advertiser' | 'publisher', createdBy: string, revenueShareBps: number | null = null) {
   const r = await c.query<{ id: string }>(
-    `INSERT INTO organizations (name, type, status, website, country, billing_email, currency, revenue_share_bps, created_by)
-     VALUES ($1, $2, 'approved', $3, 'US', $4, $5, $6, $7) RETURNING id`,
-    [name, type, extra.website ?? null, `billing+${type}@example.com`, CURRENCY, extra.revenueShareBps ?? null, createdBy],
+    `INSERT INTO organizations (name, type, status, country, billing_email, currency, revenue_share_bps, created_by)
+     VALUES ($1, $2, 'approved', 'US', $3, $4, $5, $6) RETURNING id`,
+    [name, type, `billing+${type}@example.com`, CURRENCY, revenueShareBps, createdBy],
   );
   const id = r.rows[0]!.id;
   await c.query(`INSERT INTO memberships (org_id, user_id, role) VALUES ($1, $2, 'owner')`, [id, createdBy]);
   return id;
 }
 
+interface SampleSpec { campaignId: string; creativeId: string; unitId: string; pricing: 'cpm' | 'cpc'; rateMicros: bigint; perDay: [number, number]; ctr: number }
+
+/**
+ * Two weeks of generated sample events for the demo campaigns, inserted as
+ * event rows and charged exactly as live traffic would be, so reports, budgets,
+ * the ledger and reconciliation all agree. Today is left empty so live demo
+ * traffic stands out.
+ */
+async function sampleHistory(c: PoolClient, specs: SampleSpec[], ctx: { siteId: string; advOrg: string; pubOrg: string; shareBps: number }, days: number) {
+  const touched: string[] = [];
+  for (let back = days; back >= 1; back--) {
+    const day = new Date(Date.now() - back * 86_400_000).toISOString().slice(0, 10);
+    touched.push(day);
+    for (const s of specs) {
+      const renders = s.perDay[0] + Math.floor(Math.random() * (s.perDay[1] - s.perDay[0]));
+      const costPerImp = s.pricing === 'cpm' ? s.rateMicros / 1000n : 0n;
+      const costPerClick = s.pricing === 'cpc' ? s.rateMicros : 0n;
+      // One row per event; deliveries are synthetic ids. Roughly 3% of renders are marked invalid as the filters would.
+      await c.query(
+        `WITH d AS (
+           SELECT gen_random_uuid() AS delivery, $1::date + make_interval(secs => floor(random() * 86000)::int) AS at,
+                  (ARRAY['US','US','US','GB','CA','DE','IN','ZZ'])[1 + floor(random() * 8)::int] AS country,
+                  (ARRAY['desktop','desktop','mobile','mobile','tablet'])[1 + floor(random() * 5)::int] AS device,
+                  random() < 0.03 AS invalid, random() < 0.66 AS viewable, random() < $9::float AS clicked,
+                  md5(random()::text) AS visitor
+           FROM generate_series(1, $2::int)
+         ), ev AS (
+           SELECT delivery, at, country, device, visitor, 'served' AS type, false AS invalid FROM d
+           UNION ALL SELECT delivery, at + interval '1 second', country, device, visitor, 'render', invalid FROM d
+           UNION ALL SELECT delivery, at + interval '3 seconds', country, device, visitor, 'viewable', false FROM d WHERE viewable AND NOT invalid
+           UNION ALL SELECT delivery, at + interval '20 seconds', country, device, visitor, 'click', false FROM d WHERE clicked AND NOT invalid
+         )
+         INSERT INTO ad_events (client_event_id, delivery_id, type, status, invalid_reason, ivt_score, billable, cost_micros, publisher_micros, currency,
+                                campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, page_host, occurred_at, received_at)
+         SELECT 'demo-sample:' || gen_random_uuid(), delivery, type, CASE WHEN invalid THEN 'invalid' ELSE 'valid' END, CASE WHEN invalid THEN 'anomaly_score' END,
+                CASE WHEN invalid THEN 75 ELSE 0 END,
+                NOT invalid AND ((type = 'render' AND $10::bigint > 0) OR (type = 'click' AND $11::bigint > 0)),
+                CASE WHEN invalid THEN 0 WHEN type = 'render' THEN $10::bigint WHEN type = 'click' THEN $11::bigint ELSE 0 END,
+                CASE WHEN invalid THEN 0 WHEN type = 'render' THEN $10::bigint * $12::int / 10000 WHEN type = 'click' THEN $11::bigint * $12::int / 10000 ELSE 0 END,
+                $13, $3, $4, $5, $6, $7, $8, visitor, md5(visitor), country, device, $14, at, at
+         FROM ev`,
+        [day, renders, s.campaignId, s.creativeId, ctx.advOrg, ctx.siteId, s.unitId, ctx.pubOrg, s.ctr, costPerImp.toString(), costPerClick.toString(), ctx.shareBps, CURRENCY, DEMO_SITE_DOMAIN],
+      );
+      await c.query(
+        `INSERT INTO campaign_daily_spend (campaign_id, day, spent_micros, impressions, clicks)
+         SELECT $1, $2::date, COALESCE(sum(cost_micros), 0), count(*) FILTER (WHERE type = 'render'), count(*) FILTER (WHERE type = 'click')
+         FROM ad_events WHERE campaign_id = $1 AND billable AND occurred_at >= $2::date AND occurred_at < $2::date + 1
+         ON CONFLICT (campaign_id, day) DO UPDATE SET spent_micros = EXCLUDED.spent_micros, impressions = EXCLUDED.impressions, clicks = EXCLUDED.clicks`,
+        [s.campaignId, day],
+      );
+    }
+  }
+  for (const s of specs) {
+    await c.query(
+      `UPDATE campaigns SET spent_micros = t.spend, billable_impressions = t.imps, billable_clicks = t.clicks, updated_at = now()
+       FROM (SELECT COALESCE(sum(cost_micros), 0) AS spend, count(*) FILTER (WHERE type = 'render') AS imps, count(*) FILTER (WHERE type = 'click') AS clicks
+             FROM ad_events WHERE campaign_id = $1 AND billable) t WHERE id = $1`,
+      [s.campaignId],
+    );
+  }
+  return touched;
+}
+
 async function main() {
-  if (process.env.NODE_ENV === 'production' && !envFlag('SEED_DEMO_DATA')) {
-    console.error('Refusing to seed demo data with NODE_ENV=production. Set SEED_DEMO_DATA=yes only if you really mean it.');
+  if (process.env.NODE_ENV === 'production') {
+    console.error('Refusing to seed demo data with NODE_ENV=production. Demo data never belongs in a production database.');
     process.exit(1);
   }
   if (!process.env.DATABASE_URL) {
@@ -69,147 +139,172 @@ async function main() {
   const pool = createPool(process.env.DATABASE_URL);
   const existing = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM organizations WHERE name NOT LIKE $1`, [`%${DEMO_TAG}%`]);
   if (existing.rows[0]!.n !== '0' && !envFlag('SEED_FORCE')) {
-    console.error(`This database already holds ${existing.rows[0]!.n} non-demo organisation(s). Refusing to seed. Set SEED_FORCE=yes to override.`);
+    console.error(`This database already holds ${existing.rows[0]!.n} non-demo organization(s). Refusing to seed. Use a separate database for the demo.`);
     await pool.end();
     process.exit(1);
+  }
+  const already = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM organizations WHERE name LIKE $1`, [`%${DEMO_TAG}%`]);
+  if (already.rows[0]!.n !== '0') {
+    console.log('Demo data is already present. To start over, run the reset-demo script.');
+    await pool.end();
+    return;
   }
 
   const password = process.env.SEED_PASSWORD ?? `${randomToken(9)}Aa1!`;
   const generated = !process.env.SEED_PASSWORD;
   const hash = await hashPassword(password);
   const system = { type: 'system' as const };
+  const siteKey = process.env.DEMO_SITE_KEY ?? DEFAULT_DEMO_SITE_KEY;
+  const sampleDays = Math.max(0, Math.min(60, Number(process.env.SEED_SAMPLE_DAYS ?? 14)));
+  const storageDir = process.env.STORAGE_DIR ?? './storage';
 
   const out = await withTransaction(pool, async (c) => {
-    // --- platform content so the marketing pages are not blank -------------
+    // --- platform content so the public pages are not blank -----------------
     await c.query(
       `INSERT INTO content_items (kind, slug, title, body, sort_order, published) VALUES
          ('faq', 'what-is-blissnova', 'What is the BlissNova Ad Network?', 'A multi-publisher advertising network: advertisers run campaigns, publishers place ad units on their sites, and the platform handles delivery, measurement and payouts.', 1, true),
-         ('faq', 'how-are-clicks-counted', 'How are impressions and clicks counted?', 'Every delivery is recorded, then filtered for invalid traffic. Only valid events are reported and billed. Click-through rate is valid clicks divided by valid impressions.', 2, true),
+         ('faq', 'how-are-clicks-counted', 'How are impressions and clicks counted?', 'Every delivery is recorded, then filtered for invalid traffic. Only valid events are reported and billed. Click-through rate is valid clicks divided by valid impressions, multiplied by 100.', 2, true),
          ('faq', 'when-do-publishers-get-paid', 'When do publishers get paid?', 'Earnings move from pending to available after the platform hold period, then can be requested as a payout. Payout methods and schedules are configured by the platform operator.', 3, true),
-         ('faq', 'what-do-i-need-to-start', 'What do I need to start?', 'Advertisers need a funded account balance and at least one approved creative. Publishers need a verified site and an ad unit, then paste the JavaScript ad tag into any page; no plugin is needed.', 4, true),
-         ('legal', 'terms', 'Terms of service', 'Placeholder. The platform operator must supply their own terms of service before launch.', 1, false),
-         ('legal', 'privacy', 'Privacy policy', 'Placeholder. The platform operator must supply their own privacy policy before launch.', 2, false)
+         ('faq', 'what-do-i-need-to-start', 'What do I need to start?', 'Advertisers need a funded account balance and at least one approved creative. Publishers need a verified and approved site and a placement, then paste the JavaScript ad tag into any page; no plugin is needed.', 4, true),
+         ('legal', 'terms', 'Terms of service', 'Placeholder. The platform operator must supply their own terms of service, reviewed by a qualified professional, before launch.', 1, false),
+         ('legal', 'privacy', 'Privacy policy', 'Placeholder. The platform operator must supply their own privacy policy, reviewed by a qualified professional, before launch.', 2, false)
        ON CONFLICT (kind, slug) DO NOTHING`,
     );
     const planCount = (await c.query<{ n: string }>('SELECT count(*)::text AS n FROM pricing_plans')).rows[0]!.n;
     if (planCount === '0') await c.query(
       `INSERT INTO pricing_plans (audience, name, summary, price_label, features, cta_label, highlighted, sort_order, published) VALUES
-         ('advertiser', 'CPM', 'Pay per thousand valid impressions.', 'From $1.00 CPM', ARRAY['Image and text creatives','Country, device and keyword targeting','Frequency capping','CSV reporting'], 'Start advertising', false, 1, true),
-         ('advertiser', 'CPC', 'Pay per valid click.', 'From $0.05 per click', ARRAY['Click-through reporting','Invalid-click filtering','Budget pacing','Creative versioning'], 'Start advertising', true, 2, true),
-         ('publisher', 'Revenue share', 'Keep a share of the revenue your inventory earns.', 'Set per publisher', ARRAY['Site verification','Unlimited ad units','JavaScript ad tag for any site','Earnings and payout tracking'], 'Become a publisher', false, 1, true)
+         ('advertiser', 'Cost per thousand impressions', 'Pay for valid impressions only.', 'Rate set per campaign', ARRAY['Image and text creatives','Country, device and keyword targeting','Frequency capping','CSV reporting'], 'Start advertising', false, 1, true),
+         ('advertiser', 'Cost per click', 'Pay for valid clicks only.', 'Rate set per campaign', ARRAY['Click-through reporting','Invalid-click filtering','Budget pacing','Creative versioning'], 'Start advertising', true, 2, true),
+         ('publisher', 'Revenue share', 'Earn a share of what your approved inventory earns.', 'Share set by the operator', ARRAY['Automatic domain verification','Unlimited placements','JavaScript ad tag for any site','Earnings and payout tracking'], 'Become a publisher', false, 1, true)
        `,
     );
-
-    // Cost-per-click is off by default on a fresh platform; the demo includes a
-    // CPC campaign, so turn it on here (an operator decision, not a default).
+    // The demo includes a cost-per-click campaign, so enable CPC here (an operator decision, not a platform default).
     await c.query(
       `INSERT INTO platform_settings (key, value, updated_at) VALUES ('pricing', jsonb_build_object('cpcEnabled', true), now())
        ON CONFLICT (key) DO UPDATE SET value = platform_settings.value || jsonb_build_object('cpcEnabled', true), updated_at = now()`,
     );
+    const holdDays = Number((await c.query(`SELECT COALESCE((value->>'earningsHoldDays')::int, 30) AS d FROM platform_settings WHERE key = 'publishers'`)).rows[0]?.d ?? 30);
 
-    // --- people -------------------------------------------------------------
+    // --- people ---------------------------------------------------------------
+    const adminUser = await user(c, 'admin@example.com', `Ada Admin ${DEMO_TAG}`, hash, 'super_admin');
     const advUser = await user(c, 'advertiser@example.com', `Avery Advertiser ${DEMO_TAG}`, hash);
     const pubUser = await user(c, 'publisher@example.com', `Parker Publisher ${DEMO_TAG}`, hash);
+    const shareBps = 7000;
+    const advOrg = await org(c, `Demo Advertiser Co ${DEMO_TAG}`, 'advertiser', advUser);
+    const pubOrg = await org(c, `Demo Publisher Media ${DEMO_TAG}`, 'publisher', pubUser, shareBps);
 
-    const advOrg = await org(c, `Northwind Coffee Roasters ${DEMO_TAG}`, 'advertiser', advUser, { website: 'https://example.com' });
-    const pubOrg = await org(c, `Daily Dispatch Media ${DEMO_TAG}`, 'publisher', pubUser, { website: 'https://example.org', revenueShareBps: 7000 });
-
-    // --- publisher inventory ------------------------------------------------
-    const siteKey = pk();
+    // --- the local demo website: verified through the development simulator --
     const site = (await c.query<{ id: string }>(
-      `INSERT INTO sites (org_id, name, domain, allowed_domains, category, status, public_key, verified_at, approved_at)
-       VALUES ($1, $2, 'example.org', ARRAY['example.org','www.example.org','localhost'], 'news', 'approved', $3, now(), now()) RETURNING id`,
-      [pubOrg, `Daily Dispatch ${DEMO_TAG}`, siteKey],
+      `INSERT INTO sites (org_id, name, domain, allowed_domains, category, status, public_key, description, language, country,
+                          verified_at, verification_method, verification_scope, verification_simulated, policy_version, policy_accepted_at, policy_accepted_by,
+                          submitted_at, review_started_at, reviewed_by, approved_at)
+       VALUES ($1, $2, $3, ARRAY['localhost'], 'technology', 'approved', $4, 'Local demo website that ships with the platform for testing ad delivery end to end.', 'en', 'US',
+               now(), 'simulated', 'host', true, '2026-10', now(), $5, now(), now(), $6, now()) RETURNING id`,
+      [pubOrg, `Demo Publisher Site ${DEMO_TAG}`, DEMO_SITE_DOMAIN, siteKey, pubUser, adminUser],
     )).rows[0]!.id;
+    await c.query(
+      `INSERT INTO site_verification_attempts (site_id, hostname, method, outcome, detail, simulated, actor_user_id)
+       VALUES ($1, $2, 'simulated', 'success', 'Development simulator (demo seed). Never valid in production.', true, $3)`,
+      [site, DEMO_SITE_DOMAIN, pubUser],
+    );
+    await c.query(
+      `INSERT INTO site_reviews (site_id, reviewer_id, action, from_status, to_status, checklist, reason)
+       VALUES ($1, $2, 'approve', 'under_review', 'approved', '{"demo": true}'::jsonb, 'Demo seed: local demo site approved for testing.')`,
+      [site, adminUser],
+    );
 
-    const units: Array<{ id: string; key: string }> = [];
-    for (const u of [
-      { key: 'leaderboard_728x90', name: 'Header leaderboard', w: 728, h: 90, pos: 'header' },
-      { key: 'sidebar_300x250', name: 'Sidebar rectangle', w: 300, h: 250, pos: 'sidebar' },
-      { key: 'in_article_text', name: 'In-article text unit', w: null as number | null, h: null as number | null, pos: 'in_content' },
-    ]) {
-      const r = await c.query<{ id: string }>(
+    const unitSpecs = [
+      { key: 'demo-leaderboard', name: 'Header leaderboard', w: 728, h: 90, pos: 'header', formats: ['image'] },
+      { key: 'demo-sidebar', name: 'Sidebar text unit', w: null as number | null, h: null as number | null, pos: 'sidebar', formats: ['text'] },
+    ];
+    const units: Record<string, string> = {};
+    for (const u of unitSpecs) {
+      units[u.key] = (await c.query<{ id: string }>(
         `INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position, status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active') RETURNING id`,
-        [site, u.key, u.name, u.w ? ['image'] : ['text'], u.w, u.h, u.w === null, u.pos],
-      );
-      units.push({ id: r.rows[0]!.id, key: u.key });
+        [site, u.key, u.name, u.formats, u.w, u.h, u.w === null, u.pos],
+      )).rows[0]!.id;
     }
     await c.query(
-      `INSERT INTO payout_profiles (org_id, method, display_label, currency, updated_by) VALUES ($1, 'bank_transfer', 'Demo bank account (no real details)', $2, $3)
+      `INSERT INTO payout_profiles (org_id, method, display_label, currency, updated_by) VALUES ($1, 'bank_transfer', 'Demo account (no real details)', $2, $3)
        ON CONFLICT (org_id) DO NOTHING`,
       [pubOrg, CURRENCY, pubUser],
     );
 
-    // --- advertiser funding (a simulated payment, not a real one) -----------
+    // --- advertiser funding through the simulated provider (no money moves) ----
     const payment = (await c.query<{ id: string }>(
-      `INSERT INTO payments (id, org_id, provider, idempotency_key, amount_micros, fee_micros, currency, status, refunded_micros, created_by, created_at, updated_at)
-       VALUES (gen_random_uuid(), $1, 'dev_simulated', $2, $3, 0, $4, 'pending', 0, $5, now(), now()) RETURNING id`,
-      [advOrg, `seed-${randomToken(8)}`, toMicros('2500').toString(), CURRENCY, advUser],
+      `INSERT INTO payments (id, org_id, provider, idempotency_key, amount_micros, fee_micros, currency, status, refunded_micros, created_by)
+       VALUES (gen_random_uuid(), $1, 'dev_simulated', $2, $3, 0, $4, 'pending', 0, $5) RETURNING id`,
+      [advOrg, `seed-${randomToken(8)}`, toMicros('1000').toString(), CURRENCY, advUser],
     )).rows[0]!.id;
-    await confirmPayment(c, { paymentId: payment, actor: system, feeBps: 0, providerRef: 'seed-demo', note: 'Demo funding, no money moved', invoicePrefix: 'BN' });
+    await confirmPayment(c, { paymentId: payment, actor: system, feeBps: 0, providerRef: 'demo-seed', note: 'Simulated demo funding. No money moved.', invoicePrefix: 'DEMO' });
 
-    // --- campaigns ----------------------------------------------------------
-    const campaigns: Array<{ id: string; name: string }> = [];
+    // --- banner image asset ----------------------------------------------------
+    const png = demoBannerPng(728, 90);
+    const sha = createHash('sha256').update(png).digest('hex');
+    const storageKey = `creatives/${advOrg}/${sha}.png`;
+    await new LocalStorage(storageDir, '').put(storageKey, png);
+    const asset = (await c.query<{ id: string }>(
+      `INSERT INTO assets (org_id, sha256, mime_type, size_bytes, width, height, storage_key, created_by)
+       VALUES ($1, $2, 'image/png', $3, 728, 90, $4, $5)
+       ON CONFLICT (storage_key) DO UPDATE SET storage_key = EXCLUDED.storage_key RETURNING id`,
+      [advOrg, sha, png.byteLength, storageKey, advUser],
+    )).rows[0]!.id;
+
+    // --- campaigns -------------------------------------------------------------
+    const campaigns: Array<{ id: string; name: string; creativeId: string; unit: string; pricing: 'cpm' | 'cpc'; rate: bigint }> = [];
     const specs = [
-      { name: `Spring blend launch ${DEMO_TAG}`, model: 'cpm', rate: '2.50', lifetime: '600', daily: '50', priority: 7, format: 'image' as const },
-      { name: `Subscription offer ${DEMO_TAG}`, model: 'cpc', rate: '0.18', lifetime: '400', daily: '40', priority: 5, format: 'text' as const },
+      { name: `Banner campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '2.50', lifetime: '400', daily: '40', unit: 'demo-leaderboard', format: 'image' as const },
+      { name: `Text ad campaign ${DEMO_TAG}`, model: 'cpc' as const, rate: '0.20', lifetime: '300', daily: '30', unit: 'demo-sidebar', format: 'text' as const },
     ];
     for (const s of specs) {
       const camp = (await c.query<{ id: string }>(
         `INSERT INTO campaigns (org_id, name, status, pricing_model, rate_micros, currency, lifetime_budget_micros, daily_budget_micros, timezone, start_at, pacing, priority, submitted_at, approved_at, created_by)
-         VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, 'UTC', now() - interval '1 day', 'even', $8, now(), now(), $9) RETURNING id`,
-        [advOrg, s.name, s.model, toMicros(s.rate).toString(), CURRENCY, toMicros(s.lifetime).toString(), toMicros(s.daily).toString(), s.priority, advUser],
+         VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, 'UTC', now() - make_interval(days => $8), 'even', 5, now(), now(), $9) RETURNING id`,
+        [advOrg, s.name, s.model, toMicros(s.rate).toString(), CURRENCY, toMicros(s.lifetime).toString(), toMicros(s.daily).toString(), sampleDays + 1, advUser],
       )).rows[0]!.id;
-      await c.query(`INSERT INTO campaign_targeting (campaign_id, countries, devices) VALUES ($1, ARRAY[]::text[], ARRAY[]::text[])`, [camp]);
-      await c.query(`INSERT INTO campaign_caps (campaign_id, scope, max_impressions, window_seconds) VALUES ($1, 'visitor', 3, 86400)`, [camp]);
+      await c.query(`INSERT INTO campaign_targeting (campaign_id, countries, devices, include_unit_ids) VALUES ($1, ARRAY[]::text[], ARRAY[]::text[], ARRAY[$2]::uuid[])`, [camp, units[s.unit]]);
+      await c.query(`INSERT INTO campaign_history (campaign_id, actor_id, action, after, reason) VALUES ($1, $2, 'admin_approve', '{"status":"active"}'::jsonb, 'Demo seed')`, [camp, adminUser]);
       await reserveCampaignBudget(c, camp, system);
-      campaigns.push({ id: camp, name: s.name });
 
-      if (s.format === 'image') {
-        // A 1x1 transparent PNG placeholder: no third-party artwork is bundled.
-        const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64');
-        const sha = randomToken(32);
-        const asset = (await c.query<{ id: string }>(
-          `INSERT INTO assets (org_id, sha256, mime_type, size_bytes, width, height, storage_key, created_by)
-           VALUES ($1, $2, 'image/png', $3, 728, 90, $4, $5) RETURNING id`,
-          [advOrg, sha, png.byteLength, `demo/${sha}.png`, advUser],
-        )).rows[0]!.id;
-        const cr = (await c.query<{ id: string }>(
-          `INSERT INTO creatives (campaign_id, org_id, name, format, status, version, approved_version, asset_id, width, height, destination_url, display_url, alt_text, created_by)
-           VALUES ($1, $2, $3, 'image', 'approved', 1, 1, $4, 728, 90, 'https://example.com/spring-blend', 'example.com', 'Demo placeholder banner', $5) RETURNING id`,
-          [camp, advOrg, `Leaderboard banner ${DEMO_TAG}`, asset, advUser],
-        )).rows[0]!.id;
-        await c.query(
-          `INSERT INTO creative_versions (creative_id, version, snapshot, created_by) VALUES ($1, 1, $2, $3)`,
-          [cr, JSON.stringify({ format: 'image', assetId: asset, storageKey: `demo/${sha}.png`, width: 728, height: 90, destinationUrl: 'https://example.com/spring-blend', displayUrl: 'example.com', altText: 'Demo placeholder banner' }), advUser],
-        );
-      } else {
-        const cr = (await c.query<{ id: string }>(
-          `INSERT INTO creatives (campaign_id, org_id, name, format, status, version, approved_version, headline, body, cta, destination_url, display_url, created_by)
-           VALUES ($1, $2, $3, 'text', 'approved', 1, 1, 'Fresh coffee, every week', 'A demo text advertisement used for local development only.', 'See the offer', 'https://example.com/subscribe', 'example.com', $4) RETURNING id`,
-          [camp, advOrg, `Subscription text ad ${DEMO_TAG}`, advUser],
-        )).rows[0]!.id;
-        await c.query(
-          `INSERT INTO creative_versions (creative_id, version, snapshot, created_by) VALUES ($1, 1, $2, $3)`,
-          [cr, JSON.stringify({ format: 'text', headline: 'Fresh coffee, every week', body: 'A demo text advertisement used for local development only.', cta: 'See the offer', destinationUrl: 'https://example.com/subscribe', displayUrl: 'example.com' }), advUser],
-        );
-      }
+      const isImage = s.format === 'image';
+      const snapshot = isImage
+        ? { format: 'image', assetId: asset, storageKey, width: 728, height: 90, destinationUrl: 'https://example.com/demo-offer', displayUrl: 'example.com', altText: 'Demo advertisement banner' }
+        : { format: 'text', headline: 'Demo text advertisement', body: 'A sample text ad served by your local BlissNova demo.', cta: 'Learn more', destinationUrl: 'https://example.com/demo-offer', displayUrl: 'example.com' };
+      const cr = (await c.query<{ id: string }>(
+        `INSERT INTO creatives (campaign_id, org_id, name, format, status, version, approved_version, headline, body, cta, asset_id, width, height, destination_url, display_url, alt_text, created_by)
+         VALUES ($1, $2, $3, $4, 'approved', 1, 1, $5, $6, $7, $8, $9, $10, 'https://example.com/demo-offer', 'example.com', $11, $12) RETURNING id`,
+        [camp, advOrg, `${isImage ? 'Banner' : 'Text ad'} ${DEMO_TAG}`, s.format, isImage ? null : snapshot.headline, isImage ? null : (snapshot as { body: string }).body, isImage ? null : (snapshot as { cta: string }).cta,
+          isImage ? asset : null, isImage ? 728 : null, isImage ? 90 : null, isImage ? 'Demo advertisement banner' : null, advUser],
+      )).rows[0]!.id;
+      await c.query(`INSERT INTO creative_versions (creative_id, version, snapshot, created_by) VALUES ($1, 1, $2, $3)`, [cr, JSON.stringify(snapshot), advUser]);
+      campaigns.push({ id: camp, name: s.name, creativeId: cr, unit: s.unit, pricing: s.model, rate: toMicros(s.rate) });
     }
 
-    return { siteKey, units, campaigns, advOrg, pubOrg };
+    // --- generated sample statistics ------------------------------------------
+    let days: string[] = [];
+    if (sampleDays > 0) {
+      days = await sampleHistory(c, campaigns.map((x) => ({
+        campaignId: x.id, creativeId: x.creativeId, unitId: units[x.unit]!, pricing: x.pricing, rateMicros: x.rate,
+        perDay: x.pricing === 'cpm' ? [600, 1400] : [300, 700], ctr: x.pricing === 'cpm' ? 0.006 : 0.012,
+      })), { siteId: site, advOrg, pubOrg, shareBps }, sampleDays);
+      for (const x of campaigns) await settleCampaign(c, x.id, holdDays);
+    }
+    return { units: Object.keys(units), campaigns, days };
   });
 
+  for (const day of out.days) await aggregateDay(pool, day);
   await pool.end();
 
   console.log(`\nDemo data seeded. Every record is fictional and tagged "${DEMO_TAG}".\n`);
+  console.log('  Admin login        admin@example.com');
   console.log('  Advertiser login   advertiser@example.com');
   console.log('  Publisher login    publisher@example.com');
   console.log(generated ? `  Password (generated, shown once)  ${password}` : '  Password           (from SEED_PASSWORD)');
-  console.log(`\n  Site key           ${out.siteKey}`);
-  console.log(`  Ad unit slots      ${out.units.map((u) => u.key).join(', ')}`);
-  console.log(`  Campaigns          ${out.campaigns.length} active, budget reserved from a simulated $2,500 funding payment`);
-  console.log('\nNo platform administrator is created here. Run: pnpm admin:create --email you@example.com --name "Your Name"\n');
+  console.log(`\n  Demo website       ${DEMO_SITE_DOMAIN} (also served on localhost), site key ${siteKey}`);
+  console.log(`  Placements         ${out.units.join(', ')}`);
+  console.log(`  Campaigns          ${out.campaigns.length} active, funded by a simulated payment (no money moved)`);
+  console.log(out.days.length ? `  Sample statistics  ${out.days.length} days of generated demo events (ids start with "demo-sample:"), not real traffic\n` : '  Sample statistics  none (SEED_SAMPLE_DAYS=0)\n');
 }
 
 main().catch((err) => {

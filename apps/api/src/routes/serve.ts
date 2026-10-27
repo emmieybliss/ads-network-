@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyInstance, FastifyRequest } from 'fastify';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -20,7 +21,12 @@ const eventsBody = z.object({
   events: z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/), type: z.enum(['render', 'viewable']), t: z.string().min(20).max(4096) })).min(1).max(50),
 });
 
-const SDK_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'sdk', 'ad-tag', 'dist', 'bn.js');
+// The built ad tag: SDK_PATH if set, a copy next to a bundled build, or the
+// workspace's sdk/ad-tag/dist when run from source or from apps/api/dist.
+const here = dirname(fileURLToPath(import.meta.url));
+const SDK_PATH = process.env.SDK_PATH
+  ?? [join(here, 'sdk', 'bn.js'), join(here, '..', '..', '..', 'sdk', 'ad-tag', 'dist', 'bn.js'), join(here, '..', '..', '..', '..', 'sdk', 'ad-tag', 'dist', 'bn.js')].find((p) => existsSync(p))
+  ?? join(here, 'sdk', 'bn.js');
 
 export async function serveRoutes(app: FastifyInstance) {
   const ctx = app.ctx;

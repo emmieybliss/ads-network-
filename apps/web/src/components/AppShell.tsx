@@ -232,6 +232,11 @@ export function AppShell({ portal, children }: { portal: Portal; children: React
             Verify your email address to unlock every feature. <button className="font-medium underline" onClick={() => void post('/auth/resend-verification')}>Resend the link</button>
           </div>
         )}
+        {(process.env.NEXT_PUBLIC_DEMO_MODE === 'true' || org?.name.includes('[demo]')) && (
+          <div role="note" className="border-b border-border bg-info-soft px-4 py-2 text-center text-sm text-info sm:px-6">
+            Demo environment. Accounts, campaigns and the statistics shown here are generated sample data, not real traffic or revenue.
+          </div>
+        )}
         <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:py-8">{children}</main>
       </div>
     </div>

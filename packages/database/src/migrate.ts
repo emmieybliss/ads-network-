@@ -1,9 +1,16 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type pg from 'pg';
 
-export const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations');
+const here = dirname(fileURLToPath(import.meta.url));
+/**
+ * Where the SQL files live: MIGRATIONS_DIR if set, the package's own folder when
+ * run from source, or a copy placed next to a bundled build.
+ */
+export const MIGRATIONS_DIR = process.env.MIGRATIONS_DIR
+  ?? [join(here, '..', 'migrations'), join(here, 'migrations')].find((d) => existsSync(d))
+  ?? join(here, '..', 'migrations');
 
 interface Migration { id: string; up: string; down: string }
 
