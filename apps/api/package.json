@@ -1,0 +1,47 @@
+{
+  "name": "@blissnova/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/app.ts",
+  "exports": {
+    ".": "./src/app.ts",
+    "./config": "./src/config.ts",
+    "./services/*": "./src/services/*.ts",
+    "./lib/*": "./src/lib/*.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "create-admin": "tsx src/scripts/create-admin.ts",
+    "openapi": "tsx src/scripts/openapi.ts"
+  },
+  "dependencies": {
+    "@blissnova/ad-decision": "workspace:*",
+    "@blissnova/billing": "workspace:*",
+    "@blissnova/database": "workspace:*",
+    "@blissnova/shared": "workspace:*",
+    "@blissnova/tracking": "workspace:*",
+    "@fastify/cookie": "^11.0.0",
+    "@fastify/cors": "^11.0.0",
+    "@fastify/helmet": "^13.0.0",
+    "@fastify/multipart": "^9.0.0",
+    "@fastify/swagger": "^9.4.0",
+    "@fastify/swagger-ui": "^5.2.0",
+    "@node-rs/argon2": "^2.0.2",
+    "bullmq": "^5.40.0",
+    "fastify": "^5.2.0",
+    "image-size": "^2.0.0",
+    "ioredis": "^5.4.0",
+    "nodemailer": "^7.0.0",
+    "pg": "^8.13.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^7.0.0",
+    "@types/pg": "^8.11.0",
+    "esbuild": "^0.25.0"
+  }
+}

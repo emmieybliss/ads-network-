@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS inventory_rules, creative_reviews, creative_versions, creatives, assets, campaign_history, advertiser_caps, campaign_caps, campaign_targeting, campaigns, ad_units, site_verifications, sites CASCADE;

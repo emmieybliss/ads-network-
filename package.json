@@ -1,0 +1,31 @@
+{
+  "name": "blissnova-ad-network",
+  "private": true,
+  "version": "0.1.0",
+  "description": "BlissNova Ad Network - multi-publisher advertising platform by BlissNova Technologies",
+  "packageManager": "pnpm@10.28.0",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev:api": "pnpm --filter @blissnova/api dev",
+    "dev:worker": "pnpm --filter @blissnova/worker dev",
+    "dev:dashboard": "pnpm --filter @blissnova/dashboard dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "db:migrate": "pnpm --filter @blissnova/database migrate",
+    "db:rollback": "pnpm --filter @blissnova/database rollback",
+    "db:seed": "pnpm --filter @blissnova/database seed",
+    "admin:create": "pnpm --filter @blissnova/api create-admin",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration tests/security",
+    "test:wordpress": "php wordpress/blissnova-ad-network/tests/run.php",
+    "load:serve": "node tests/load/serve.mjs",
+    "audit": "pnpm audit --prod"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "5.9.3",
+    "vitest": "^3.2.7",
+    "tsx": "^4.19.0"
+  }
+}
