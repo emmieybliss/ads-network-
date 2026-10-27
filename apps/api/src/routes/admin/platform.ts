@@ -46,7 +46,7 @@ export async function adminPlatformRoutes(app: FastifyInstance) {
       one(`SELECT count(*)::int AS n FROM organizations WHERE type = 'publisher' AND status = 'approved'`),
       one(`SELECT count(*) FILTER (WHERE verified_at IS NOT NULL)::int AS verified, count(*) FILTER (WHERE status = 'approved')::int AS approved FROM sites`),
       one(`SELECT count(*) FILTER (WHERE status = 'active')::int AS active, count(*) FILTER (WHERE status = 'pending_approval')::int AS pending FROM campaigns`),
-      one(`SELECT (SELECT count(*) FROM creatives WHERE status = 'pending_review')::int AS creatives, (SELECT count(*) FROM sites WHERE status = 'pending_review')::int AS sites, (SELECT count(*) FROM organizations WHERE status = 'pending')::int AS orgs`),
+      one(`SELECT (SELECT count(*) FROM creatives WHERE status = 'pending_review')::int AS creatives, (SELECT count(*) FROM sites WHERE status IN ('submitted', 'under_review'))::int AS sites, (SELECT count(*) FROM organizations WHERE status = 'pending')::int AS orgs`),
       one(`SELECT COALESCE(sum(valid_impressions), 0)::bigint AS imps, COALESCE(sum(valid_clicks), 0)::bigint AS clicks, COALESCE(sum(invalid_impressions), 0)::bigint AS invalid, COALESCE(sum(rendered), 0)::bigint AS rendered, COALESCE(sum(spend_micros), 0)::text AS spend, COALESCE(sum(publisher_micros), 0)::text AS earnings FROM daily_stats WHERE day BETWEEN $1 AND $2`, [r.from, r.to]),
       one(`SELECT count(*)::int AS n, COALESCE(sum(amount_micros), 0)::text AS total FROM payments WHERE status = 'pending'`),
       one(`SELECT count(*)::int AS n, COALESCE(sum(amount_micros), 0)::text AS total FROM payouts WHERE status IN ('requested', 'approved', 'processing')`),
