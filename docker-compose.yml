@@ -1,6 +1,7 @@
 # Local demo stack. Start it with scripts/start-demo.sh (or .ps1), which
 # generates .env.demo with random secrets first. Ports on your machine:
 #   3000 web (marketing site + dashboards)   4000 API   3100 demo publisher site
+#   8025 Mailpit (catches every email the demo sends; nothing leaves your machine)
 #
 # This stack runs the API in development mode with the simulated payment
 # provider and verification simulator switched on. It is not a production
@@ -19,7 +20,11 @@ x-app-env: &app-env
   ENCRYPTION_KEY: ${ENCRYPTION_KEY:?run scripts/start-demo first}
   TRACKING_TOKEN_KEYS: ${TRACKING_TOKEN_KEYS:?run scripts/start-demo first}
   STORAGE_DIR: /data/storage
-  EMAIL_PROVIDER: log
+  # Emails go to Mailpit, a local inbox viewer at http://localhost:8025.
+  EMAIL_PROVIDER: smtp
+  SMTP_HOST: mailpit
+  SMTP_PORT: "1025"
+  SMTP_SECURE: "false"
   EVENT_PROCESSING: queue
   ENABLE_DEV_PAYMENTS: "true"
   ENABLE_DEV_VERIFICATION_SIMULATOR: "true"
@@ -48,6 +53,15 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports: ["8025:8025"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8025/livez"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
 
   # One-shot: apply migrations, then load demo data if it is not there yet.
   setup:

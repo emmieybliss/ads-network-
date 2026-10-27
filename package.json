@@ -27,7 +27,8 @@
     "demo:stop": "bash scripts/stop-demo.sh",
     "demo:reset": "bash scripts/reset-demo.sh",
     "demo:e2e": "node scripts/e2e-demo.mjs",
-    "openapi": "pnpm --filter @blissnova/api openapi"
+    "openapi": "pnpm --filter @blissnova/api openapi",
+    "demo:acceptance": "node scripts/acceptance-ui.mjs"
   },
   "devDependencies": {
     "@blissnova/ad-decision": "workspace:*",

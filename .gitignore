@@ -11,3 +11,4 @@ dump.rdb
 .next/
 *.tsbuildinfo
 .env.demo
+acceptance-screenshots/

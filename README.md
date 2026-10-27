@@ -35,6 +35,7 @@ gitignored). When it finishes, it prints:
 | API (`/ready`, `/health`) | http://localhost:4000 |
 | API reference (Swagger UI) | http://localhost:3000/api/docs |
 | Demo publisher website | http://localhost:3100 |
+| Mailpit (every email the demo sends) | http://localhost:8025 |
 
 Demo logins (password is `SEED_PASSWORD` in `.env.demo`):
 
@@ -56,11 +57,15 @@ reports every minute), then refresh the publisher or advertiser reports. Today's
 row goes up. Repeated views from one browser hit frequency caps, and very fast
 or repeated clicks are filtered as invalid, as they would be on a live site.
 
-Automated version of the same check (needs Node 20+ and `pnpm install`):
+Automated checks against the running demo (need Node 20+ and `pnpm install`):
 
 ```bash
 npx playwright install chromium     # once
-DEMO_PASSWORD=<SEED_PASSWORD from .env.demo> pnpm demo:e2e
+export DEMO_PASSWORD=<SEED_PASSWORD from .env.demo>
+pnpm demo:e2e          # banner shows, impression and click recorded, report updates
+pnpm demo:acceptance   # registers a publisher, verifies email via Mailpit, adds and
+                       # simulates verification of a site, admin approves it, creates
+                       # a placement and tag, advertiser submits a campaign, admin approves
 ```
 
 | Task | Command |

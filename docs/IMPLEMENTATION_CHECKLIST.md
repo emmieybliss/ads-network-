@@ -41,6 +41,7 @@ deployment.
 - [x] Dockerfile (api, worker, web, demo-site targets) and `docker-compose.yml` with health checks
 - [x] start/stop/reset scripts for bash and PowerShell
 - [x] `scripts/e2e-demo.mjs`: banner renders, impression and click recorded, dashboard updates
+- [x] `scripts/acceptance-ui.mjs`: browser walkthrough of registration, email verification (Mailpit), site + simulator, admin site approval, placement + tag, campaign + creative submission, admin approvals
 
 ## Tests and docs
 - [x] Vitest suite: unit, integration and security
@@ -51,6 +52,7 @@ Runs on 27 Oct 2026, in the build container with local PostgreSQL 16 and Redis 7
 not on the owner's PC:
 - `pnpm test`: 14 files, 323 tests passed
 - `scripts/e2e-demo.mjs` passed against the bundled processes and against the Docker Compose stack
+- `scripts/acceptance-ui.mjs` passed against the Docker Compose stack
 - seed: all eight ledger reconciliation checks passed
 
 ## Not done
