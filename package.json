@@ -26,6 +26,7 @@
     "demo:start": "bash scripts/start-demo.sh",
     "demo:stop": "bash scripts/stop-demo.sh",
     "demo:reset": "bash scripts/reset-demo.sh",
+    "demo:local": "node apps/api/dist/local.js",
     "demo:e2e": "node scripts/e2e-demo.mjs",
     "openapi": "pnpm --filter @blissnova/api openapi",
     "demo:acceptance": "node scripts/acceptance-ui.mjs"

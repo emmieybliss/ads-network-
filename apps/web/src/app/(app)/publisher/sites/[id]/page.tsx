@@ -3,7 +3,7 @@ import { useParams } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { SITE_STATUS_LABELS, type SiteStatus } from '@blissnova/shared';
 import { Alert, Async, Badge, Button, Card, CardHeader, DefinitionList, Field, Input, PageHeader, StatusBadge, Table, Tabs } from '@/components/ui';
-import { PlacementsPanel, SubmitPanel, TagPanel, VerificationPanel, type SiteDetail } from '@/components/publisher/SitePanels';
+import { AdsTxtPanel, PlacementsPanel, SubmitPanel, TagPanel, VerificationPanel, type SiteDetail } from '@/components/publisher/SitePanels';
 import { ReportExplorer } from '@/components/ReportExplorer';
 import { useApi } from '@/lib/hooks';
 import { useOrg } from '@/lib/session';
@@ -76,6 +76,7 @@ export default function SitePage() {
               )}
               {tab === 'placements' && <PlacementsPanel orgId={org.id} siteId={s.id} />}
               {tab === 'tag' && <TagPanel orgId={org.id} siteId={s.id} />}
+              {tab === 'tag' && s.verification.verified && <AdsTxtPanel orgId={org.id} siteId={s.id} />}
               {tab === 'report' && <ReportExplorer orgId={org.id} audience="publisher" currency={org.currency} filters={{ siteId: s.id }} />}
               {tab === 'details' && (
                 <>

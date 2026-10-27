@@ -11,6 +11,22 @@
 | Build fails with certificate errors (`SELF_SIGNED_CERT_IN_CHAIN`) | A corporate proxy is intercepting HTTPS. Configure Docker Desktop's proxy and certificate settings, or build on a network without interception. |
 | Windows: script "cannot be loaded because running scripts is disabled" | Run `powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1`. |
 
+## The no-Docker Windows demo will not start
+
+- **"Node.js is not installed" or "too old"**: install the LTS version from
+  <https://nodejs.org>, then close and reopen the window.
+- **"Port 3000/4000/3100 is already in use"**: run *Stop BlissNova demo.bat*,
+  or close the other program using that port.
+- **A window closes or shows an error**: the API, Web and Demo site windows
+  stay open on errors; read the last lines there. Running the start file again
+  is safe.
+- **Start over with fresh demo data**: stop the demo, delete
+  `%LOCALAPPDATA%\BlissNova-demo`, and start again. This removes the local
+  database, the generated password and saved emails.
+- **Build problems after updating**: delete
+  `%LOCALAPPDATA%\BlissNova-demo\build-stamp.txt` to force a clean install and
+  build on the next start.
+
 ## The demo page shows no ads
 
 - **Using an automated or headless browser?** It is filtered as a crawler on

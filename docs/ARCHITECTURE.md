@@ -111,6 +111,23 @@ are excluded as invalid traffic afterwards, the top-up is not recalculated
 automatically. Finance staff can correct it with a manual adjustment, which is
 audited.
 
+## ads.txt and sellers.json
+
+Each publisher's seller id is its organization id. The site's Ad tag tab
+shows the line to add to `https://<site>/ads.txt`:
+
+```
+<ADS_TXT_DOMAIN>, <seller id>, DIRECT
+```
+
+**Check now** fetches the file with the same SSRF-safe client used for
+verification and records the result on the site, which admins see too. The
+result is one of: found, missing, mismatch (wrong id or RESELLER), or error.
+
+`/sellers.json` (IAB Tech Lab 1.0) lists approved publishers that have an
+approved site. A publisher can ask to be confidential in Organization settings,
+and is then listed by seller id only. The ads.txt result does not block serving.
+
 ## Native ads
 
 A native creative has an image, a headline, optional body and call to action,

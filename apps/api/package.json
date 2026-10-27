@@ -33,15 +33,18 @@
     "@fastify/swagger-ui": "^6.1.2",
     "@node-rs/argon2": "^2.0.2",
     "bullmq": "^5.40.0",
+    "embedded-postgres": "18.4.0-beta.17",
     "fastify": "^5.2.0",
     "fastify-plugin": "^6.0.1",
     "image-size": "^2.0.0",
     "ioredis": "^5.4.0",
+    "ioredis-mock": "8.13.1",
     "nodemailer": "^10.2.1",
     "pg": "^8.13.0",
     "zod": "^4.1.0"
   },
   "devDependencies": {
+    "@types/ioredis-mock": "^8.2.8",
     "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.11.0",
     "esbuild": "^0.25.0"

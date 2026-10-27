@@ -27,6 +27,7 @@ const config: NextConfig = {
       { source: '/api/v1/:path*', destination: `${api}/api/v1/:path*` },
       { source: '/sdk/:path*', destination: `${api}/sdk/:path*` },
       { source: '/assets/:path*', destination: `${api}/assets/:path*` },
+      { source: '/sellers.json', destination: `${api}/sellers.json` },
       { source: '/api/docs', destination: `${api}/api/docs` },
       { source: '/api/docs/:path*', destination: `${api}/api/docs/:path*` },
     ];

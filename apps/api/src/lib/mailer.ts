@@ -47,6 +47,22 @@ class LogMailer implements Mailer {
   }
 }
 
+/** Writes each email to a text file so a local demo can read verification links without a mail server. */
+class FileMailer implements Mailer {
+  readonly name = 'file';
+  readonly configured = false;
+  constructor(private dir: string) {}
+  async deliver(m: OutgoingEmail): Promise<DeliveryResult> {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    await mkdir(this.dir, { recursive: true });
+    const id = `${new Date().toISOString().replace(/[:.]/g, '-')}-${Math.random().toString(36).slice(2, 8)}`;
+    const safeTo = m.to.replace(/[^a-zA-Z0-9@._-]/g, '_');
+    await writeFile(join(this.dir, `${id}-${safeTo}.txt`), `From: ${m.fromName} <${m.fromAddress}>\nTo: ${m.to}\nSubject: ${m.subject}\n\n${m.text}\n`, 'utf8');
+    return { status: 'not_configured', provider: this.name, detail: `EMAIL_PROVIDER=file: written to ${this.dir}, not delivered` };
+  }
+}
+
 class DisabledMailer implements Mailer {
   readonly name = 'disabled';
   readonly configured = false;
@@ -61,6 +77,7 @@ export function createMailer(cfg: AppConfig, log: (obj: object, msg: string) => 
     return new SmtpMailer(cfg);
   }
   if (cfg.EMAIL_PROVIDER === 'log') return new LogMailer(log);
+  if (cfg.EMAIL_PROVIDER === 'file') return new FileMailer(cfg.EMAIL_FILE_DIR);
   return new DisabledMailer();
 }
 

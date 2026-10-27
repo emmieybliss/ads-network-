@@ -13,7 +13,7 @@ The simplest production layout is one hostname behind a reverse proxy:
 
 | Path on `https://YOUR_DOMAIN` | Goes to |
 | --- | --- |
-| `/api/v1/*`, `/sdk/*`, `/assets/*`, `/api/docs*`, `/health`, `/ready` | API (port 4000) |
+| `/api/v1/*`, `/sdk/*`, `/assets/*`, `/api/docs*`, `/sellers.json`, `/health`, `/ready` | API (port 4000) |
 | everything else | web (port 3000) |
 
 The web server proxies the API paths too, so routing everything to the web
@@ -43,6 +43,7 @@ NODE_ENV=production
 PUBLIC_SITE_URL=https://YOUR_DOMAIN
 PUBLIC_API_URL=https://YOUR_DOMAIN
 CORS_ORIGINS=https://YOUR_DOMAIN
+ADS_TXT_DOMAIN=YOUR_DOMAIN       # what publishers write in ads.txt; defaults to the PUBLIC_SITE_URL host
 COOKIE_SECURE=true
 TRUST_PROXY=true                 # only when the reverse proxy below is in front
 GEO_COUNTRY_HEADER=              # e.g. cf-ipcountry if your CDN sets one
@@ -108,6 +109,7 @@ server {
   proxy_set_header X-Forwarded-Proto $scheme;
 
   location ~ ^/(api/v1|sdk|assets|api/docs|health|ready)(/|$) { proxy_pass http://127.0.0.1:4000; }
+  location = /sellers.json { proxy_pass http://127.0.0.1:4000; }
   location / { proxy_pass http://127.0.0.1:3000; }
 }
 server { listen 80; server_name YOUR_DOMAIN; return 301 https://$host$request_uri; }

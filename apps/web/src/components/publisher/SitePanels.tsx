@@ -273,3 +273,45 @@ export function TagPanel({ orgId, siteId }: { orgId: string; siteId: string }) {
     </Async>
   );
 }
+
+const ADS_TXT_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = { found: 'success', missing: 'warning', mismatch: 'warning', error: 'danger', unchecked: 'neutral' };
+const ADS_TXT_LABEL: Record<string, string> = { found: 'Line found', missing: 'Line missing', mismatch: 'Line needs fixing', error: 'Could not check', unchecked: 'Not checked yet' };
+
+/** The ads.txt line for this site, and a check that the publisher has added it. */
+export function AdsTxtPanel({ orgId, siteId }: { orgId: string; siteId: string }) {
+  const res = useApi<{ data: any }>(`/orgs/${orgId}/sites/${siteId}/ads-txt`);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function check() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await post<{ data: any }>(`/orgs/${orgId}/sites/${siteId}/ads-txt/check`);
+      res.setData(r);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Card>
+      <CardHeader title="ads.txt" description="Add this line to the ads.txt file at the root of your site. It tells buyers that BlissNova is authorized to sell your ad space, and many buyers skip sites without it."
+        actions={<Button size="sm" variant="secondary" loading={busy} onClick={check}><RefreshCw className="size-4" /> Check now</Button>} />
+      <Async res={res}>
+        {({ data }) => (
+          <div className="space-y-3">
+            <CodeBlock code={data.line} label={`Add to ${data.adsTxtUrl}`} />
+            <p className="flex flex-wrap items-center gap-2 text-sm">
+              <Badge tone={ADS_TXT_TONE[data.status] ?? 'neutral'}>{ADS_TXT_LABEL[data.status] ?? data.status}</Badge>
+              {data.detail && <span className="text-muted">{data.detail}</span>}
+              {data.checkedAt && <span className="text-xs text-muted">Checked {timeAgo(data.checkedAt)}</span>}
+            </p>
+            <p className="text-xs text-muted">Your seller id <code>{data.sellerId}</code> is listed in the network&apos;s <a className="text-primary hover:underline" href={data.sellersJsonUrl} target="_blank" rel="noreferrer">sellers.json</a>. If ads.txt does not exist yet, create a plain-text file with this line.</p>
+            {error && <Alert tone="danger">{error}</Alert>}
+          </div>
+        )}
+      </Async>
+    </Card>
+  );
+}

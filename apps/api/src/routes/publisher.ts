@@ -13,6 +13,7 @@ import { checkVerification, isReservedHostname, newVerificationToken, normalizeD
 import { hit } from '../lib/ratelimit';
 import { notifyStaff } from '../services/notifications';
 import { invalidateServingCache } from '../services/serving';
+import { adsTxtLine, checkAdsTxt, networkDomain } from '../services/adstxt';
 
 const CATEGORIES = ['general', 'news', 'technology', 'business', 'finance', 'lifestyle', 'entertainment', 'sports', 'education', 'health', 'travel', 'food', 'automotive', 'gaming', 'parenting', 'real_estate', 'science', 'other'] as const;
 const language = z.string().trim().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/, 'Use a language code such as en or en-GB');
@@ -63,6 +64,7 @@ export function serializeSite(s: Record<string, any>) {
     siteKey: s.public_key, verifiedAt: s.verified_at, verificationMethod: s.verification_method, verificationScope: s.verification_scope, verificationSimulated: s.verification_simulated,
     description: s.description, language: s.language, country: s.country, reportedMonthlyPageviews: s.reported_monthly_pageviews, trafficSources: s.traffic_sources,
     submittedAt: s.submitted_at, approvedAt: s.approved_at, allowedFormats: s.allowed_formats, revenueShareBps: s.revenue_share_bps, createdAt: s.created_at,
+    adsTxtStatus: s.ads_txt_status, adsTxtCheckedAt: s.ads_txt_checked_at, adsTxtDetail: s.ads_txt_detail,
   };
 }
 
@@ -340,6 +342,38 @@ export async function publisherRoutes(app: FastifyInstance) {
         consentNote: 'By default the tag requests contextual (non-personalized) ads and stores nothing on the visitor\'s device. To allow personalization where you have consent, call window.blissnova.setConsent({ personalized: true }) from your consent tool.',
       },
     };
+  });
+
+  // ---------------------------------------------------------------- ads.txt
+  const adsTxtView = (s: Record<string, any>) => {
+    const domain = networkDomain(config);
+    return {
+      line: adsTxtLine(domain, s.org_id),
+      networkDomain: domain,
+      sellerId: s.org_id,
+      adsTxtUrl: `https://${s.domain}/ads.txt`,
+      sellersJsonUrl: `${config.PUBLIC_SITE_URL}/sellers.json`,
+      status: s.ads_txt_status,
+      checkedAt: s.ads_txt_checked_at,
+      detail: s.ads_txt_detail,
+    };
+  };
+
+  app.get('/orgs/:orgId/sites/:id/ads-txt', { preHandler: requireOrg('site:read', { ...pub, allowSuspended: true }), schema: { tags: ['publisher sites'], params: orgIdParams, description: 'The line this site should list in its ads.txt, and the result of the last check.' } }, async (req) => {
+    const s = await ownSite(req.org!.id, paramsOf(req, orgIdParams).id);
+    return { data: adsTxtView(s) };
+  });
+
+  app.post('/orgs/:orgId/sites/:id/ads-txt/check', { config: { rateLimit: { bucket: 'management', limit: 20 } }, preHandler: requireOrg('site:write', pub), schema: { tags: ['publisher sites'], params: orgIdParams, description: 'Fetch the site\'s /ads.txt now and look for the BlissNova line.' } }, async (req) => {
+    const s = await ownSite(req.org!.id, paramsOf(req, orgIdParams).id);
+    if (!s.verified_at) throw conflict('Verify the site before checking ads.txt');
+    const rl = await hit(app.ctx.redis, `adstxt:host:${s.domain}`, 30, 3600);
+    if (!rl.allowed) throw new AppError(429, 'rate_limited', `Too many ads.txt checks for ${s.domain}. Try again in ${Math.ceil(rl.retryAfterSec / 60)} minutes.`);
+    const r = await checkAdsTxt(s.domain, networkDomain(config), s.org_id, config, app.ctx.verifier.fetch);
+    const row = (await db.query(
+      `UPDATE sites SET ads_txt_status = $2, ads_txt_detail = $3, ads_txt_checked_at = now() WHERE id = $1 RETURNING *`,
+      [s.id, r.status, r.detail.slice(0, 500)])).rows[0];
+    return { data: adsTxtView(row) };
   });
 
   // ---------------------------------------------------------------- ad units

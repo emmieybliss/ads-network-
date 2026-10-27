@@ -12,3 +12,6 @@ dump.rdb
 *.tsbuildinfo
 .env.demo
 acceptance-screenshots/
+
+# Local (no Docker) demo data
+.local-data/

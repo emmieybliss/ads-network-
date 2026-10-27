@@ -111,6 +111,27 @@ export async function staticRoutes(app: FastifyInstance) {
     if (!sdk) return reply.status(503).type('application/javascript').send('/* BlissNova ad tag not built. Run pnpm --filter @blissnova/ad-tag build */');
     return reply.type('application/javascript; charset=utf-8').header('cache-control', 'public, max-age=300, stale-while-revalidate=86400').header('x-content-type-options', 'nosniff').send(sdk);
   }
+  // sellers.json (IAB Tech Lab 1.0): every approved publisher the network sells
+  // for, keyed by the seller id publishers put in their ads.txt. Names and
+  // domains are omitted for publishers who asked to be confidential.
+  app.get('/sellers.json', { schema: { hide: true } }, async (_req, reply) => {
+    const rows = (await app.ctx.db.query(
+      `SELECT o.id, o.name, o.website, o.sellers_json_confidential,
+              (SELECT s.domain FROM sites s WHERE s.org_id = o.id AND s.status = 'approved' ORDER BY s.approved_at LIMIT 1) AS site_domain
+       FROM organizations o
+       WHERE o.type = 'publisher' AND o.status = 'approved' AND EXISTS (SELECT 1 FROM sites s WHERE s.org_id = o.id AND s.status = 'approved')
+       ORDER BY o.created_at`)).rows;
+    const domainOf = (r: Record<string, any>) => {
+      try { return r.website ? new URL(r.website).hostname : r.site_domain; } catch { return r.site_domain; }
+    };
+    return reply.header('cache-control', 'public, max-age=3600').send({
+      version: '1.0',
+      sellers: rows.map((r) => r.sellers_json_confidential
+        ? { seller_id: r.id, seller_type: 'PUBLISHER', is_confidential: 1 }
+        : { seller_id: r.id, seller_type: 'PUBLISHER', name: r.name, domain: domainOf(r) }),
+    });
+  });
+
   app.get('/assets/*', { schema: { hide: true } }, async (req, reply) => {
     const key = (req.params as { '*': string })['*'];
     let data: Buffer | null = null;

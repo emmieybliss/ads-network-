@@ -21,6 +21,8 @@ const updateOrgBody = z.object({
   website: z.url().max(300).nullable().optional(),
   country: z.string().regex(/^[A-Z]{2}$/).nullable().optional(),
   billingEmail: z.email().nullable().optional(),
+  /** Publishers: list only the seller id in sellers.json, not the name and domain. */
+  sellersJsonConfidential: z.boolean().optional(),
 });
 const memberParams = z.object({ orgId: z.uuid(), userId: z.uuid() });
 const roleBody = z.object({ role: z.enum(ORG_ROLES) });
@@ -55,9 +57,10 @@ export async function orgRoutes(app: FastifyInstance) {
     const before = (await db.query('SELECT * FROM organizations WHERE id = $1', [req.org!.id])).rows[0];
     const after = (await db.query(
       `UPDATE organizations SET name = COALESCE($2, name), website = CASE WHEN $3::boolean THEN $4 ELSE website END,
-         country = CASE WHEN $5::boolean THEN $6 ELSE country END, billing_email = CASE WHEN $7::boolean THEN $8 ELSE billing_email END, updated_at = now()
+         country = CASE WHEN $5::boolean THEN $6 ELSE country END, billing_email = CASE WHEN $7::boolean THEN $8 ELSE billing_email END,
+         sellers_json_confidential = COALESCE($9, sellers_json_confidential), updated_at = now()
        WHERE id = $1 RETURNING *`,
-      [req.org!.id, b.name ?? null, b.website !== undefined, b.website ?? null, b.country !== undefined, b.country ?? null, b.billingEmail !== undefined, b.billingEmail ?? null])).rows[0];
+      [req.org!.id, b.name ?? null, b.website !== undefined, b.website ?? null, b.country !== undefined, b.country ?? null, b.billingEmail !== undefined, b.billingEmail ?? null, b.sellersJsonConfidential ?? null])).rows[0];
     await audit(db, req, { action: 'organization.update', resourceType: 'organization', resourceId: req.org!.id, orgId: req.org!.id, before: serializeOrg(before), after: serializeOrg(after) });
     return { data: serializeOrg(after) };
   });

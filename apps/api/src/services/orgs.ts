@@ -29,6 +29,6 @@ export async function createOrganization(ctx: AppContext, req: FastifyRequest, u
 export function serializeOrg(o: Record<string, unknown>) {
   return {
     id: o.id, name: o.name, type: o.type, status: o.status, statusReason: o.status_reason, website: o.website, country: o.country,
-    billingEmail: o.billing_email, currency: o.currency, createdAt: o.created_at,
+    billingEmail: o.billing_email, currency: o.currency, createdAt: o.created_at, sellersJsonConfidential: o.sellers_json_confidential,
   };
 }

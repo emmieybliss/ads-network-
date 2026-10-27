@@ -54,10 +54,17 @@ deployment.
 - [x] Premium-advertisers-only inventory
 - [x] Native ad format: creative editor, review, serving, tag rendering with a "Sponsored · sponsor" line, demo placement
 
+## Network parity (see the comparison doc)
+- [x] ads.txt line per publisher, on-demand check, status for admins; public sellers.json with confidential option
+- [ ] IAB TCF v2.2 and GPP consent signals
+- [ ] Sticky anchor, side rail and interstitial formats with reserved slot space
+- [ ] Automatic in-article placement
+- [ ] Page RPM and per-page earnings reports
+
 ## Verified
 Runs on 27 Oct 2026, in the build container with local PostgreSQL 16 and Redis 7,
 not on the owner's PC:
-- `pnpm test`: 15 files, 346 tests passed
+- `pnpm test`: 16 files, 357 tests passed
 - `scripts/e2e-demo.mjs` passed against the bundled processes and against the Docker Compose stack
 - `scripts/acceptance-ui.mjs` passed against the Docker Compose stack
 - seed: all nine ledger reconciliation checks passed

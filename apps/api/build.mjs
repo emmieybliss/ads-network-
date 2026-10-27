@@ -4,10 +4,10 @@ import { build } from 'esbuild';
 // Bundle the API and the workspace packages it uses into ESM files. The API's
 // own npm dependencies stay external and are installed next to it.
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
-const external = Object.keys(pkg.dependencies ?? {}).filter((d) => !d.startsWith('@blissnova/')).flatMap((d) => [d, `${d}/*`]);
+const external = Object.keys(pkg.dependencies ?? {}).filter((d) => !d.startsWith('@blissnova/')).flatMap((d) => [d, `${d}/*`]).concat('@embedded-postgres/*');
 
 await build({
-  entryPoints: ['src/server.ts', 'src/scripts/create-admin.ts', 'src/scripts/openapi.ts', 'src/scripts/seed.ts', 'src/scripts/migrate.ts'],
+  entryPoints: ['src/server.ts', 'src/local.ts', 'src/scripts/create-admin.ts', 'src/scripts/openapi.ts', 'src/scripts/seed.ts', 'src/scripts/migrate.ts'],
   outdir: 'dist',
   bundle: true,
   platform: 'node',

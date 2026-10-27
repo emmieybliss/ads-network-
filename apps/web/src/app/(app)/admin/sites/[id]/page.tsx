@@ -88,6 +88,7 @@ export default function AdminSite() {
                   ['Reported monthly page views', s.reportedMonthlyPageviews != null ? formatNumber(s.reportedMonthlyPageviews) : '—'], ['Traffic sources', s.trafficSources ?? '—'],
                   ['Policies accepted', s.policyAcceptedAt ? `Version ${s.policyVersion} on ${formatDate(s.policyAcceptedAt, true)}` : 'No'], ['Submitted', s.submittedAt ? formatDate(s.submittedAt, true) : '—'],
                   ['Extra hostnames', s.allowedDomains?.length ? s.allowedDomains.join(', ') : 'None'],
+                  ['ads.txt', s.adsTxtStatus === 'unchecked' ? 'Not checked yet' : `${humanize(s.adsTxtStatus)}${s.adsTxtCheckedAt ? ` (checked ${formatDate(s.adsTxtCheckedAt, true)})` : ''}${s.adsTxtDetail ? `: ${s.adsTxtDetail}` : ''}`],
                 ]} />
               </Card>
               <Card>

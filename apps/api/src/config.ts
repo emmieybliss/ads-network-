@@ -11,6 +11,11 @@ const envSchema = z.object({
   REDIS_URL: z.string().default('redis://localhost:6379'),
   PUBLIC_SITE_URL: z.string().url().default('http://localhost:3000'),
   PUBLIC_API_URL: z.string().url().default('http://localhost:4000'),
+  /**
+   * The network's domain as publishers write it in ads.txt and as buyers see
+   * it in sellers.json. Empty = the host of PUBLIC_SITE_URL.
+   */
+  ADS_TXT_DOMAIN: z.string().trim().toLowerCase().regex(/^$|^[a-z0-9.-]+$/, 'ADS_TXT_DOMAIN must be a bare host name such as example.com').default(''),
   /** Comma-separated origins allowed to call management APIs with credentials (the dashboard). */
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
   TRUST_PROXY: bool(false),
@@ -24,7 +29,9 @@ const envSchema = z.object({
   ENCRYPTION_KEY: z.string().refine((v) => Buffer.from(v, 'base64').length === 32, 'ENCRYPTION_KEY must be 32 bytes base64'),
   TRACKING_TOKEN_KEYS: z.string().min(10),
   STORAGE_DIR: z.string().default('./storage'),
-  EMAIL_PROVIDER: z.enum(['smtp', 'log', 'disabled']).default('log'),
+  EMAIL_PROVIDER: z.enum(['smtp', 'log', 'file', 'disabled']).default('log'),
+  /** EMAIL_PROVIDER=file: folder where each email is written as a .txt file (local demo only). */
+  EMAIL_FILE_DIR: z.string().default('./outbox'),
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().int().optional(),
   SMTP_USER: z.string().optional(),
@@ -90,6 +97,7 @@ export function productionProblems(c: z.infer<typeof envSchema>, corsOrigins: st
   if (LOCAL_URL.test(c.PUBLIC_SITE_URL) || LOCAL_URL.test(c.PUBLIC_API_URL)) p.push('PUBLIC_SITE_URL and PUBLIC_API_URL must be your public HTTPS addresses, not localhost');
   if (!c.PUBLIC_SITE_URL.startsWith('https://') || !c.PUBLIC_API_URL.startsWith('https://')) p.push('PUBLIC_SITE_URL and PUBLIC_API_URL must use https://');
   if (corsOrigins.some((o) => LOCAL_URL.test(o) || o === '*')) p.push('CORS_ORIGINS must list your production dashboard origin only');
+  if (c.EMAIL_PROVIDER === 'file') p.push('EMAIL_PROVIDER=file only writes emails to a local folder; configure smtp (or disabled)');
   if (c.EMAIL_PROVIDER === 'log') p.push('EMAIL_PROVIDER=log writes verification and reset links to the log; configure smtp (or disabled)');
   if (c.EMAIL_PROVIDER === 'smtp' && !c.SMTP_HOST) p.push('EMAIL_PROVIDER=smtp needs SMTP_HOST');
   return p;

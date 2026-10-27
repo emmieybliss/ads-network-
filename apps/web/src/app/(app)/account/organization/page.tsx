@@ -1,6 +1,6 @@
 'use client';
 import { useState, type FormEvent } from 'react';
-import { Alert, Async, Button, Card, CardHeader, DefinitionList, Field, Input, PageHeader, StatusBadge } from '@/components/ui';
+import { Alert, Async, Button, Card, CardHeader, Checkbox, DefinitionList, Field, Input, PageHeader, StatusBadge } from '@/components/ui';
 import { useApi } from '@/lib/hooks';
 import { useOrg, useSession } from '@/lib/session';
 import { errorMessage, patch } from '@/lib/api';
@@ -21,13 +21,13 @@ export default function Organization() {
 }
 
 function OrgForm({ data, editable, onSaved }: { data: any; editable: boolean; onSaved: (d: any) => void }) {
-  const [f, setF] = useState({ name: data.name ?? '', website: data.website ?? '', country: data.country ?? '', billingEmail: data.billingEmail ?? '' });
+  const [f, setF] = useState({ name: data.name ?? '', website: data.website ?? '', country: data.country ?? '', billingEmail: data.billingEmail ?? '', sellersJsonConfidential: !!data.sellersJsonConfidential });
   const [msg, setMsg] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null);
   async function save(e: FormEvent) {
     e.preventDefault();
     setMsg(null);
     try {
-      const r = await patch<{ data: any }>(`/orgs/${data.id}`, { name: f.name, website: f.website || null, country: f.country || null, billingEmail: f.billingEmail || null });
+      const r = await patch<{ data: any }>(`/orgs/${data.id}`, { name: f.name, website: f.website || null, country: f.country || null, billingEmail: f.billingEmail || null, ...(data.type === 'publisher' ? { sellersJsonConfidential: f.sellersJsonConfidential } : {}) });
       onSaved(r.data);
       setMsg({ tone: 'success', text: 'Saved.' });
     } catch (err) {
@@ -44,6 +44,7 @@ function OrgForm({ data, editable, onSaved }: { data: any; editable: boolean; on
           <Field label="Website" htmlFor="ow"><Input id="ow" type="url" disabled={!editable} value={f.website} onChange={(e) => setF({ ...f, website: e.target.value })} placeholder="https://" /></Field>
           <Field label="Country" htmlFor="oc" hint="Two-letter code"><Input id="oc" maxLength={2} disabled={!editable} value={f.country} onChange={(e) => setF({ ...f, country: e.target.value.toUpperCase() })} /></Field>
           <Field label="Billing email" htmlFor="ob" className="sm:col-span-2"><Input id="ob" type="email" disabled={!editable} value={f.billingEmail} onChange={(e) => setF({ ...f, billingEmail: e.target.value })} /></Field>
+          {data.type === 'publisher' && <div className="sm:col-span-2"><Checkbox label="Keep our name and domain out of sellers.json" hint="Buyers then see only your seller id. Some buyers bid less, or not at all, on confidential sellers." checked={f.sellersJsonConfidential} disabled={!editable} onChange={(v) => setF({ ...f, sellersJsonConfidential: v })} /></div>}
           {editable && <div><Button type="submit">Save</Button></div>}
         </form>
       </Card>

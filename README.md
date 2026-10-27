@@ -11,6 +11,30 @@ include a `<script>` tag can show ads.
 > **No public domain yet.** Every public address comes from environment
 > variables. The local demo runs entirely on `localhost` and needs no domain.
 
+## Run the local demo on Windows without Docker (recommended)
+
+This works like the eSIM demo: double-click a file and it opens small windows.
+It needs only [Node.js](https://nodejs.org) 20 or newer. No Docker, WSL,
+PostgreSQL or Redis.
+
+1. Double-click **Start BlissNova demo.bat** in the project folder. The first
+   start installs packages and builds everything, which takes several minutes.
+   Later starts take seconds, and it rebuilds by itself after a `git pull`.
+2. Three minimized windows open (API, Web, Demo site) and the browser opens
+   <http://localhost:3000> and the demo publisher page <http://localhost:3100>.
+   The demo logins and the generated password are printed in the start window.
+3. Double-click **Stop BlissNova demo.bat** to stop. Your data is kept.
+
+How it works: `apps/api/dist/local.js` starts PostgreSQL from the
+`embedded-postgres` package, keeps Redis-style counters in memory, runs the
+worker's scheduled jobs on timers, and writes emails as text files. Data,
+generated secrets and emails live in `%LOCALAPPDATA%\BlissNova-demo` (outside
+OneDrive). Delete that folder to start over with fresh demo data. This runner
+refuses to start with `NODE_ENV=production`; it is for the demo only.
+
+On macOS or Linux: `pnpm install && pnpm --filter @blissnova/api build && pnpm demo:local`
+starts the API the same way (then run the web app and demo site as below).
+
 ## Run the local demo (Docker)
 
 Requirements: Docker Desktop (Windows/macOS) or Docker Engine with Compose v2.
