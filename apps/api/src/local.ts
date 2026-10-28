@@ -67,7 +67,10 @@ if (process.argv[2] === 'stop') {
 }
 
 const { default: EmbeddedPostgres } = await import('embedded-postgres');
-const pg = new EmbeddedPostgres({ databaseDir: pgDir, user: 'blissnova', password: secrets.pgPassword, port: pgPort, persistent: true, onLog: () => undefined });
+// Postgres output is kept quiet but remembered, so a failed start can say why.
+const pgLog: string[] = [];
+const keepLog = (m: unknown) => { pgLog.push(String(m).trim()); if (pgLog.length > 40) pgLog.shift(); };
+const pg = new EmbeddedPostgres({ databaseDir: pgDir, user: 'blissnova', password: secrets.pgPassword, port: pgPort, persistent: true, onLog: keepLog, onError: keepLog });
 const firstRun = !existsSync(join(pgDir, 'PG_VERSION'));
 if (firstRun) {
   console.log('First start: creating the local database (this takes a few seconds)...');
@@ -78,7 +81,16 @@ if (existsSync(join(pgDir, 'postmaster.pid'))) {
   const { pg_ctl } = await pgBinaries();
   try { execFileSync(pg_ctl, ['stop', '-D', pgDir, '-m', 'fast', '-w'], { stdio: 'ignore' }); } catch { /* not running */ }
 }
-await pg.start();
+try {
+  await pg.start();
+} catch (err) {
+  console.error('\nThe built-in database did not start.');
+  if (err) console.error(String((err as Error).message ?? err));
+  if (pgLog.length) console.error(`Database messages:\n  ${pgLog.filter(Boolean).slice(-15).join('\n  ')}`);
+  console.error(`\nCommon causes: another BlissNova API window is still open, or something else uses port ${pgPort}.`);
+  console.error('Run "Stop BlissNova demo", then start again. Your demo data is kept in', dataDir);
+  process.exit(1);
+}
 if (firstRun) await pg.createDatabase('blissnova');
 
 const site = process.env.PUBLIC_SITE_URL ?? 'http://localhost:3000';
