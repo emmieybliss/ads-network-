@@ -3,7 +3,7 @@ import type { PoolClient } from 'pg';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { balance, requestPayout } from '@blissnova/billing';
-import { toMicros } from '@blissnova/shared';
+import { toMicros, type PlatformSettings } from '@blissnova/shared';
 import { audit } from '../lib/audit';
 import { AppError, badRequest, conflict, notFound } from '../lib/errors';
 import { bodyOf, moneyString, orgIdParams, orgParams, paramsOf } from '../lib/http';
@@ -39,28 +39,35 @@ const submitBody = z.object({
   policyVersion: z.string().min(1).max(40),
   acceptPolicies: z.literal(true, { error: 'You must accept the publisher policies' }),
 });
-export const UNIT_DISPLAYS = ['inline', 'anchor', 'rail_left', 'rail_right', 'interstitial'] as const;
+export const UNIT_DISPLAYS = ['inline', 'anchor', 'rail_left', 'rail_right', 'interstitial', 'popup', 'popunder'] as const;
+const UNIT_FORMATS = ['image', 'text', 'native', 'pop'] as const;
+export const isPop = (display: string | null | undefined) => display === 'popup' || display === 'popunder';
 const unitBody = z.object({
   key: z.string().regex(/^[a-z0-9][a-z0-9_-]{1,63}$/, 'Use lowercase letters, numbers, hyphens and underscores'),
   name: z.string().trim().min(1).max(120),
-  formats: z.array(z.enum(['image', 'text', 'native'])).min(1).default(['image', 'text']),
+  formats: z.array(z.enum(UNIT_FORMATS)).min(1).default(['image', 'text']),
   width: z.number().int().min(1).max(2000).nullable().optional(),
   height: z.number().int().min(1).max(2000).nullable().optional(),
   responsive: z.boolean().default(true),
   position: z.enum(['header', 'sidebar', 'in_content', 'footer', 'other']).default('in_content'),
   display: z.enum(UNIT_DISPLAYS).default('inline'),
   noFill: z.enum(['collapse', 'keep_space']).default('collapse'),
+  /** Pop placements only: most pops per visitor per day, and least minutes between two. */
+  popMaxPerDay: z.number().int().min(1).max(20).default(1),
+  popMinutesBetween: z.number().int().min(1).max(1440).default(60),
 });
 // No defaults here: a field left out of a PATCH must keep its stored value.
 const unitPatch = z.object({
   name: z.string().trim().min(1).max(120).optional(),
-  formats: z.array(z.enum(['image', 'text', 'native'])).min(1).optional(),
+  formats: z.array(z.enum(UNIT_FORMATS)).min(1).optional(),
   width: z.number().int().min(1).max(2000).nullable().optional(),
   height: z.number().int().min(1).max(2000).nullable().optional(),
   responsive: z.boolean().optional(),
   position: z.enum(['header', 'sidebar', 'in_content', 'footer', 'other']).optional(),
   display: z.enum(UNIT_DISPLAYS).optional(),
   noFill: z.enum(['collapse', 'keep_space']).optional(),
+  popMaxPerDay: z.number().int().min(1).max(20).optional(),
+  popMinutesBetween: z.number().int().min(1).max(1440).optional(),
 });
 
 /** Size rules for placements that sit over the page, so they cannot cover most of it. */
@@ -68,6 +75,21 @@ function displayProblem(display: string, width: number | null | undefined, heigh
   if (display === 'anchor' && height && height > 120) return 'An anchor placement can be at most 120 px tall';
   if ((display === 'rail_left' || display === 'rail_right') && width && width > 300) return 'A side rail can be at most 300 px wide';
   return null;
+}
+
+/**
+ * The formats a placement may take. A pop placement only ever opens a pop
+ * (a landing page), and a pop never fills an in-page slot. Returns the
+ * formats to store, or throws when the network has the pop type turned off.
+ */
+function placementFormats(display: string, formats: string[], pop: PlatformSettings['popAds']): string[] {
+  if (isPop(display)) {
+    if (!pop.enabled) throw badRequest('Pop-up and pop-under placements are turned off on this network');
+    if (display === 'popunder' && !pop.popunderEnabled) throw badRequest('Pop-under placements are turned off on this network. A pop-up placement may still be available.');
+    return ['pop'];
+  }
+  if (formats.includes('pop')) throw badRequest('Only pop-up and pop-under placements take pop ads');
+  return formats;
 }
 const siteUnitParams = z.object({ orgId: z.uuid(), siteId: z.uuid() });
 const payoutProfileBody = z.object({ method: z.enum(['bank_transfer', 'paypal', 'other']), displayLabel: z.string().trim().min(3).max(120) });
@@ -91,7 +113,7 @@ export function serializeSite(s: Record<string, any>) {
 /**
  * The container a publisher pastes. Inline slots reserve their height up front
  * (fixed size, or min-height for responsive ones) so the page does not jump
- * when the ad arrives. Anchor, rail and interstitial slots take no space.
+ * when the ad arrives. Anchor, rail, interstitial and pop slots take no space.
  */
 export function slotContainer(key: string, u?: Record<string, any>, withId = true): string {
   const display = u?.display ?? 'inline';
@@ -103,7 +125,7 @@ export function slotContainer(key: string, u?: Record<string, any>, withId = tru
 }
 
 export function serializeUnit(u: Record<string, any>) {
-  return { id: u.id, siteId: u.site_id, key: u.key, name: u.name, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, position: u.position, display: u.display, noFill: u.no_fill, status: u.status, adminBlocked: u.admin_blocked, createdAt: u.created_at };
+  return { id: u.id, siteId: u.site_id, key: u.key, name: u.name, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, position: u.position, display: u.display, noFill: u.no_fill, popMaxPerDay: u.pop_max_per_day, popMinutesBetween: u.pop_minutes_between, status: u.status, adminBlocked: u.admin_blocked, createdAt: u.created_at };
 }
 
 export async function publisherRoutes(app: FastifyInstance) {
@@ -438,7 +460,7 @@ export async function publisherRoutes(app: FastifyInstance) {
     if (b.unitId) {
       const u = (await db.query(`SELECT display, status FROM ad_units WHERE id = $1 AND site_id = $2`, [b.unitId, s.id])).rows[0];
       if (!u || u.status === 'archived') throw badRequest('That placement does not belong to this site');
-      if (u.display !== 'inline') throw badRequest('Automatic ads need an in-page placement, not an anchor, rail or interstitial');
+      if (u.display !== 'inline') throw badRequest('Automatic ads need an in-page placement, not an anchor, rail, interstitial or pop');
     }
     const row = (await db.query(
       `UPDATE sites SET auto_ads_enabled = $2, auto_ads_unit_id = $3, auto_ads_max = $4, auto_ads_spacing = $5, auto_ads_first_after = $6, auto_ads_selector = $7, updated_at = now() WHERE id = $1 RETURNING *`,
@@ -459,14 +481,17 @@ export async function publisherRoutes(app: FastifyInstance) {
     const { siteId } = paramsOf(req, siteUnitParams);
     const s = await ownSite(req.org!.id, siteId);
     const b = bodyOf(req, unitBody);
+    const formats = placementFormats(b.display, b.formats, (await app.ctx.settings.get()).popAds);
+    const pop = isPop(b.display);
+    if (pop) { b.width = null; b.height = null; }
     if ((b.width && !b.height) || (!b.width && b.height)) throw badRequest('Provide both width and height, or neither');
-    if (b.formats.includes('image') && !b.width && !b.responsive) throw badRequest('Fixed-size image placements need dimensions');
-    const bad = b.formats.filter((f) => !s.allowed_formats.includes(f));
+    if (formats.includes('image') && !b.width && !b.responsive) throw badRequest('Fixed-size image placements need dimensions');
+    const bad = formats.filter((f) => !s.allowed_formats.includes(f));
     if (bad.length) throw badRequest(`This site is not approved for ${bad.join(', ')} ads`);
     const dp = displayProblem(b.display, b.width, b.height);
     if (dp) throw badRequest(dp);
-    const row = (await db.query(`INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position, display, no_fill) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [siteId, b.key, b.name, b.formats, b.width ?? null, b.height ?? null, b.responsive, b.position, b.display, b.noFill]).catch((err: { code?: string }) => {
+    const row = (await db.query(`INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position, display, no_fill, pop_max_per_day, pop_minutes_between) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+      [siteId, b.key, b.name, formats, b.width ?? null, b.height ?? null, b.responsive, b.position, b.display, b.noFill, b.popMaxPerDay, b.popMinutesBetween]).catch((err: { code?: string }) => {
       if (err.code === '23505') throw conflict('A placement with this key already exists on this site');
       throw err;
     })).rows[0];
@@ -484,12 +509,27 @@ export async function publisherRoutes(app: FastifyInstance) {
   app.patch('/orgs/:orgId/units/:id', { config: mgmt, preHandler: requireOrg('unit:write', pub), schema: { tags: ['placements'], params: orgIdParams, body: unitPatch } }, async (req) => {
     const u = await ownUnit(req.org!.id, paramsOf(req, orgIdParams).id);
     const b = bodyOf(req, unitPatch);
-    const dp = displayProblem(b.display ?? u.display, b.width !== undefined ? b.width : u.width, b.width !== undefined ? b.height : u.height);
+    const display = b.display ?? u.display;
+    const leavingPop = isPop(u.display) && !isPop(display);
+    if (leavingPop && !b.formats) throw badRequest('Choose the ad formats this placement takes now that it is not a pop placement');
+    // A pop placement can still be renamed or re-capped while pops are switched off network-wide; the ad server just stops serving it.
+    const changedType = display !== u.display;
+    const popSettings = (await app.ctx.settings.get()).popAds;
+    const formats = isPop(display) ? (changedType ? placementFormats(display, [], popSettings) : null)
+      : b.formats || changedType ? placementFormats(display, b.formats ?? u.formats, popSettings) : null;
+    if (formats) {
+      const site = (await db.query('SELECT allowed_formats FROM sites WHERE id = $1', [u.site_id])).rows[0];
+      const bad = formats.filter((f) => !site.allowed_formats.includes(f));
+      if (bad.length) throw badRequest(`This site is not approved for ${bad.join(', ')} ads`);
+    }
+    if (isPop(display)) { b.width = null; b.height = null; }
+    const dp = displayProblem(display, b.width !== undefined ? b.width : u.width, b.width !== undefined ? b.height : u.height);
     if (dp) throw badRequest(dp);
     const after = (await db.query(
       `UPDATE ad_units SET name = COALESCE($2, name), formats = COALESCE($3, formats), width = CASE WHEN $4::boolean THEN $5 ELSE width END, height = CASE WHEN $4::boolean THEN $6 ELSE height END,
-         responsive = COALESCE($7, responsive), position = COALESCE($8, position), display = COALESCE($9, display), no_fill = COALESCE($10, no_fill), updated_at = now() WHERE id = $1 RETURNING *`,
-      [u.id, b.name ?? null, b.formats ?? null, b.width !== undefined, b.width ?? null, b.height ?? null, b.responsive ?? null, b.position ?? null, b.display ?? null, b.noFill ?? null])).rows[0];
+         responsive = COALESCE($7, responsive), position = COALESCE($8, position), display = COALESCE($9, display), no_fill = COALESCE($10, no_fill),
+         pop_max_per_day = COALESCE($11, pop_max_per_day), pop_minutes_between = COALESCE($12, pop_minutes_between), updated_at = now() WHERE id = $1 RETURNING *`,
+      [u.id, b.name ?? null, formats, b.width !== undefined, b.width ?? null, b.height ?? null, b.responsive ?? null, b.position ?? null, b.display ?? null, b.noFill ?? null, b.popMaxPerDay ?? null, b.popMinutesBetween ?? null])).rows[0];
     await audit(db, req, { action: 'unit.update', resourceType: 'ad_unit', resourceId: u.id, orgId: req.org!.id, before: serializeUnit(u), after: serializeUnit(after) });
     invalidateServingCache(app.ctx);
     return { data: serializeUnit(after) };

@@ -16,7 +16,7 @@ import { invalidateServingCache } from '../services/serving';
 const listQuery = pageQuery.extend({ status: z.string().max(40).optional() });
 const creativeBody = z.object({
   name: z.string().trim().min(1).max(160),
-  format: z.enum(['image', 'text', 'native']),
+  format: z.enum(['image', 'text', 'native', 'pop']),
   headline: z.string().trim().min(1).max(90).optional(),
   body: z.string().trim().max(200).optional(),
   cta: z.string().trim().max(30).optional(),
@@ -85,6 +85,7 @@ export async function advertiserRoutes(app: FastifyInstance) {
       const locked = (await c.query('SELECT status FROM campaigns WHERE id = $1 FOR UPDATE', [id])).rows[0];
       if (['completed', 'archived', 'suspended', 'pending_approval'].includes(locked.status)) throw conflict(`A ${locked.status.replace('_', ' ')} campaign cannot be edited`);
       if (patch.pricingModel && patch.pricingModel !== before.pricingModel && before.status !== 'draft' && before.status !== 'rejected') throw conflict('The pricing model can only change before approval');
+      if (patch.pricingModel === 'cpc' && (await c.query(`SELECT 1 FROM creatives WHERE campaign_id = $1 AND format = 'pop' AND status <> 'archived' LIMIT 1`, [id])).rowCount) throw conflict('This campaign has pop ads, which are sold per thousand pops. Archive them before switching to CPC.');
       const merged: CampaignInput = {
         name: patch.name ?? before.name,
         pricingModel: patch.pricingModel ?? before.pricingModel,
@@ -230,7 +231,7 @@ export async function advertiserRoutes(app: FastifyInstance) {
     return { data: rows.map((r) => serializeCreative(r, r.storage_key ? app.ctx.storage.publicUrl(r.storage_key) : null)) };
   });
 
-  async function validateCreativeInput(orgId: string, format: 'image' | 'text' | 'native', b: Partial<z.infer<typeof creativeBody>>) {
+  async function validateCreativeInput(orgId: string, format: 'image' | 'text' | 'native' | 'pop', b: Partial<z.infer<typeof creativeBody>>) {
     const s = await app.ctx.settings.get();
     if (!s.creatives.allowedFormats.includes(format)) throw badRequest(`${format} creatives are not currently accepted`);
     const destination = b.destinationUrl !== undefined ? validateDestinationUrl(b.destinationUrl, s, await blockedDomains(), !app.ctx.config.isProd && app.ctx.config.NODE_ENV === 'development') : undefined;
@@ -246,13 +247,16 @@ export async function advertiserRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const { id } = paramsOf(req, orgIdParams);
     const b = bodyOf(req, creativeBody);
-    const camp = (await db.query('SELECT status FROM campaigns WHERE id = $1 AND org_id = $2', [id, req.org!.id])).rows[0];
+    const camp = (await db.query('SELECT status, pricing_model FROM campaigns WHERE id = $1 AND org_id = $2', [id, req.org!.id])).rows[0];
     if (!camp) throw notFound();
     if (['archived', 'completed'].includes(camp.status)) throw conflict('Creatives cannot be added to this campaign');
     const { destination, asset } = await validateCreativeInput(req.org!.id, b.format, b);
     if (b.format === 'image' && !asset) throw badRequest('Image creatives need an uploaded image');
     if (b.format === 'text' && !b.headline) throw badRequest('Text creatives need a headline');
     if (b.format === 'native' && (!asset || !b.headline || !b.sponsorName)) throw badRequest('Native ads need an image, a headline and the sponsor name shown to readers');
+    // A pop is the landing page itself, so there is no click to charge for: pops are bought per thousand.
+    if (b.format === 'pop' && camp.pricing_model === 'cpc') throw badRequest('Pop ads are sold per thousand pops. Use a CPM or flat-rate campaign.');
+    if (b.format === 'pop' && (asset || b.sponsorName)) throw badRequest('A pop ad is a landing page only; it has no image or sponsor line');
     const status = camp.status === 'draft' || camp.status === 'rejected' ? 'draft' : 'pending_review';
     const row = await tx(app.ctx, async (c) => {
       const cr = (await c.query(

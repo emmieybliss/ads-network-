@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { balance } from '@blissnova/billing';
-import { formatMoney, toMicros, MICROS_PER_MINOR } from '@blissnova/shared';
+import { formatMicros, formatMoney, toMicros, MICROS_PER_MINOR } from '@blissnova/shared';
 import { audit } from '../lib/audit';
 import { badRequest, conflict, notFound } from '../lib/errors';
 import { bodyOf, idParams, moneyString, orgIdParams, orgParams, paramsOf } from '../lib/http';
@@ -29,7 +29,8 @@ export async function billingRoutes(app: FastifyInstance) {
     const pending = (await db.query<{ t: string }>(`SELECT COALESCE(sum(amount_micros), 0)::text AS t FROM payments WHERE org_id = $1 AND status = 'pending'`, [org.id])).rows[0]!.t;
     const spend = (await db.query<{ t: string; m: string }>(`SELECT COALESCE(sum(spent_micros), 0)::text AS t, '0' AS m FROM campaigns WHERE org_id = $1`, [org.id])).rows[0]!.t;
     const providers = ctx.payments.list().map((p) => p.status()).filter((p) => p.configured);
-    return { data: { currency: org.currency, availableMicros: wallet.toString(), reservedMicros: reserved, pendingPaymentsMicros: pending, lifetimeSpendMicros: spend, providers } };
+    const s = await ctx.settings.get();
+    return { data: { currency: org.currency, availableMicros: wallet.toString(), reservedMicros: reserved, pendingPaymentsMicros: pending, lifetimeSpendMicros: spend, minDepositMicros: s.pricing.minDepositMicros, providers } };
   });
 
   app.get('/orgs/:orgId/billing/payments', { preHandler: requireOrg('billing:read', { ...adv, allowSuspended: true }), schema: { tags: ['billing'], params: orgParams } }, async (req) => {
@@ -47,7 +48,9 @@ export async function billingRoutes(app: FastifyInstance) {
     const amount = toMicros(b.amount);
     if (amount % MICROS_PER_MINOR !== 0n) throw badRequest('Enter an amount with at most two decimal places');
     const s = await ctx.settings.get();
-    if (amount < BigInt(s.pricing.minCampaignBudgetMicros) / 10n || amount > 1_000_000n * 1_000_000n) throw badRequest('Amount is outside the allowed range');
+    const minimum = BigInt(s.pricing.minDepositMicros);
+    if (amount < minimum) throw badRequest(`The minimum deposit is ${req.org!.currency === 'USD' ? '$' : `${req.org!.currency} `}${formatMicros(minimum)}`);
+    if (amount > 1_000_000n * 1_000_000n) throw badRequest('Amount is outside the allowed range');
     const idem = `${req.org!.id}:${key}`;
     const existing = (await db.query('SELECT * FROM payments WHERE idempotency_key = $1', [idem])).rows[0];
     if (existing) return { data: existing };
