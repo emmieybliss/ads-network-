@@ -45,6 +45,14 @@ export const settingsSchema = z.object({
     defaultRevenueShareBps: z.number().int().min(0).max(10000).default(7000),
     earningsHoldDays: z.number().int().min(0).max(120).default(30),
     minimumPayoutMicros: z.string().regex(/^\d+$/).default('50000000'),
+    /** Payout methods publishers may choose. */
+    payoutMethods: z.array(z.enum(['paypal', 'bank_transfer', 'crypto'])).min(1).default(['paypal', 'bank_transfer', 'crypto']),
+    /**
+     * Day of the month (UTC) when payout requests are raised automatically for
+     * publishers who opted in and whose available balance reaches the minimum.
+     * 0 turns automatic requests off. Staff still approve every payout.
+     */
+    autoPayoutDay: z.number().int().min(0).max(28).default(21),
   }).prefault({}),
   verification: z.object({
     /** How long a verification challenge stays valid before a new token must be issued. */

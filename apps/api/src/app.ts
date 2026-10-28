@@ -20,7 +20,8 @@ import { LocalStorage } from './lib/storage';
 import { createQueues } from './lib/queue';
 import { hit } from './lib/ratelimit';
 import { authPlugin } from './plugins/auth';
-import { PaymentProviderRegistry } from './services/payments/registry';
+import { PaymentProviderRegistry, paypalClientFor } from './services/payments/registry';
+import { PayoutProviderRegistry } from './services/payouts/registry';
 import { registerRoutes } from './routes';
 
 declare module 'fastify' {
@@ -59,13 +60,15 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   const db = opts.overrides?.db ?? createPool(config.DATABASE_URL);
   const redis = opts.overrides?.redis ?? new Redis(config.REDIS_URL, { maxRetriesPerRequest: null, lazyConnect: false });
   const queues = createQueues(redis, config.EVENT_PROCESSING === 'queue');
+  const paypal = paypalClientFor(config);
   const ctx: AppContext = {
     config, db, redis, queues,
     settings: new SettingsService(db),
     mailer: opts.overrides?.mailer ?? createMailer(config, (o, m) => app.log.info(o, m)),
     storage: new LocalStorage(config.STORAGE_DIR, config.PUBLIC_API_URL),
     tokens: parseKeyring(config.TRACKING_TOKEN_KEYS),
-    payments: new PaymentProviderRegistry(config),
+    payments: new PaymentProviderRegistry(config, paypal),
+    payouts: new PayoutProviderRegistry(config, paypal),
     verifier: opts.overrides?.verifier ?? {},
     log: app.log,
   };

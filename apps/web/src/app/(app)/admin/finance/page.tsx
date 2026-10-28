@@ -5,7 +5,7 @@ import { Alert, Async, Badge, Button, Card, CardHeader, Field, Input, PageHeader
 import { AdminTable, ReasonAction, SimpleTable } from '@/components/admin/kit';
 import { useApi } from '@/lib/hooks';
 import { useSession } from '@/lib/session';
-import { errorMessage, patch, post, qs } from '@/lib/api';
+import { errorMessage, idempotencyKey, patch, post, qs } from '@/lib/api';
 import { formatDate, formatMicros, humanize, isoDay, timeAgo } from '@/lib/format';
 
 function Summary() {
@@ -53,7 +53,9 @@ function Payments() {
         <span className="flex gap-1">
           {r.status === 'pending' && r.provider === 'manual' && <ReasonAction label="Confirm received" title="Confirm bank transfer received" path="" onDone={() => setK((x) => x + 1)} description="Only confirm after the funds are visible in the bank account. Enter the bank reference in the next step." run={async (reason) => { const ref = window.prompt('Bank or provider reference for this transfer'); if (!ref) throw new Error('A reference is required'); await post(`/admin/finance/payments/${r.id}/confirm`, { reason, providerRef: ref }); }} />}
           {r.status === 'pending' && <ReasonAction label="Mark failed" title="Mark payment failed" path={`/admin/finance/payments/${r.id}/fail`} onDone={() => setK((x) => x + 1)} />}
-          {['succeeded', 'partially_refunded'].includes(r.status) && <ReasonAction label="Record refund" title="Record a refund" path="" onDone={() => setK((x) => x + 1)} description="Record a refund already issued through the provider or bank. It debits the advertiser balance." run={async (reason) => { const amount = window.prompt('Refund amount (for example 25.00)'); if (!amount) throw new Error('An amount is required'); await post(`/admin/finance/payments/${r.id}/refund`, { amount, reason }); }} />}
+          {['succeeded', 'partially_refunded'].includes(r.status) && <ReasonAction label={['stripe', 'paypal'].includes(r.provider) ? 'Refund' : 'Record refund'} title={['stripe', 'paypal'].includes(r.provider) ? `Refund through ${r.provider === 'stripe' ? 'Stripe' : 'PayPal'}` : 'Record a refund'} path="" onDone={() => setK((x) => x + 1)}
+            description={['stripe', 'paypal'].includes(r.provider) ? 'The money is sent back to the advertiser’s card or PayPal account by the provider, then their balance is debited.' : 'Record a refund already issued by bank transfer. It debits the advertiser balance.'}
+            run={async (reason) => { const amount = window.prompt('Refund amount (for example 25.00)'); if (!amount) throw new Error('An amount is required'); await post(`/admin/finance/payments/${r.id}/refund`, { amount, reason }, { 'Idempotency-Key': idempotencyKey() }); }} />}
         </span>
       ) },
     ]} />
@@ -80,7 +82,7 @@ function Adjustment() {
   async function submit(e: FormEvent) {
     e.preventDefault();
     try {
-      await post('/admin/finance/adjustments', f);
+      await post('/admin/finance/adjustments', f, { 'Idempotency-Key': idempotencyKey() });
       setMsg({ tone: 'success', text: 'Adjustment recorded as a new ledger transaction.' });
       setF({ ...f, amount: '', reason: '' });
     } catch (err) {
