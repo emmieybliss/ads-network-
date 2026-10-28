@@ -3256,6 +3256,7 @@
         "tags": [
           "earnings"
         ],
+        "description": "The saved payout method, masked. Full details are never returned.",
         "parameters": [
           {
             "schema": {
@@ -3278,6 +3279,7 @@
         "tags": [
           "earnings"
         ],
+        "description": "Save the payout method. Details are encrypted at rest; payouts already requested keep the destination they were requested with.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3285,23 +3287,177 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "method": {
-                    "type": "string",
-                    "enum": [
-                      "bank_transfer",
-                      "paypal",
-                      "other"
+                  "details": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "type": "string",
+                            "enum": [
+                              "paypal"
+                            ]
+                          },
+                          "email": {
+                            "type": "string",
+                            "maxLength": 254,
+                            "format": "email",
+                            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+                          }
+                        },
+                        "required": [
+                          "method",
+                          "email"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "type": "string",
+                            "enum": [
+                              "bank_transfer"
+                            ]
+                          },
+                          "accountHolder": {
+                            "type": "string",
+                            "minLength": 2,
+                            "maxLength": 120
+                          },
+                          "bankName": {
+                            "type": "string",
+                            "minLength": 2,
+                            "maxLength": 120
+                          },
+                          "country": {
+                            "type": "string",
+                            "pattern": "^[A-Z]{2}$"
+                          },
+                          "iban": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "string",
+                                "enum": [
+                                  ""
+                                ]
+                              }
+                            ]
+                          },
+                          "accountNumber": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "string",
+                                "enum": [
+                                  ""
+                                ]
+                              }
+                            ]
+                          },
+                          "routingNumber": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "string",
+                                "enum": [
+                                  ""
+                                ]
+                              }
+                            ]
+                          },
+                          "swift": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "string",
+                                "enum": [
+                                  ""
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "method",
+                          "accountHolder",
+                          "bankName",
+                          "country"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "type": "string",
+                            "enum": [
+                              "crypto"
+                            ]
+                          },
+                          "asset": {
+                            "type": "string",
+                            "enum": [
+                              "USDT",
+                              "USDC",
+                              "BTC"
+                            ]
+                          },
+                          "network": {
+                            "type": "string",
+                            "enum": [
+                              "tron",
+                              "ethereum",
+                              "bsc",
+                              "polygon",
+                              "base",
+                              "solana",
+                              "bitcoin"
+                            ]
+                          },
+                          "address": {
+                            "type": "string",
+                            "minLength": 20,
+                            "maxLength": 100
+                          },
+                          "memo": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 64
+                              },
+                              {
+                                "type": "string",
+                                "enum": [
+                                  ""
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "method",
+                          "asset",
+                          "network",
+                          "address"
+                        ]
+                      }
                     ]
                   },
-                  "displayLabel": {
-                    "type": "string",
-                    "minLength": 3,
-                    "maxLength": 120
+                  "autoPayout": {
+                    "default": false,
+                    "type": "boolean"
                   }
                 },
                 "required": [
-                  "method",
-                  "displayLabel"
+                  "details"
                 ]
               }
             }
@@ -3936,6 +4092,41 @@
             },
             "in": "path",
             "name": "orgId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{orgId}/billing/payments/{id}/return": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "description": "Called when the advertiser comes back from a provider checkout that needs a server-side capture (PayPal). The result comes from the provider API, never from the browser.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "orgId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "id",
             "required": true
           }
         ],
@@ -8354,6 +8545,160 @@
         }
       }
     },
+    "/api/v1/admin/finance/payout-providers": {
+      "get": {
+        "tags": [
+          "admin: finance"
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/payouts/{id}/send": {
+      "post": {
+        "tags": [
+          "admin: finance"
+        ],
+        "description": "Send an approved payout through a payout provider (PayPal Payouts, or the development simulator). The provider call is idempotent per payout.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "pattern": "^[a-z_]{2,40}$"
+                  }
+                },
+                "required": [
+                  "provider"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/payouts/{id}/destination": {
+      "get": {
+        "tags": [
+          "admin: finance"
+        ],
+        "description": "Full payout destination, for staff paying manually by bank transfer or crypto. Every view is audited.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/payouts/export": {
+      "get": {
+        "tags": [
+          "admin: finance"
+        ],
+        "description": "CSV of approved payouts with full destination details, for a bulk bank upload or a wallet batch. Audited.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "bank_transfer",
+                "crypto"
+              ]
+            },
+            "in": "query",
+            "name": "method",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/payouts/{id}/simulate": {
+      "post": {
+        "tags": [
+          "admin: finance"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "paid",
+                      "failed"
+                    ]
+                  }
+                },
+                "required": [
+                  "outcome"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/api/v1/admin/payouts/{id}/approve": {
       "post": {
         "tags": [
@@ -11647,6 +11992,41 @@
             "name": "provider",
             "required": true
           }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/payouts/{provider}": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z_]{2,40}$"
+            },
+            "in": "path",
+            "name": "provider",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/paypal": {
+      "post": {
+        "tags": [
+          "webhooks"
         ],
         "responses": {
           "200": {
