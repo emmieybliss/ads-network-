@@ -41,6 +41,27 @@ function Invoke-Pnpm {
   if ($pnpmExe) { & $pnpmExe.Source @args } else { & npx.cmd --yes pnpm@10.28.0 @args }
   if ($LASTEXITCODE -ne 0) { Fail "pnpm $($args -join ' ') failed. Scroll up for the error." }
 }
+# A build step that dies because Windows briefly had no memory to give it
+# ("JavaScript heap out of memory" while the heap is still small) usually works
+# on a second try once memory frees up, so build steps get one retry.
+function Invoke-PnpmBuild {
+  if ($pnpmExe) { & $pnpmExe.Source @args } else { & npx.cmd --yes pnpm@10.28.0 @args }
+  if ($LASTEXITCODE -eq 0) { return }
+  Write-Host ''
+  Write-Host "pnpm $($args -join ' ') failed. Trying once more in 10 seconds..." -ForegroundColor Yellow
+  Start-Sleep -Seconds 10
+  if ($pnpmExe) { & $pnpmExe.Source @args } else { & npx.cmd --yes pnpm@10.28.0 @args }
+  if ($LASTEXITCODE -ne 0) {
+    Fail ("pnpm $($args -join ' ') failed twice. Scroll up for the error.`n`n" +
+      "If it says 'JavaScript heap out of memory', Windows ran out of free memory. Close other programs " +
+      "(Docker Desktop, other local demos, extra browser tabs), or restart the PC, then run Start BlissNova demo again.")
+  }
+}
+
+# Free memory: building needs roughly 2 GB. Warn early rather than fail halfway.
+function Get-FreeMemoryGB {
+  try { $os = Get-CimInstance Win32_OperatingSystem; return [math]::Round([math]::Min($os.FreePhysicalMemory, $os.FreeVirtualMemory) / 1MB, 1) } catch { return $null }
+}
 
 # 4. Install and build when the code changed since the last start.
 $lockHash = (Get-FileHash pnpm-lock.yaml).Hash
@@ -50,11 +71,15 @@ $stampFile = Join-Path $env:LOCAL_DATA_DIR 'build-stamp.txt'
 $built = (Test-Path $stampFile) -and ((Get-Content $stampFile -Raw).Trim() -eq $stamp) -and (Test-Path 'apps\web\.next\BUILD_ID') -and (Test-Path 'apps\api\dist\local.js')
 if (-not $built) {
   Write-Host 'Installing packages and building BlissNova. The first time takes several minutes...' -ForegroundColor Cyan
+  $freeGB = Get-FreeMemoryGB
+  if ($null -ne $freeGB -and $freeGB -lt 2) {
+    Write-Host "Only $freeGB GB of memory is free. The build may fail: close other programs (Docker Desktop, other demos, browser tabs) if it does." -ForegroundColor Yellow
+  }
   Invoke-Pnpm install --frozen-lockfile
-  Invoke-Pnpm --filter '@blissnova/ad-tag' build
-  Invoke-Pnpm --filter '@blissnova/api' build
+  Invoke-PnpmBuild --filter '@blissnova/ad-tag' build
+  Invoke-PnpmBuild --filter '@blissnova/api' build
   $env:API_INTERNAL_URL = 'http://127.0.0.1:4000'; $env:NEXT_PUBLIC_DEMO_MODE = 'true'; Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
-  Invoke-Pnpm --filter '@blissnova/web' build
+  Invoke-PnpmBuild --filter '@blissnova/web' build
   Set-Content -Path $stampFile -Value $stamp
 }
 
