@@ -11,7 +11,7 @@ import { serializeSite, serializeUnit } from '../publisher';
 import { adminList, guard, meta, mgmt, reasonRequired, sortSql, Where } from './common';
 
 const sitePatch = z.object({
-  allowedFormats: z.array(z.enum(['image', 'text', 'native'])).min(1).optional(),
+  allowedFormats: z.array(z.enum(['image', 'text', 'native', 'pop'])).min(1).optional(),
   revenueShareBps: z.number().int().min(0).max(10000).nullable().optional(),
   blockedCategories: z.array(z.string().max(40)).max(50).optional(),
   category: z.string().max(40).optional(),

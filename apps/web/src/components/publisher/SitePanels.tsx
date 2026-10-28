@@ -190,10 +190,15 @@ const DISPLAYS: Record<string, { label: string; hint: string }> = {
   rail_left: { label: 'Side rail, left', hint: 'Fixed beside your content, only on screens wide enough to leave the content clear. At most 300 px wide.' },
   rail_right: { label: 'Side rail, right', hint: 'Fixed beside your content, only on screens wide enough to leave the content clear. At most 300 px wide.' },
   interstitial: { label: 'Interstitial (between pages)', hint: 'Full screen when a visitor follows a link to another of your pages, with a clear "Continue" button. At most once every 10 minutes per visitor tab, and never where GDPR applies without consent.' },
+  popup: { label: 'Pop-up (new tab in front)', hint: 'Opens the advertiser\'s page in a new tab on the visitor\'s first click on your page. Never on page load, never from a click on an ad or a form field, and at most once per page view.' },
+  popunder: { label: 'Pop-under (new tab behind)', hint: 'Like a pop-up, but your page keeps focus where the browser allows it. Most current browsers keep the new tab in front, so it may behave like a pop-up.' },
 };
+const isPop = (d: string) => d === 'popup' || d === 'popunder';
 
 export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: string }) {
   const res = useApi<{ data: any[] }>(`/orgs/${orgId}/sites/${siteId}/units`);
+  const pops = useConfig().data?.data.popAds;
+  const popOff = (d: string) => !!pops && (!pops.enabled || (d === 'popunder' && !pops.popunderEnabled));
   const [edit, setEdit] = useState<Record<string, any> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -203,7 +208,10 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
     if (!edit) return;
     setBusy(true);
     setError(null);
-    const body = { name: edit.name, formats: edit.formats, responsive: edit.responsive, width: Number(edit.width) || null, height: Number(edit.height) || null, position: edit.position, display: edit.display, noFill: edit.noFill };
+    const pop = isPop(edit.display);
+    const formats = pop ? ['pop'] : edit.formats.filter((f: string) => f !== 'pop');
+    const body = { name: edit.name, formats: formats.length ? formats : ['image', 'text'], responsive: edit.responsive, width: pop ? null : Number(edit.width) || null, height: pop ? null : Number(edit.height) || null, position: edit.position, display: edit.display, noFill: edit.noFill,
+      ...(pop ? { popMaxPerDay: Number(edit.popMaxPerDay) || 1, popMinutesBetween: Number(edit.popMinutesBetween) || 60 } : {}) };
     try {
       if (edit.id) await patch(`/orgs/${orgId}/units/${edit.id}`, body);
       else await post(`/orgs/${orgId}/sites/${siteId}/units`, { ...body, key: edit.key });
@@ -218,14 +226,14 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
 
   return (
     <Card>
-      <CardHeader title="Placements" description="Each placement is a slot on your pages where an ad can appear." actions={<Button size="sm" onClick={() => setEdit({ key: '', name: '', formats: ['image', 'text'], responsive: true, width: '', height: '', position: 'in_content', display: 'inline', noFill: 'collapse' })}><Plus className="size-4" /> Add placement</Button>} />
+      <CardHeader title="Placements" description="Each placement is a slot on your pages where an ad can appear." actions={<Button size="sm" onClick={() => setEdit({ key: '', name: '', formats: ['image', 'text'], responsive: true, width: '', height: '', position: 'in_content', display: 'inline', noFill: 'collapse', popMaxPerDay: 1, popMinutesBetween: 60 })}><Plus className="size-4" /> Add placement</Button>} />
       <Async res={res}>
         {({ data }) => <Table rows={data} rowKey={(r) => r.id} empty="No placements yet. Add one to get an ad tag." columns={[
           { key: 'n', header: 'Name', cell: (r) => <span className="font-medium">{r.name}</span> },
           { key: 'k', header: 'Slot key', cell: (r) => <code className="text-xs">{r.key}</code> },
           { key: 'f', header: 'Formats', cell: (r) => r.formats.map(humanize).join(', ') },
-          { key: 's', header: 'Size', cell: (r) => (r.responsive ? (r.width ? `Responsive, ${r.width}×${r.height}` : 'Responsive') : `${r.width}×${r.height}`) },
-          { key: 'd', header: 'Type', cell: (r) => DISPLAYS[r.display]?.label ?? humanize(r.display) },
+          { key: 's', header: 'Size', cell: (r) => (isPop(r.display) ? `Up to ${r.popMaxPerDay}/day, ${r.popMinutesBetween} min apart` : r.responsive ? (r.width ? `Responsive, ${r.width}×${r.height}` : 'Responsive') : `${r.width}×${r.height}`) },
+          { key: 'd', header: 'Type', cell: (r) => <span className="flex flex-wrap items-center gap-1">{DISPLAYS[r.display]?.label ?? humanize(r.display)}{isPop(r.display) && popOff(r.display) && <Badge tone="warning">Off on this network</Badge>}</span> },
           { key: 'p', header: 'Position', cell: (r) => humanize(r.position) },
           { key: 'st', header: 'Status', cell: (r) => <span className="flex gap-1"><StatusBadge status={r.status} />{r.adminBlocked && <Badge tone="danger">Blocked by network</Badge>}</span> },
           { key: 'a', header: '', cell: (r) => r.status !== 'archived' && (
@@ -243,12 +251,23 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
             {error && <Alert tone="danger">{error}</Alert>}
             <Field label="Name" htmlFor="un" required><Input id="un" required value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} placeholder="Sidebar top" /></Field>
             {!edit.id && <Field label="Slot key" htmlFor="uk" required hint="Used in the ad tag. Lowercase letters, numbers, hyphens and underscores."><Input id="uk" required pattern="^[a-z0-9][a-z0-9_-]{1,63}$" value={edit.key} onChange={(e) => setEdit({ ...edit, key: e.target.value })} placeholder="sidebar-top" /></Field>}
+            <Field label="Placement type" htmlFor="ud" hint={DISPLAYS[edit.display]?.hint}><Select id="ud" value={edit.display} onChange={(e) => setEdit({ ...edit, display: e.target.value, formats: isPop(e.target.value) ? ['pop'] : edit.formats.filter((f: string) => f !== 'pop').length ? edit.formats.filter((f: string) => f !== 'pop') : ['image', 'text'] })}>{Object.entries(DISPLAYS).map(([k, v]) => <option key={k} value={k} disabled={isPop(k) && popOff(k) && edit.display !== k}>{v.label}{isPop(k) && popOff(k) ? ' (off on this network)' : ''}</option>)}</Select></Field>
+            {isPop(edit.display) ? (
+              <>
+                <Alert tone="warning" title="Use pops with care">Pops open only from a visitor's click, but some visitors find them intrusive, and some ad networks and search policies penalize sites that use them. Keep the limits low. {pops && <>The network allows at most {pops.maxPerVisitorPerDay} per visitor per day, at least {pops.minMinutesBetween} minutes apart, whatever you set here.</>}</Alert>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Pops per visitor per day" htmlFor="upd"><Input id="upd" type="number" min={1} max={20} required value={edit.popMaxPerDay} onChange={(e) => setEdit({ ...edit, popMaxPerDay: e.target.value })} /></Field>
+                  <Field label="Minutes between pops" htmlFor="upg"><Input id="upg" type="number" min={1} max={1440} required value={edit.popMinutesBetween} onChange={(e) => setEdit({ ...edit, popMinutesBetween: e.target.value })} /></Field>
+                </div>
+                <p className="text-xs text-muted">Visitors are counted by a hashed IP address on our servers, so the limits hold without storing anything on their device. Pops are filled by advertisers who bought pop traffic, never by banner or native campaigns.</p>
+              </>
+            ) : (<>
             <fieldset><legend className="mb-2 text-sm font-medium">Allowed formats</legend><div className="flex gap-4">{['image', 'text', 'native'].map((f) => <Checkbox key={f} label={humanize(f)} checked={edit.formats.includes(f)} onChange={(v) => setEdit({ ...edit, formats: v ? [...edit.formats, f] : edit.formats.filter((x: string) => x !== f) })} />)}</div></fieldset>
             <Checkbox label="Responsive (fits the container width)" checked={edit.responsive} onChange={(v) => setEdit({ ...edit, responsive: v })} />
             <div className="grid grid-cols-2 gap-3"><Field label={edit.responsive ? 'Typical width (px)' : 'Width (px)'} htmlFor="uw"><Input id="uw" type="number" min={1} value={edit.width} onChange={(e) => setEdit({ ...edit, width: e.target.value })} /></Field><Field label={edit.responsive ? 'Typical height (px)' : 'Height (px)'} htmlFor="uh" hint={edit.responsive ? 'Optional. Reserves this height so the page does not jump when the ad loads.' : undefined}><Input id="uh" type="number" min={1} value={edit.height} onChange={(e) => setEdit({ ...edit, height: e.target.value })} /></Field></div>
-            <Field label="Placement type" htmlFor="ud" hint={DISPLAYS[edit.display]?.hint}><Select id="ud" value={edit.display} onChange={(e) => setEdit({ ...edit, display: e.target.value })}>{Object.entries(DISPLAYS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</Select></Field>
+            </>)}
             {edit.display === 'inline' && <Field label="When no ad is available" htmlFor="unf" hint={edit.noFill === 'keep_space' ? 'The reserved space stays empty, so nothing on the page moves.' : 'The slot disappears. Content below it may move up.'}><Select id="unf" value={edit.noFill} onChange={(e) => setEdit({ ...edit, noFill: e.target.value })}><option value="collapse">Hide the slot</option><option value="keep_space">Keep the reserved space</option></Select></Field>}
-            <Field label="Position on the page" htmlFor="up"><Select id="up" value={edit.position} onChange={(e) => setEdit({ ...edit, position: e.target.value })}>{POSITIONS.map((p) => <option key={p} value={p}>{humanize(p)}</option>)}</Select></Field>
+            {!isPop(edit.display) && <Field label="Position on the page" htmlFor="up"><Select id="up" value={edit.position} onChange={(e) => setEdit({ ...edit, position: e.target.value })}>{POSITIONS.map((p) => <option key={p} value={p}>{humanize(p)}</option>)}</Select></Field>}
           </form>
         )}
       </Modal>

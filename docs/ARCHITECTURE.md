@@ -132,6 +132,21 @@ server's setting.
   page of the same site. The tag waits at most 1.5 s for an ad, otherwise it
   navigates straight away. It shows a clear "Continue to page" button (Escape
   and a backdrop click also continue), at most once per 10 minutes per tab.
+- **Pop-up / pop-under** (`popup`, `popunder`, migration 0012): filled only
+  by the `pop` creative format, which is a reviewed landing page and nothing
+  else, and only by CPM or flat-rate campaigns (a pop has no click to charge).
+  The tag requests the pop when the page loads, then opens it with
+  `window.open` inside the visitor's first click on the page (never on load,
+  never from a click on an ad, a form field or an editable area), at most once
+  per page view, and clears `opener` so the landing page cannot script the
+  publisher's page. A pop-under then hands focus back to the page; most
+  current browsers ignore that, so it can behave like a pop-up. A pop counts
+  as an impression only when the browser actually opened it. Per-visitor
+  limits are enforced on the server in Redis, keyed by site and hashed IP
+  address (so they need nothing stored on the device): the placement's
+  `pop_max_per_day` and `pop_minutes_between`, tightened by the network's
+  `popAds` settings. Admins can turn pops, or only pop-unders, off
+  network-wide; existing pop placements then get no ads.
 
 ## Automatic in-article placement
 

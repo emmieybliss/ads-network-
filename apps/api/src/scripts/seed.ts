@@ -240,12 +240,13 @@ async function main() {
       { key: 'demo-rail', name: 'Right side rail', w: 160, h: 600, pos: 'sidebar', formats: ['image'], display: 'rail_right' },
       { key: 'demo-auto', name: 'Automatic in-article ads', w: null as number | null, h: null as number | null, pos: 'in_content', formats: ['native', 'text'] },
       { key: 'demo-interstitial', name: 'Between-pages interstitial', w: null as number | null, h: null as number | null, pos: 'other', formats: ['native'], display: 'interstitial' },
+      { key: 'demo-popunder', name: 'Pop-under on first click', w: null as number | null, h: null as number | null, pos: 'other', formats: ['pop'], display: 'popunder' },
     ] as Array<{ key: string; name: string; w: number | null; h: number | null; pos: string; formats: string[]; display?: string; responsive?: boolean }>;
     const units: Record<string, string> = {};
     for (const u of unitSpecs) {
       units[u.key] = (await c.query<{ id: string }>(
-        `INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position, display, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active') RETURNING id`,
+        `INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position, display, status, pop_max_per_day, pop_minutes_between)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', 3, 15) RETURNING id`,
         [site, u.key, u.name, u.formats, u.w, u.h, u.responsive ?? u.w === null, u.pos, u.display ?? 'inline'],
       )).rows[0]!.id;
     }
@@ -300,7 +301,7 @@ async function main() {
     )).rows[0]!.id;
 
     // --- campaigns -------------------------------------------------------------
-    const campaigns: Array<{ id: string; name: string; creativeId: string; unit: string; pricing: 'cpm' | 'cpc'; rate: bigint }> = [];
+    const campaigns: Array<{ id: string; name: string; creativeId: string; unit: string; pricing: 'cpm' | 'cpc'; rate: bigint; pop?: boolean }> = [];
     const specs = [
       { name: `Banner campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '2.50', lifetime: '400', daily: '40', unit: 'demo-leaderboard', format: 'image' as const },
       { name: `Text ad campaign ${DEMO_TAG}`, model: 'cpc' as const, rate: '0.20', lifetime: '300', daily: '30', unit: 'demo-sidebar', format: 'text' as const },
@@ -311,7 +312,8 @@ async function main() {
       { name: `In-article text campaign ${DEMO_TAG}`, model: 'cpc' as const, rate: '0.15', lifetime: '150', daily: '15', unit: 'demo-auto', format: 'text' as const },
       { name: `Interstitial campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '5.00', lifetime: '150', daily: '15', unit: 'demo-interstitial', format: 'native' as const },
       { name: `Native CPC campaign ${DEMO_TAG}`, model: 'cpc' as const, rate: '0.40', lifetime: '250', daily: '40', unit: 'demo-native', format: 'native' as const },
-    ] as Array<{ name: string; model: 'cpm' | 'cpc'; rate: string; lifetime: string; daily: string; unit: string; format: 'image' | 'text' | 'native'; rail?: boolean }>;
+      { name: `Pop traffic campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '1.50', lifetime: '100', daily: '10', unit: 'demo-popunder', format: 'pop' as const },
+    ] as Array<{ name: string; model: 'cpm' | 'cpc'; rate: string; lifetime: string; daily: string; unit: string; format: 'image' | 'text' | 'native' | 'pop'; rail?: boolean }>;
     for (const s of specs) {
       const camp = (await c.query<{ id: string }>(
         `INSERT INTO campaigns (org_id, name, status, pricing_model, rate_micros, currency, lifetime_budget_micros, daily_budget_micros, timezone, start_at, pacing, priority, submitted_at, approved_at, created_by)
@@ -330,16 +332,18 @@ async function main() {
         : s.format === 'native'
           ? { headline: 'Demo native advertisement', body: 'A sample native ad served by your local BlissNova demo. It is labelled Sponsored with the advertiser name.', cta: 'Learn more', asset: nativeAsset, w: 600, h: 314, alt: 'Demo native advertisement image', sponsor: `Demo Advertiser Co ${DEMO_TAG}`,
               snapshot: { format: 'native', assetId: nativeAsset, storageKey: nativeKey, width: 600, height: 314, headline: 'Demo native advertisement', body: 'A sample native ad served by your local BlissNova demo. It is labelled Sponsored with the advertiser name.', cta: 'Learn more', sponsorName: `Demo Advertiser Co ${DEMO_TAG}`, destinationUrl: dest, displayUrl: 'example.com', altText: 'Demo native advertisement image' } }
+          : s.format === 'pop'
+          ? { headline: null, body: null, cta: null, asset: null, w: null, h: null, alt: null, sponsor: null, snapshot: { format: 'pop', destinationUrl: dest } }
           : { headline: 'Demo text advertisement', body: 'A sample text ad served by your local BlissNova demo.', cta: 'Learn more', asset: null, w: null, h: null, alt: null, sponsor: null, snapshot: { format: 'text', headline: 'Demo text advertisement', body: 'A sample text ad served by your local BlissNova demo.', cta: 'Learn more', destinationUrl: dest, displayUrl: 'example.com' } };
       const snapshot = v.snapshot;
-      const label = s.format === 'image' ? 'Banner' : s.format === 'native' ? 'Native ad' : 'Text ad';
+      const label = s.format === 'image' ? 'Banner' : s.format === 'native' ? 'Native ad' : s.format === 'pop' ? 'Pop landing page' : 'Text ad';
       const cr = (await c.query<{ id: string }>(
         `INSERT INTO creatives (campaign_id, org_id, name, format, status, version, approved_version, headline, body, cta, asset_id, width, height, destination_url, display_url, alt_text, sponsor_name, created_by)
          VALUES ($1, $2, $3, $4, 'approved', 1, 1, $5, $6, $7, $8, $9, $10, $11, 'example.com', $12, $13, $14) RETURNING id`,
         [camp, advOrg, `${label} ${DEMO_TAG}`, s.format, v.headline, v.body, v.cta, v.asset, v.w, v.h, dest, v.alt, v.sponsor, advUser],
       )).rows[0]!.id;
       await c.query(`INSERT INTO creative_versions (creative_id, version, snapshot, created_by) VALUES ($1, 1, $2, $3)`, [cr, JSON.stringify(snapshot), advUser]);
-      campaigns.push({ id: camp, name: s.name, creativeId: cr, unit: s.unit, pricing: s.model, rate: toMicros(s.rate) });
+      campaigns.push({ id: camp, name: s.name, creativeId: cr, unit: s.unit, pricing: s.model, rate: toMicros(s.rate), pop: s.format === 'pop' });
     }
 
     // --- partner networks ------------------------------------------------------
@@ -356,7 +360,7 @@ async function main() {
     if (sampleDays > 0) {
       days = await sampleHistory(c, campaigns.map((x) => ({
         campaignId: x.id, creativeId: x.creativeId, unitId: units[x.unit]!, pricing: x.pricing, rateMicros: x.rate,
-        perDay: x.pricing === 'cpm' ? [600, 1400] : [300, 700], ctr: x.pricing === 'cpm' ? 0.006 : 0.012, pages: SAMPLE_PAGES[x.unit] ?? SAMPLE_PAGES.default!,
+        perDay: x.pricing === 'cpm' ? [600, 1400] : [300, 700], ctr: x.pop ? 0 : x.pricing === 'cpm' ? 0.006 : 0.012, pages: SAMPLE_PAGES[x.unit] ?? SAMPLE_PAGES.default!,
       })), { siteId: site, advOrg, pubOrg, shareBps }, sampleDays);
       for (const x of campaigns) await settleCampaign(c, x.id, holdDays);
     }

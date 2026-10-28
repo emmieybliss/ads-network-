@@ -1904,7 +1904,8 @@
                     "enum": [
                       "image",
                       "text",
-                      "native"
+                      "native",
+                      "pop"
                     ]
                   },
                   "headline": {
@@ -2903,7 +2904,8 @@
                       "enum": [
                         "image",
                         "text",
-                        "native"
+                        "native",
+                        "pop"
                       ]
                     }
                   },
@@ -2942,7 +2944,9 @@
                       "anchor",
                       "rail_left",
                       "rail_right",
-                      "interstitial"
+                      "interstitial",
+                      "popup",
+                      "popunder"
                     ]
                   },
                   "noFill": {
@@ -2952,6 +2956,18 @@
                       "collapse",
                       "keep_space"
                     ]
+                  },
+                  "popMaxPerDay": {
+                    "default": 1,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20
+                  },
+                  "popMinutesBetween": {
+                    "default": 60,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1440
                   }
                 },
                 "required": [
@@ -3016,7 +3032,8 @@
                       "enum": [
                         "image",
                         "text",
-                        "native"
+                        "native",
+                        "pop"
                       ]
                     }
                   },
@@ -3052,7 +3069,9 @@
                       "anchor",
                       "rail_left",
                       "rail_right",
-                      "interstitial"
+                      "interstitial",
+                      "popup",
+                      "popunder"
                     ]
                   },
                   "noFill": {
@@ -3061,6 +3080,16 @@
                       "collapse",
                       "keep_space"
                     ]
+                  },
+                  "popMaxPerDay": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20
+                  },
+                  "popMinutesBetween": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1440
                   }
                 }
               }
@@ -6283,7 +6312,8 @@
                       "enum": [
                         "image",
                         "text",
-                        "native"
+                        "native",
+                        "pop"
                       ]
                     }
                   },
@@ -9243,6 +9273,7 @@
                 "verification",
                 "eligibility",
                 "pricing",
+                "popAds",
                 "api",
                 "platform",
                 "branding",

@@ -60,6 +60,8 @@ deployment.
 - [x] Sticky anchor, side rail and interstitial placements; inline slots reserve their space and can keep it on no fill
 - [x] Automatic in-article placement (per-site settings, tag inserts slots between paragraphs)
 - [x] Page RPM and per-page earnings reports (page views per page view id, page path on events, Pages tab, CSV export)
+- [x] Pop-up and pop-under placements: publisher opt-in per placement, pop creative format (CPM or flat only), server-side per-visitor caps, network kill switch in Settings → Pop ads, demo page /pop-test
+- [x] Minimum advertiser deposit ($20 by default, Settings → Pricing → Minimum deposit)
 
 ## Partner networks
 - [x] Advertisers let part of a CPC campaign's budget run on partner native networks, with a share per network
