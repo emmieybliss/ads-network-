@@ -141,6 +141,9 @@ export async function dailyMaintenance(ctx: JobCtx) {
   // Raw events past retention are removed only once settled or non-billable; aggregates and settlements keep long-term history.
   const purged = await ctx.db.query(`DELETE FROM ad_events WHERE occurred_at < now() - make_interval(days => $1) AND (settlement_id IS NOT NULL OR NOT billable)`, [s.tracking.rawEventRetentionDays]);
   await ctx.db.query(`DELETE FROM daily_stats WHERE day < CURRENT_DATE - $1::int`, [s.tracking.aggregateRetentionDays]);
+  await ctx.db.query(`DELETE FROM hourly_stats WHERE hour < CURRENT_DATE - $1::int`, [s.tracking.aggregateRetentionDays]);
+  await ctx.db.query(`DELETE FROM ivt_daily_stats WHERE day < CURRENT_DATE - $1::int`, [s.tracking.aggregateRetentionDays]);
+  await ctx.db.query(`DELETE FROM site_traffic_daily WHERE day < CURRENT_DATE - $1::int`, [s.tracking.aggregateRetentionDays]);
   await ctx.db.query(`DELETE FROM sessions WHERE expires_at < now() - interval '30 days' OR revoked_at < now() - interval '30 days'`);
   await ctx.db.query(`DELETE FROM user_tokens WHERE expires_at < now() - interval '7 days'`);
   let statements = 0;

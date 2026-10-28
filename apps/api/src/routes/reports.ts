@@ -8,7 +8,7 @@ import { requireOrg } from '../plugins/auth';
 import { pageReport, pageviewTotal, requestStats, runReport, type GroupBy } from '../services/reports';
 
 const reportQuery = dateRange.extend({
-  groupBy: z.enum(['day', 'campaign', 'creative', 'site', 'unit', 'device', 'country']).default('day'),
+  groupBy: z.enum(['day', 'campaign', 'creative', 'site', 'unit', 'device', 'country', 'os', 'browser', 'source', 'format', 'display']).default('day'),
   campaignId: z.uuid().optional(),
   siteId: z.uuid().optional(),
   unitId: z.uuid().optional(),
@@ -16,8 +16,8 @@ const reportQuery = dateRange.extend({
 
 const pageQuery = dateRange.extend({ siteId: z.uuid().optional() });
 
-const ADV_GROUPS: GroupBy[] = ['day', 'campaign', 'creative', 'site', 'unit', 'device', 'country'];
-const PUB_GROUPS: GroupBy[] = ['day', 'site', 'unit', 'device', 'country'];
+const ADV_GROUPS: GroupBy[] = ['day', 'campaign', 'creative', 'site', 'unit', 'device', 'country', 'os', 'browser', 'source', 'format', 'display'];
+const PUB_GROUPS: GroupBy[] = ['day', 'site', 'unit', 'device', 'country', 'os', 'browser', 'source', 'format', 'display'];
 
 export async function reportRoutes(app: FastifyInstance) {
   const { db } = app.ctx;
@@ -43,12 +43,18 @@ export async function reportRoutes(app: FastifyInstance) {
     const audience = req.org!.type;
     const report = await runReport(db, scopeFor(audience, req.org!.id, q.groupBy), { ...range, campaignId: q.campaignId, siteId: q.siteId, unitId: q.unitId }, q.groupBy, audience, 10_000);
     const money = (v: unknown) => (v === null || v === undefined ? '' : formatMicros(String(v), 4));
-    const rows = report.rows.map((r: Record<string, unknown>) => ({ ...r, ctr: r.ctr === null ? '' : (r.ctr as number).toFixed(4), spend: money(r.spendMicros), ecpm: money(r.ecpmMicros), earnings: money(r.earningsMicros), rpm: money(r.rpmMicros) }));
+    const pct = (v: unknown) => (v === null || v === undefined ? '' : (v as number).toFixed(4));
+    const rows = report.rows.map((r: Record<string, unknown>) => ({ ...r, ctr: pct(r.ctr), viewability: pct(r.viewabilityRate), timeInView: r.avgTimeInViewSec === null ? '' : (r.avgTimeInViewSec as number).toFixed(2),
+      spend: money(r.spendMicros), ecpm: money(r.ecpmMicros), earnings: money(r.earningsMicros), rpm: money(r.rpmMicros), cpa: money(r.cpaMicros), conversionValue: money(r.conversionValueMicros), conversionRate: pct(r.conversionRate),
+      roas: r.roas === null || r.roas === undefined ? '' : (r.roas as number).toFixed(4) }));
     const cols = [
       { key: 'label', label: q.groupBy }, { key: 'served', label: 'Served' }, { key: 'rendered', label: 'Rendered' }, { key: 'validImpressions', label: 'Valid impressions' },
       { key: 'invalidImpressions', label: 'Invalid impressions' }, { key: 'viewableImpressions', label: 'Viewable impressions' }, { key: 'validClicks', label: 'Valid clicks' },
-      { key: 'invalidClicks', label: 'Invalid clicks' }, { key: 'ctr', label: 'CTR %' },
-      ...(audience === 'advertiser' ? [{ key: 'spend', label: `Spend (${req.org!.currency})` }, { key: 'ecpm', label: 'eCPM' }] : [{ key: 'earnings', label: `Estimated earnings (${req.org!.currency})` }, { key: 'rpm', label: 'RPM' }]),
+      { key: 'invalidClicks', label: 'Invalid clicks' }, { key: 'ctr', label: 'CTR %' }, { key: 'viewability', label: 'Viewability %' }, { key: 'timeInView', label: 'Avg. time in view (s)' },
+      ...(audience === 'advertiser'
+        ? [{ key: 'spend', label: `Spend (${req.org!.currency})` }, { key: 'ecpm', label: 'eCPM' }, { key: 'conversions', label: 'Conversions' }, { key: 'conversionRate', label: 'Conversion rate %' },
+            { key: 'cpa', label: 'CPA' }, { key: 'conversionValue', label: `Conversion value (${req.org!.currency})` }, { key: 'roas', label: 'ROAS' }]
+        : [{ key: 'earnings', label: `Estimated earnings (${req.org!.currency})` }, { key: 'rpm', label: 'RPM' }]),
     ];
     await db.query('INSERT INTO data_exports (kind, requested_by, org_id, params, row_count) VALUES ($1, $2, $3, $4, $5)', [`report:${q.groupBy}`, req.auth?.user?.id ?? null, req.org!.id, JSON.stringify(q), rows.length]).catch(() => undefined);
     return reply.type('text/csv; charset=utf-8').header('content-disposition', `attachment; filename="report-${q.groupBy}-${range.from}-${range.to}.csv"`).send(toCsv(rows, cols));

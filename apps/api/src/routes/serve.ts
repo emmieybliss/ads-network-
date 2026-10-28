@@ -12,7 +12,7 @@ import { getSnapshot, serveAds, writeServeLog } from '../services/serving';
 const serveBody = z.object({
   siteKey: z.string().regex(/^pk_[A-Za-z0-9]{16,40}$/),
   units: z.array(z.object({ slot: z.string().regex(/^[a-z0-9][a-z0-9_-]{1,63}$/) })).min(1).max(10),
-  page: z.object({ url: z.string().max(2048), keywords: z.array(z.string().max(60)).max(20).optional() }),
+  page: z.object({ url: z.string().max(2048), keywords: z.array(z.string().max(60)).max(20).optional(), referrer: z.string().max(2048).optional() }),
   consent: z.object({
     personalized: z.boolean().optional(),
     gdprApplies: z.boolean().optional(),
@@ -26,7 +26,7 @@ const serveBody = z.object({
   pv: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
 });
 const eventsBody = z.object({
-  events: z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/), type: z.enum(['render', 'viewable']), t: z.string().min(20).max(4096) })).min(1).max(50),
+  events: z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/), type: z.enum(['render', 'viewable', 'inview']), t: z.string().min(20).max(4096), ms: z.number().int().min(0).max(3_600_000).optional() })).min(1).max(50),
 });
 
 // The built ad tag: SDK_PATH if set, a copy next to a bundled build, or the
@@ -66,14 +66,14 @@ export async function serveRoutes(app: FastifyInstance) {
     return { status: out.status, ads: out.ads, privacy: out.privacy };
   });
 
-  app.post('/events', { config: { rateLimit: { bucket: 'events' }, allowDuringMaintenance: true }, schema: { tags: ['ad serving'], body: eventsBody, description: 'Report rendered and viewable impressions. Accepts application/json or text/plain (sendBeacon).' } }, async (req, reply) => {
+  app.post('/events', { config: { rateLimit: { bucket: 'events' }, allowDuringMaintenance: true }, schema: { tags: ['ad serving'], body: eventsBody, description: 'Report rendered and viewable impressions, and time in view (inview, with ms). Accepts application/json or text/plain (sendBeacon).' } }, async (req, reply) => {
     const b = bodyOf(req, eventsBody);
     const s = await ctx.settings.get();
     const meta = { ipHash: req.ipHash, ua: req.headers['user-agent'] ?? '', origin: typeof req.headers.origin === 'string' ? req.headers.origin : null, referrer: typeof req.headers.referer === 'string' ? req.headers.referer : null };
     let accepted = 0;
     const results: unknown[] = [];
     for (const e of b.events) {
-      const a = await admitEvent(ctx, { clientEventId: e.id, type: e.type, token: e.t }, meta, s);
+      const a = await admitEvent(ctx, { clientEventId: e.id, type: e.type, token: e.t, inViewMs: e.ms }, meta, s);
       if (!a.accepted) continue;
       accepted++;
       const r = await dispatch(a.event);
@@ -89,14 +89,15 @@ export async function serveRoutes(app: FastifyInstance) {
     const v = verifyDeliveryToken(ctx.tokens, t, Date.now(), 24 * 3600 * 1000);
     const claims = v.ok ? v.claims : v.claims;
     if (!claims) return reply.status(400).type('text/html').send(`<!doctype html><meta charset="utf-8"><title>Link expired</title><p>This advertisement link is no longer valid.</p>`);
-    const dest = (await ctx.db.query<{ url: string }>(
-      `SELECT COALESCE(v.snapshot->>'destinationUrl', c.destination_url) AS url FROM creatives c LEFT JOIN creative_versions v ON v.creative_id = c.id AND v.version = c.approved_version WHERE c.id = $1`, [claims.cr])).rows[0];
+    const dest = (await ctx.db.query<{ url: string; conversion_tracking: boolean }>(
+      `SELECT COALESCE(v.snapshot->>'destinationUrl', c.destination_url) AS url, COALESCE(k.conversion_tracking, false) AS conversion_tracking
+       FROM creatives c LEFT JOIN creative_versions v ON v.creative_id = c.id AND v.version = c.approved_version LEFT JOIN campaigns k ON k.id = c.campaign_id WHERE c.id = $1`, [claims.cr])).rows[0];
     const s = await ctx.settings.get();
     const a = await admitEvent(ctx, { clientEventId: `clk-${claims.d}-${req.ipHash.slice(0, 10)}-${Math.floor(Date.now() / 1000)}`, type: 'click', token: t },
       { ipHash: req.ipHash, ua: req.headers['user-agent'] ?? '', origin: null, referrer: typeof req.headers.referer === 'string' ? req.headers.referer : null }, s);
     if (a.accepted) await dispatch(a.event).catch((err) => req.log.error({ err }, 'click processing failed'));
     if (!dest?.url) return reply.status(404).type('text/html').send(`<!doctype html><meta charset="utf-8"><title>Not found</title><p>This advertisement is no longer available.</p>`);
-    return reply.redirect(dest.url, 302);
+    return reply.redirect(dest.conversion_tracking ? withClickId(dest.url, claims.d) : dest.url, 302);
   });
 
   app.get('/public/sites/:siteKey/auto', { config: { rateLimit: { bucket: 'serve' }, allowDuringMaintenance: true }, schema: { tags: ['ad serving'], params: z.object({ siteKey: z.string().regex(/^pk_[A-Za-z0-9]{16,40}$/) }), description: 'Automatic in-article placement settings, read by the ad tag when its script has data-auto.' } }, async (req, reply) => {
@@ -112,6 +113,17 @@ export async function serveRoutes(app: FastifyInstance) {
     if (!site) return { active: false, placements: [] };
     return { active: true, placements: [...snap.units.values()].filter((u) => u.siteId === site.id).map((u) => ({ slot: u.key, width: u.width, height: u.height, formats: u.formats })) };
   });
+}
+
+/** With conversion tracking on, the landing page gets the click id to report conversions with. */
+export function withClickId(url: string, deliveryId: string): string {
+  try {
+    const u = new URL(url);
+    u.searchParams.set('bn_click_id', deliveryId);
+    return u.toString();
+  } catch {
+    return url;
+  }
 }
 
 /** Automatic in-article placement settings for a site, read by the ad tag. */

@@ -167,6 +167,47 @@ estimated earnings and page RPM per page; `/reports/pages/export` gives the
 same as CSV. The publisher overview shows page views and page RPM, and the
 Reports page has a Pages tab. Migration 0011.
 
+## Analytics and conversion tracking
+
+The Analytics page (publisher, advertiser and admin) is built on the same
+validated events as reports, plus a few more fields. Migration 0014.
+
+- **Audience dimensions.** At serve time the server derives the operating
+  system and browser family from the user agent and the traffic source from
+  the referring host the tag sends (`page.referrer`, host only): search,
+  social, referral, direct or internal (`packages/tracking/src/source.ts`).
+  They travel in the delivery token (`os`, `br`, `src`) and land on every
+  event, so every report can be grouped by them (`groupBy=os|browser|source`,
+  plus `format` and `display` through the creative and placement).
+- **Sessions.** A page view whose referrer is not the site itself starts a
+  session. `site_traffic_daily` keeps page views and sessions per day, site,
+  source, device and country, which gives pages per session, session RPM and
+  RPM by traffic source. No cookie or device storage is involved.
+- **Time in view.** The tag measures how long each ad is at least half in view
+  in a visible tab and reports it once (`inview` event with `ms`) the first
+  time the page is hidden. It is never billable and needs a valid render.
+- **Aggregates.** `aggregateDay` also rebuilds `hourly_stats` (UTC hours, for
+  the weekday x hour heatmap) and `ivt_daily_stats` (rejected events by type
+  and reason). `daily_stats` gained `os`, `browser`, `source`, time in view and
+  conversions.
+- **Conversions.** With tracking on for a campaign, the click redirect adds
+  `bn_click_id` (the delivery id) to the landing page. The advertiser reports
+  a conversion with `GET /conversions/pixel` or `POST /conversions`. It is kept
+  only for a valid click, inside the campaign's attribution window (1 to 90
+  days), once per click, event and order id, and counted on the day it
+  happens. Reports then show conversions, conversion rate, CPA, value and ROAS.
+- **Analytics API.** `GET /orgs/:orgId/analytics` and `/admin/analytics`
+  return totals for the period and the period before, the daily trend for
+  both, breakdowns, the delivery funnel, the heatmap, invalid traffic by
+  reason, placement viewability and time in view, sessions (publishers),
+  conversions and reach and frequency (advertisers; only visitors who allowed
+  personalization carry an id, so reach counts those), and a few insights made
+  by fixed rules. `/analytics/realtime` returns the last 30 minutes minute by
+  minute straight from `ad_events`.
+- **Existing demos.** The local runner adds the new sample fields to demo data
+  seeded before this version, once, touching only `demo-sample:` events
+  (`apps/api/src/scripts/demo-analytics.ts`).
+
 ## Consent (TCF v2.2, GPP, US Privacy, GPC)
 
 The ad tag collects signals from the page's CMPs and sends them with each

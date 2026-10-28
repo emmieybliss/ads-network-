@@ -14,7 +14,7 @@ import { dayInZone } from './serving';
  *     persistence and, for billable events, a concurrency-safe budget charge
  *     inside one Postgres transaction.
  */
-export type TrackedType = 'render' | 'viewable' | 'click';
+export type TrackedType = 'render' | 'viewable' | 'click' | 'inview';
 export interface AdmittedEvent {
   clientEventId: string;
   type: TrackedType;
@@ -26,19 +26,23 @@ export interface AdmittedEvent {
   referrerHost: string | null;
   flags: { tokenExpired?: boolean; duplicate?: boolean; noRenderReceipt?: boolean };
   renderAt: number | null;
+  /** inview only: milliseconds the creative was in view. */
+  inViewMs?: number;
 }
 export type AdmitResult = { accepted: true; event: AdmittedEvent } | { accepted: false; reason: 'token_invalid' | 'disabled' | 'retry' };
 
 export class RetryLaterError extends Error {}
 
 const CLICK_GRACE_MS = 24 * 3600 * 1000;
+// Time in view is reported when the visitor leaves, which can be long after the token expired.
+const INVIEW_GRACE_MS = 4 * 3600 * 1000;
 
-export async function admitEvent(ctx: AppContext, input: { clientEventId: string; type: TrackedType; token: string }, meta: { ipHash: string; ua: string; origin: string | null; referrer: string | null }, s: PlatformSettings): Promise<AdmitResult> {
+export async function admitEvent(ctx: AppContext, input: { clientEventId: string; type: TrackedType; token: string; inViewMs?: number }, meta: { ipHash: string; ua: string; origin: string | null; referrer: string | null }, s: PlatformSettings): Promise<AdmitResult> {
   if (!s.tracking.enabled) return { accepted: false, reason: 'disabled' };
   if (input.type === 'render' && !s.tracking.impressions) return { accepted: false, reason: 'disabled' };
   if (input.type === 'click' && !s.tracking.clicks) return { accepted: false, reason: 'disabled' };
-  if (input.type === 'viewable' && !s.tracking.viewability) return { accepted: false, reason: 'disabled' };
-  const v = verifyDeliveryToken(ctx.tokens, input.token, Date.now(), input.type === 'click' ? CLICK_GRACE_MS : 0);
+  if ((input.type === 'viewable' || input.type === 'inview') && !s.tracking.viewability) return { accepted: false, reason: 'disabled' };
+  const v = verifyDeliveryToken(ctx.tokens, input.token, Date.now(), input.type === 'click' ? CLICK_GRACE_MS : input.type === 'inview' ? INVIEW_GRACE_MS : 0);
   if (!v.ok && !v.claims) {
     await ctx.redis.incr(`ivt:token_invalid:${new Date().toISOString().slice(0, 10)}`);
     return { accepted: false, reason: 'token_invalid' };
@@ -67,6 +71,7 @@ export async function admitEvent(ctx: AppContext, input: { clientEventId: string
       originHost: host(meta.origin), referrerHost: host(meta.referrer),
       flags: { tokenExpired: !v.ok && v.reason === 'token_expired', duplicate: first !== 'OK', noRenderReceipt: input.type !== 'render' && renderAt === null },
       renderAt,
+      ...(input.type === 'inview' ? { inViewMs: Math.max(0, Math.min(3_600_000, Math.round(input.inViewMs ?? 0))) } : {}),
     },
   };
 }
@@ -115,10 +120,11 @@ export async function processAdmittedEvent(ctx: Pick<AppContext, 'db' | 'redis'>
 
   const billableType = (c.pm === 'cpm' && e.type === 'render') || (c.pm === 'cpc' && e.type === 'click');
   return withTransaction(ctx.db as never, async (client: PoolClient) => {
-    const base = [c.d, e.type, result.valid ? 'valid' : 'invalid', result.reason, result.score, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, e.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, e.receivedAt, e.clientEventId, c.pp ?? null];
+    const base = [c.d, e.type, result.valid ? 'valid' : 'invalid', result.reason, result.score, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, e.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, e.receivedAt, e.clientEventId, c.pp ?? null,
+      c.os ?? 'other', c.br ?? 'other', c.src ?? 'unknown', e.type === 'inview' ? (e.inViewMs ?? 0) : null];
     const ins = await client.query<{ id: string }>(
-      `INSERT INTO ad_events (event_key, delivery_id, type, status, invalid_reason, ivt_score, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, client_event_id, page_path)
-       VALUES ($22, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, to_timestamp($19 / 1000.0), $20, $21)
+      `INSERT INTO ad_events (event_key, delivery_id, type, status, invalid_reason, ivt_score, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, client_event_id, page_path, os, browser, source, in_view_ms)
+       VALUES ($26, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, to_timestamp($19 / 1000.0), $20, $21, $22, $23, $24, $25)
        ON CONFLICT DO NOTHING RETURNING id`,
       [...base, e.flags.duplicate ? null : `${c.d}:${e.type}`]);
     if (!ins.rows[0]) {
@@ -128,8 +134,8 @@ export async function processAdmittedEvent(ctx: Pick<AppContext, 'db' | 'redis'>
       base[2] = 'invalid';
       base[3] = 'duplicate';
       await client.query(
-        `INSERT INTO ad_events (delivery_id, type, status, invalid_reason, ivt_score, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, client_event_id, page_path)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, to_timestamp($19 / 1000.0), $20, $21) ON CONFLICT DO NOTHING`, base);
+        `INSERT INTO ad_events (delivery_id, type, status, invalid_reason, ivt_score, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, client_event_id, page_path, os, browser, source, in_view_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, to_timestamp($19 / 1000.0), $20, $21, $22, $23, $24, $25) ON CONFLICT DO NOTHING`, base);
       return { status: 'invalid' as const, reason: 'duplicate' };
     }
     let billable = false;
@@ -147,28 +153,43 @@ export async function processAdmittedEvent(ctx: Pick<AppContext, 'db' | 'redis'>
   });
 }
 
-/** Recompute the reporting aggregate for one UTC day from event rows. Safe to run repeatedly. */
+/** Recompute the reporting aggregates for one UTC day from event rows. Safe to run repeatedly. */
 export async function aggregateDay(db: AppContext['db'], day: string) {
   await withTransaction(db, async (c) => {
     await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`agg:${day}`]);
     await c.query('DELETE FROM daily_stats WHERE day = $1', [day]);
+    // Conversions count on the day they happen, attributed to the click's campaign, placement and audience.
     await c.query(
-      `INSERT INTO daily_stats (day, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, served, rendered, valid_impressions, invalid_impressions,
-         viewable_impressions, valid_clicks, invalid_clicks, billable_impressions, billable_clicks, spend_micros, publisher_micros)
-       SELECT $1::date, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device,
-         count(*) FILTER (WHERE type = 'served'),
-         count(*) FILTER (WHERE type = 'render'),
-         count(*) FILTER (WHERE type = 'render' AND status = 'valid'),
-         count(*) FILTER (WHERE type = 'render' AND status = 'invalid'),
-         count(*) FILTER (WHERE type = 'viewable' AND status = 'valid'),
-         count(*) FILTER (WHERE type = 'click' AND status = 'valid'),
-         count(*) FILTER (WHERE type = 'click' AND status = 'invalid'),
-         count(*) FILTER (WHERE type = 'render' AND billable),
-         count(*) FILTER (WHERE type = 'click' AND billable),
-         COALESCE(sum(cost_micros) FILTER (WHERE billable), 0),
-         COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0)
-       FROM ad_events WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1
-       GROUP BY campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device`, [day]);
+      `INSERT INTO daily_stats (day, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source, served, rendered, valid_impressions, invalid_impressions,
+         viewable_impressions, valid_clicks, invalid_clicks, billable_impressions, billable_clicks, spend_micros, publisher_micros, in_view_ms, in_view_samples, conversions, conversion_value_micros)
+       SELECT $1::date, campaign_id, creative_id, min(advertiser_org_id::text)::uuid, site_id, unit_id, min(publisher_org_id::text)::uuid, country, device, os, browser, source,
+         sum(served), sum(rendered), sum(valid_impressions), sum(invalid_impressions), sum(viewable_impressions), sum(valid_clicks), sum(invalid_clicks),
+         sum(billable_impressions), sum(billable_clicks), sum(spend_micros), sum(publisher_micros), sum(in_view_ms), sum(in_view_samples), sum(conversions), sum(conversion_value_micros)
+       FROM (
+         SELECT campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source,
+           count(*) FILTER (WHERE type = 'served') AS served,
+           count(*) FILTER (WHERE type = 'render') AS rendered,
+           count(*) FILTER (WHERE type = 'render' AND status = 'valid') AS valid_impressions,
+           count(*) FILTER (WHERE type = 'render' AND status = 'invalid') AS invalid_impressions,
+           count(*) FILTER (WHERE type = 'viewable' AND status = 'valid') AS viewable_impressions,
+           count(*) FILTER (WHERE type = 'click' AND status = 'valid') AS valid_clicks,
+           count(*) FILTER (WHERE type = 'click' AND status = 'invalid') AS invalid_clicks,
+           count(*) FILTER (WHERE type = 'render' AND billable) AS billable_impressions,
+           count(*) FILTER (WHERE type = 'click' AND billable) AS billable_clicks,
+           COALESCE(sum(cost_micros) FILTER (WHERE billable), 0) AS spend_micros,
+           COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0) AS publisher_micros,
+           COALESCE(sum(in_view_ms) FILTER (WHERE type = 'inview' AND status = 'valid'), 0) AS in_view_ms,
+           count(*) FILTER (WHERE type = 'inview' AND status = 'valid') AS in_view_samples,
+           0::bigint AS conversions, 0::bigint AS conversion_value_micros
+         FROM ad_events WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1
+         GROUP BY campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source
+         UNION ALL
+         SELECT campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source,
+           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, count(*), COALESCE(sum(value_micros), 0)
+         FROM conversions WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1
+         GROUP BY campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source
+       ) x
+       GROUP BY campaign_id, creative_id, site_id, unit_id, country, device, os, browser, source`, [day]);
     await c.query('DELETE FROM page_daily_stats WHERE day = $1', [day]);
     await c.query(
       `INSERT INTO page_daily_stats (day, site_id, publisher_org_id, page_path, valid_impressions, valid_clicks, publisher_micros)
@@ -178,6 +199,23 @@ export async function aggregateDay(db: AppContext['db'], day: string) {
          COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0)
        FROM ad_events WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1 AND page_path IS NOT NULL
        GROUP BY site_id, publisher_org_id, page_path`, [day]);
+    await c.query(`DELETE FROM hourly_stats WHERE hour >= $1::date AND hour < $1::date + 1`, [day]);
+    await c.query(
+      `INSERT INTO hourly_stats (hour, campaign_id, advertiser_org_id, site_id, publisher_org_id, valid_impressions, viewable_impressions, valid_clicks, spend_micros, publisher_micros)
+       SELECT date_trunc('hour', occurred_at), campaign_id, min(advertiser_org_id::text)::uuid, site_id, min(publisher_org_id::text)::uuid,
+         count(*) FILTER (WHERE type = 'render' AND status = 'valid'),
+         count(*) FILTER (WHERE type = 'viewable' AND status = 'valid'),
+         count(*) FILTER (WHERE type = 'click' AND status = 'valid'),
+         COALESCE(sum(cost_micros) FILTER (WHERE billable), 0),
+         COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0)
+       FROM ad_events WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1 AND type IN ('render', 'viewable', 'click')
+       GROUP BY 1, campaign_id, site_id`, [day]);
+    await c.query('DELETE FROM ivt_daily_stats WHERE day = $1', [day]);
+    await c.query(
+      `INSERT INTO ivt_daily_stats (day, campaign_id, advertiser_org_id, site_id, publisher_org_id, type, reason, events)
+       SELECT $1::date, campaign_id, min(advertiser_org_id::text)::uuid, site_id, min(publisher_org_id::text)::uuid, type, COALESCE(invalid_reason, 'unknown'), count(*)
+       FROM ad_events WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1 AND status = 'invalid'
+       GROUP BY campaign_id, site_id, type, COALESCE(invalid_reason, 'unknown')`, [day]);
   });
 }
 

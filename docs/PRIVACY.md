@@ -28,6 +28,10 @@
   cleared when the tab closes) so they show at most once every 10 minutes. It
   holds no identifier. Where GDPR applies without consent to store information
   (TCF purpose 1), interstitials are not shown at all.
+- It sends the referring page's host name (never the full referring URL) with
+  each ad request, so reports can tell search, social and direct visits apart,
+  and reports once per ad how long it was in view. Neither uses cookies or
+  device storage.
 - Without consent, ads are contextual: they are chosen from the page, placement
   and site category only.
 - It does not try to bypass consent decisions, browser privacy protections or ad
@@ -44,12 +48,20 @@
   data; the page view id is kept in Redis for 30 minutes only to avoid double
   counting.
 
+- The user agent's operating system and browser family (for example "ios",
+  "safari") are stored with each event; the full user agent is not.
+- Traffic source is stored as one of search, social, referral, direct or
+  internal; the referring host itself is not stored.
+- Conversions reported by advertisers hold the event name, value, an optional
+  order id, and the audience fields of the click they belong to. No personal
+  data about the buyer is accepted.
+
 ## Retention (configurable in Admin, Settings)
 
 | Data | Default | Notes |
 | --- | --- | --- |
 | Raw ad events | 90 days | Removed only once settled or non-billable |
-| Daily report aggregates | 2,555 days (about 7 years) | Needed for statements and disputes |
+| Daily report aggregates | 2,555 days (about 7 years) | Needed for statements and disputes; hourly, invalid-traffic and session aggregates follow the same setting |
 | Expired or revoked sessions | 30 days after expiry | |
 | Email and reset tokens | 7 days after expiry | |
 | Ledger, invoices, audit log | kept | Financial and audit records are never silently deleted |

@@ -26,6 +26,9 @@ export interface DeliveryClaims {
   pp?: string; // page path (no query or fragment), for per-page reports
   co: string;  // country
   dv: string;  // device category
+  os?: string; // operating system family
+  br?: string; // browser family
+  src?: string; // traffic source of the page view (see trafficSource)
   ct: boolean; // contextual (non-personalized) delivery
   v?: string;  // pseudonymous visitor hash (only with consent)
   iat: number; // issued at, epoch ms

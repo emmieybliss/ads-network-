@@ -143,6 +143,12 @@ if (!existsSync(seededMarker)) {
   }
   writeFileSync(seededMarker, new Date().toISOString());
 }
+// Demo data seeded by an older version gets the analytics sample fields added once.
+{
+  const { upgradeDemoAnalytics } = await import('./scripts/demo-analytics');
+  const upgraded = await upgradeDemoAnalytics(app.ctx.db, () => console.log('Adding analytics sample fields to the existing demo data (one time, up to a minute)...')).catch((err) => { console.error('Could not add analytics fields to the demo data:', (err as Error).message); return 0; });
+  if (upgraded) console.log(`Added analytics sample fields to ${upgraded} day(s) of demo data.`);
+}
 
 // The worker's scheduled jobs, on timers instead of BullMQ.
 const log = { info: (o: object, m?: string) => app.log.info(o, m), warn: (o: object, m?: string) => app.log.warn(o, m), error: (o: object, m?: string) => app.log.error(o, m) };
