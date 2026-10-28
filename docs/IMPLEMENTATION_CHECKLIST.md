@@ -73,15 +73,22 @@ deployment.
 - [ ] Real adapters for MGID, Revcontent, Taboola and Outbrain (Teads): need signed partner accounts and API access
 
 ## Verified
-Runs on 27 Oct 2026, in the build container with local PostgreSQL 16 and Redis 7,
-not on the owner's PC:
-- `pnpm test`: 21 files, 392 tests passed
-- `scripts/e2e-demo.mjs` passed against the bundled processes and against the Docker Compose stack
-- `scripts/acceptance-ui.mjs` passed against the Docker Compose stack
-- seed: all nine ledger reconciliation checks passed
+Runs in the build container with local PostgreSQL 16 and Redis 7, not on the owner's PC:
+- 28 Oct 2026 on `main`: `pnpm -r build` succeeded; `pnpm test`: 27 files, 477 tests passed
+- 27 Oct 2026: `scripts/e2e-demo.mjs` passed against the bundled processes and against the Docker Compose stack
+- 27 Oct 2026: `scripts/acceptance-ui.mjs` passed against the Docker Compose stack
+- 27 Oct 2026: seed, all nine ledger reconciliation checks passed (a tenth check was added since)
 
 ## Not done
+See `docs/STATUS_REPORT.md` for the full built / simulated / partial / missing review.
 - [ ] Deployment to a public server (no domain yet)
-- [ ] Real payment provider connected and tested
-- [ ] GeoIP database (country comes from a trusted CDN header, if configured)
+- [ ] Stripe and PayPal tested against the real services (only mocked APIs so far)
+- [ ] GeoIP database bundled (country comes from a CDN header or a `.mmdb` file, if configured)
+- [ ] Viewable refresh (timed re-request of in-view slots)
+- [ ] Automatic contextual classification of pages
+- [ ] Stronger bot detection (datacenter IP lists, browser integrity checks)
+- [ ] Header bidding (Prebid.js / Prebid Server, OpenRTB)
+- [ ] Video ads (VAST)
+- [ ] Tax form collection for publishers
+- [ ] Personal-data export and account deletion
 - [ ] Third-party security review
