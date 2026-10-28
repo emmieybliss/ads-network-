@@ -6,13 +6,30 @@ import { api, errorMessage } from '@/lib/api';
 import { useConfig } from '@/lib/hooks';
 
 export interface Creative {
-  id: string; name: string; format: 'image' | 'text' | 'native'; status: string; version: number; approvedVersion: number | null;
+  id: string; name: string; format: 'image' | 'text' | 'native' | 'pop'; status: string; version: number; approvedVersion: number | null;
   headline: string | null; body: string | null; cta: string | null; assetId: string | null; imageUrl: string | null;
   width: number | null; height: number | null; destinationUrl: string; displayUrl: string | null; altText: string | null; sponsorName?: string | null; rejectionReason: string | null;
 }
 
 /** Visual preview of a creative as it renders in a slot, with the ad label the SDK adds. */
-export function CreativePreview({ c }: { c: Pick<Creative, 'format' | 'headline' | 'body' | 'cta' | 'imageUrl' | 'width' | 'height' | 'altText' | 'displayUrl' | 'sponsorName'> & { sponsor_name?: string | null } }) {
+export function CreativePreview({ c }: { c: Pick<Creative, 'format' | 'headline' | 'body' | 'cta' | 'imageUrl' | 'width' | 'height' | 'altText' | 'displayUrl' | 'sponsorName'> & { sponsor_name?: string | null; destinationUrl?: string | null; destination_url?: string | null } }) {
+  if (c.format === 'pop') {
+    const url = c.destinationUrl ?? c.destination_url ?? '';
+    let host = '';
+    try { host = new URL(url).hostname; } catch { /* not a URL yet */ }
+    return (
+      <div className="w-72 max-w-full overflow-hidden rounded-lg border border-border bg-surface shadow-sm">
+        <div className="flex items-center gap-1.5 border-b border-border bg-surface-2 px-2 py-1.5">
+          <span className="size-2 rounded-full bg-border-strong" /><span className="size-2 rounded-full bg-border-strong" /><span className="size-2 rounded-full bg-border-strong" />
+          <span className="ml-2 truncate rounded bg-surface px-2 py-0.5 text-[11px] text-muted">{url || 'https://'}</span>
+        </div>
+        <div className="flex h-28 flex-col items-center justify-center gap-1 px-3 text-center">
+          <p className="text-sm font-semibold text-fg">{host || 'Your landing page'}</p>
+          <p className="text-xs text-muted">Opens in a new tab after the visitor clicks on the publisher's page</p>
+        </div>
+      </div>
+    );
+  }
   if (c.format === 'native') {
     const sponsor = c.sponsorName ?? c.sponsor_name;
     return (
@@ -50,7 +67,7 @@ export function CreativePreview({ c }: { c: Pick<Creative, 'format' | 'headline'
 }
 
 /** Create or edit a creative. Image creatives upload the file first, then reference the stored asset. */
-export function CreativeEditor({ open, onClose, orgId, campaignId, creative, onSaved }: { open: boolean; onClose: () => void; orgId: string; campaignId: string; creative?: Creative | null; onSaved: () => void }) {
+export function CreativeEditor({ open, onClose, orgId, campaignId, creative, onSaved, pricingModel }: { open: boolean; onClose: () => void; orgId: string; campaignId: string; creative?: Creative | null; onSaved: () => void; pricingModel?: string }) {
   const cfg = useConfig().data?.data;
   const editing = !!creative;
   const [f, setF] = useState({
@@ -87,7 +104,7 @@ export function CreativeEditor({ open, onClose, orgId, campaignId, creative, onS
     setBusy(true);
     const body: Record<string, unknown> = {
       name: f.name, destinationUrl: f.destinationUrl, displayUrl: f.displayUrl || undefined,
-      ...(f.format === 'image' ? { assetId: asset?.id, altText: f.altText || undefined } : { headline: f.headline, body: f.body || undefined, cta: f.cta || undefined }),
+      ...(f.format === 'image' ? { assetId: asset?.id, altText: f.altText || undefined } : f.format === 'pop' ? {} : { headline: f.headline, body: f.body || undefined, cta: f.cta || undefined }),
       ...(f.format === 'native' ? { assetId: asset?.id, altText: f.altText || undefined, sponsorName: f.sponsorName } : {}),
     };
     try {
@@ -115,9 +132,11 @@ export function CreativeEditor({ open, onClose, orgId, campaignId, creative, onS
                 {(!cfg || cfg.creatives.allowedFormats.includes('image')) && <option value="image">Image banner</option>}
                 {(!cfg || cfg.creatives.allowedFormats.includes('text')) && <option value="text">Text ad</option>}
                 {(!cfg || cfg.creatives.allowedFormats.includes('native')) && <option value="native">Native ad (image, headline and sponsor)</option>}
+                {(!cfg || cfg.creatives.allowedFormats.includes('pop')) && pricingModel !== 'cpc' && <option value="pop">Pop traffic (your page opens in a new tab)</option>}
               </Select>
             </Field>
           )}
+          {f.format === 'pop' && <Alert tone="info" title="How pop ads work">Your landing page opens in a new tab when a visitor clicks on a publisher's page that has a pop placement. Pops are sold per thousand (CPM), never per click, and are capped per visitor. Reviewers check the landing page before it runs.</Alert>}
           {needsImage && (
             <>
               <Field label="Image" htmlFor="ci" hint={cfg ? `${cfg.creatives.allowedImageTypes.map((t) => t.replace('image/', '').toUpperCase()).join(', ')}, up to ${Math.round(cfg.creatives.maxUploadBytes / 1000)} KB. Animated and scripted files are rejected.` : undefined}>
@@ -132,19 +151,19 @@ export function CreativeEditor({ open, onClose, orgId, campaignId, creative, onS
           {f.format === 'native' && (
             <Field label="Sponsor name" htmlFor="sp" required hint={'Shown to readers as "Sponsored · name" above the headline, so the ad is never mistaken for editorial content.'}><Input id="sp" required maxLength={60} value={f.sponsorName} onChange={(e) => set('sponsorName', e.target.value)} /></Field>
           )}
-          {f.format !== 'image' && (
+          {f.format !== 'image' && f.format !== 'pop' && (
             <>
               <Field label="Headline" htmlFor="hl" required><Input id="hl" required maxLength={90} value={f.headline} onChange={(e) => set('headline', e.target.value)} /></Field>
               <Field label="Body" htmlFor="bd"><Textarea id="bd" maxLength={200} rows={2} value={f.body} onChange={(e) => set('body', e.target.value)} /></Field>
               <Field label="Call to action" htmlFor="cta"><Input id="cta" maxLength={30} value={f.cta} onChange={(e) => set('cta', e.target.value)} placeholder="Learn more" /></Field>
             </>
           )}
-          <Field label="Destination URL" htmlFor="du" required hint="Where a click goes. Must be a secure https link."><Input id="du" type="url" required value={f.destinationUrl} onChange={(e) => set('destinationUrl', e.target.value)} /></Field>
-          <Field label="Display URL" htmlFor="dsp" hint="Optional, shown on text and native ads."><Input id="dsp" maxLength={100} value={f.displayUrl} onChange={(e) => set('displayUrl', e.target.value)} /></Field>
+          <Field label={f.format === 'pop' ? 'Landing page URL' : 'Destination URL'} htmlFor="du" required hint={f.format === 'pop' ? 'The page that opens. Must be a secure https link.' : 'Where a click goes. Must be a secure https link.'}><Input id="du" type="url" required value={f.destinationUrl} onChange={(e) => set('destinationUrl', e.target.value)} /></Field>
+          {f.format !== 'pop' && <Field label="Display URL" htmlFor="dsp" hint="Optional, shown on text and native ads."><Input id="dsp" maxLength={100} value={f.displayUrl} onChange={(e) => set('displayUrl', e.target.value)} /></Field>}
         </div>
         <div className="sm:w-80">
           <p className="mb-2 text-sm font-medium">Preview</p>
-          <CreativePreview c={{ format: f.format, headline: f.headline, body: f.body, cta: f.cta, imageUrl: asset?.url ?? null, width: asset?.width ?? null, height: asset?.height ?? null, altText: f.altText, displayUrl: f.displayUrl, sponsorName: f.sponsorName }} />
+          <CreativePreview c={{ format: f.format, headline: f.headline, body: f.body, cta: f.cta, imageUrl: asset?.url ?? null, width: asset?.width ?? null, height: asset?.height ?? null, altText: f.altText, displayUrl: f.displayUrl, sponsorName: f.sponsorName, destinationUrl: f.destinationUrl }} />
         </div>
       </form>
     </Modal>

@@ -115,7 +115,7 @@ function CampaignDetail() {
                             <div className="mb-3 flex items-start justify-between gap-2">
                               <div className="min-w-0">
                                 <p className="truncate font-medium">{cr.name}</p>
-                                <p className="text-xs text-muted">{cr.format === 'image' ? `Image ${cr.width}×${cr.height}` : cr.format === 'native' ? 'Native' : 'Text'} · version {cr.version}{cr.approvedVersion && cr.approvedVersion !== cr.version ? ` (version ${cr.approvedVersion} serving)` : ''}</p>
+                                <p className="text-xs text-muted">{cr.format === 'image' ? `Image ${cr.width}×${cr.height}` : cr.format === 'native' ? 'Native' : cr.format === 'pop' ? 'Pop traffic' : 'Text'} · version {cr.version}{cr.approvedVersion && cr.approvedVersion !== cr.version ? ` (version ${cr.approvedVersion} serving)` : ''}</p>
                               </div>
                               <StatusBadge status={cr.status} />
                             </div>
@@ -133,7 +133,7 @@ function CampaignDetail() {
                       </div>
                     )}
                   </Async>
-                  {editor && <CreativeEditor key={editor.creative?.id ?? 'new'} open onClose={() => setEditor(null)} orgId={org.id} campaignId={id} creative={editor.creative} onSaved={() => { creatives.reload(); res.reload(); }} />}
+                  {editor && <CreativeEditor key={editor.creative?.id ?? 'new'} open onClose={() => setEditor(null)} orgId={org.id} campaignId={id} creative={editor.creative} pricingModel={res.data?.data.pricingModel} onSaved={() => { creatives.reload(); res.reload(); }} />}
                 </Card>
               )}
               {tab === 'report' && <ReportExplorer orgId={org.id} audience="advertiser" currency={org.currency} filters={{ campaignId: id }} />}

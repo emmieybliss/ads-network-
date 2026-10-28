@@ -177,7 +177,7 @@ export async function makeCampaign(
 
 export async function makeCreative(
   db: Db,
-  opts: { campaignId: string; orgId: string; format?: 'image' | 'text'; status?: string; width?: number; height?: number; destination?: string },
+  opts: { campaignId: string; orgId: string; format?: 'image' | 'text' | 'pop'; status?: string; width?: number; height?: number; destination?: string },
 ) {
   const format = opts.format ?? 'text';
   const destination = opts.destination ?? 'https://example.com/landing';
@@ -221,7 +221,9 @@ export async function makeCreative(
     const snapshot =
       format === 'image'
         ? { format, assetId, storageKey: `test/${randomBytes(8).toString('hex')}.png`, width: opts.width ?? 300, height: opts.height ?? 250, destinationUrl: destination, displayUrl: 'example.com', altText: 'Test banner' }
-        : { format, headline: 'Test headline', body: 'Test body copy for an advertisement.', cta: 'Learn more', destinationUrl: destination, displayUrl: 'example.com' };
+        : format === 'pop'
+          ? { format, destinationUrl: destination }
+          : { format, headline: 'Test headline', body: 'Test body copy for an advertisement.', cta: 'Learn more', destinationUrl: destination, displayUrl: 'example.com' };
     await db.query(`INSERT INTO creative_versions (creative_id, version, snapshot) VALUES ($1, 1, $2)`, [id, JSON.stringify(snapshot)]);
   }
   return id;

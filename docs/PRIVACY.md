@@ -28,6 +28,9 @@
   cleared when the tab closes) so they show at most once every 10 minutes. It
   holds no identifier. Where GDPR applies without consent to store information
   (TCF purpose 1), interstitials are not shown at all.
+- Pop-up and pop-under placements store nothing on the device. Their
+  per-visitor limits are counted on the server against the same hashed IP
+  address used for invalid-traffic checks, per site, and expire within a day.
 - Without consent, ads are contextual: they are chosen from the page, placement
   and site category only.
 - It does not try to bypass consent decisions, browser privacy protections or ad
