@@ -1,12 +1,18 @@
 import type { Pool } from 'pg';
 import type { Redis } from 'ioredis';
-import { applyGuarantee, finalizeEarnings, issueInvoice, releaseCampaignReserve, settleCampaign } from '@blissnova/billing';
+import { applyGuarantee, finalizeEarnings, issueInvoice, releaseCampaignReserve, requestPayout, settleCampaign } from '@blissnova/billing';
 import { withTransaction } from '@blissnova/database';
 import { formatMoney, type PlatformSettings } from '@blissnova/shared';
 import { aggregateDay, allocateFlatRate } from '@blissnova/api/services/events';
 import { dayInZone, invalidateServingCache } from '@blissnova/api/services/serving';
+import { syncPendingCaptures } from '@blissnova/api/services/payments/webhook';
+import { raiseAutomaticPayouts, syncProcessingPayouts } from '@blissnova/api/services/payouts/service';
+import type { AppContext } from '@blissnova/api/lib/context';
 
-export interface JobCtx { db: Pool; redis: Redis; settings: () => Promise<PlatformSettings>; log: { info: (o: object, m?: string) => void; warn: (o: object, m?: string) => void; error: (o: object, m?: string) => void }; notify: (orgId: string, n: { type: string; title: string; body?: string; link?: string; template?: string; vars?: Record<string, string | number | undefined>; roles?: string[] }) => Promise<void> }
+export interface JobCtx { db: Pool; redis: Redis; settings: () => Promise<PlatformSettings>; log: { info: (o: object, m?: string) => void; warn: (o: object, m?: string) => void; error: (o: object, m?: string) => void }; notify: (orgId: string, n: { type: string; title: string; body?: string; link?: string; template?: string; vars?: Record<string, string | number | undefined>; roles?: string[] }) => Promise<void>;
+  /** The API context (payment and payout providers), for jobs that talk to providers. */
+  app?: AppContext;
+}
 
 interface StatementAccum { currency: string; lines: Array<{ description: string; amountMicros: string }>; total: bigint }
 
@@ -163,5 +169,20 @@ export async function dailyMaintenance(ctx: JobCtx) {
       if (inv) statements++;
     }
   }
-  return { flat, guaranteeTopups, purged: purged.rowCount, statements };
+  const payouts = await autoPayouts(ctx, now);
+  return { flat, guaranteeTopups, purged: purged.rowCount, statements, autoPayouts: payouts.raised };
+}
+
+/** AdSense-style monthly payout requests for publishers who opted in (staff still approve each one). */
+export async function autoPayouts(ctx: JobCtx, now = new Date()) {
+  const s = await ctx.settings();
+  return raiseAutomaticPayouts(ctx, s.publishers, now, (r) => withTransaction(ctx.db, (c) => requestPayout(c, { orgId: r.orgId, amount: r.amount, currency: r.currency, userId: r.userId, idempotencyKey: r.key, minimum: BigInt(s.publishers.minimumPayoutMicros), auto: true })));
+}
+
+/** Fallbacks for missed provider webhooks: capture approved PayPal deposits and poll payouts in flight. */
+export async function syncProviders(ctx: JobCtx) {
+  if (!ctx.app) return { skipped: true };
+  const captures = await syncPendingCaptures(ctx.app);
+  const payouts = await syncProcessingPayouts({ ...ctx.app, notify: ctx.notify });
+  return { captures, payouts };
 }

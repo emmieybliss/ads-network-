@@ -10,7 +10,9 @@ import { processAdmittedEvent, RetryLaterError, type AdmittedEvent } from '@blis
 import { writeServeLog, type ServeLog } from '@blissnova/api/services/serving';
 import { deliverOutbox, queueEmail } from '@blissnova/api/services/notifications';
 import { EMAIL_TEMPLATES } from '@blissnova/api/lib/mailer';
-import { budgetAlerts, campaignLifecycle, dailyMaintenance, detectAnomalies, lowBalanceAlerts, refreshAggregates, settleAll, syncSpendCounters, type JobCtx } from './jobs';
+import { PaymentProviderRegistry, paypalClientFor } from '@blissnova/api/services/payments/registry';
+import { PayoutProviderRegistry } from '@blissnova/api/services/payouts/registry';
+import { budgetAlerts, campaignLifecycle, dailyMaintenance, detectAnomalies, lowBalanceAlerts, refreshAggregates, settleAll, syncProviders, syncSpendCounters, type JobCtx } from './jobs';
 
 /**
  * Background worker: event processing, serve logs, email delivery and
@@ -38,7 +40,10 @@ const notify: JobCtx['notify'] = async (orgId, n) => {
 
 const emailQueue = new Queue(QUEUE_NAMES.email, { connection });
 const maintenanceQueue = new Queue(QUEUE_NAMES.maintenance, { connection });
-const jobCtx: JobCtx = { db, redis: connection, settings: () => settings.get(), log, notify };
+const paypal = paypalClientFor(config);
+// The subset of the API context that provider sync jobs use.
+const app = { config, db, redis: connection, settings, mailer, queues: { email: emailQueue }, payments: new PaymentProviderRegistry(config, paypal), payouts: new PayoutProviderRegistry(config, paypal), log } as never;
+const jobCtx: JobCtx = { db, redis: connection, settings: () => settings.get(), log, notify, app };
 
 const workers = [
   new Worker(QUEUE_NAMES.events, async (job: Job<AdmittedEvent>) => {
@@ -67,7 +72,7 @@ const workers = [
       case 'five-minutely':
         await budgetAlerts(jobCtx);
         await lowBalanceAlerts(jobCtx);
-        return { anomalies: await detectAnomalies(jobCtx) };
+        return { anomalies: await detectAnomalies(jobCtx), providers: await syncProviders(jobCtx) };
       case 'daily':
         return dailyMaintenance(jobCtx);
       default:
