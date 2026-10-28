@@ -111,6 +111,76 @@ are excluded as invalid traffic afterwards, the top-up is not recalculated
 automatically. Finance staff can correct it with a manual adjustment, which is
 audited.
 
+## Placement types and reserved space
+
+Each ad unit has a `display`: `inline`, `anchor`, `rail_left`, `rail_right` or
+`interstitial` (migration 0009). The publisher snippet carries it as
+`data-bn-display`, and `/serve` returns it per slot so the tag follows the
+server's setting.
+
+- **Inline** snippets reserve space up front: `aspect-ratio` for fixed sizes,
+  `min-height` (capped by viewport width) for responsive units with a typical
+  size. With `no_fill = keep_space` an empty slot keeps that space instead of
+  collapsing, so nothing below it moves.
+- **Anchor**: one per page, fixed to the bottom, closable; the tag pads the
+  page body by the bar's height so the end of the page stays reachable. At most
+  120 px tall.
+- **Side rails**: fixed beside the content, requested only when the viewport
+  leaves room for a 1024 px content column plus the rail on both sides. At most
+  300 px wide.
+- **Interstitial**: requested only when the visitor follows a link to another
+  page of the same site. The tag waits at most 1.5 s for an ad, otherwise it
+  navigates straight away. It shows a clear "Continue to page" button (Escape
+  and a backdrop click also continue), at most once per 10 minutes per tab.
+
+## Automatic in-article placement
+
+A site can turn on automatic ads (migration 0010): one in-page placement, the
+most ads per article (1 to 6), the paragraph after which the first goes, the
+paragraphs between ads, and an optional article container selector. The
+publisher adds the loader once with `data-auto="1"`. The tag then reads
+`GET /api/v1/public/sites/:siteKey/auto` (cacheable for 5 minutes), finds the
+article (the selector, a usual article container, or the element with the
+most paragraphs), counts paragraphs of real text (skipping lists, tables,
+quotes and figures), and inserts slots that reserve their space. It never
+places one next to an existing slot or after the last paragraph. The inserted
+slots are ordinary slots of that placement, so serving, labels, caps and
+reports are unchanged. Pausing the placement turns automatic ads off.
+
+## Page views and page RPM
+
+Page RPM is estimated earnings per 1,000 page views, the main number
+publishers compare networks by. A page view here is a page where the ad tag
+asked for at least one ad: the first `/serve` request carrying a new page
+view id (`pv`, made by the tag per page load) adds one to `page_views` for
+that day, site and path; later requests with the same id within 30 minutes
+are not counted again (a Redis `SET NX` key). Pages without the tag are not
+seen, so this is lower than an analytics tool's count.
+
+The path (no host, query string or fragment, at most 300 characters) goes into
+the signed delivery token (`pp`), so every event of that ad, including clicks,
+records `ad_events.page_path`. The daily aggregation job rebuilds
+`page_daily_stats` (valid impressions, valid clicks, publisher earnings per
+site and path) alongside `daily_stats`. `GET /orgs/:orgId/reports/pages`
+combines the two and returns page views, impressions per page view, CTR,
+estimated earnings and page RPM per page; `/reports/pages/export` gives the
+same as CSV. The publisher overview shows page views and page RPM, and the
+Reports page has a Pages tab. Migration 0011.
+
+## Consent (TCF v2.2, GPP, US Privacy, GPC)
+
+The ad tag collects signals from the page's CMPs and sends them with each
+`/serve` request; it does not decide anything itself. `services/consent.ts`
+decodes TCF v2 TC strings (core segment: purposes and vendor consents), GPP
+headers (Fibonacci-coded section ids), the GPP US national section and US
+Privacy strings, and returns `{ personalized, reason }`. Serving uses a visitor
+id only when that is true, and the response tells the tag
+(`privacy.personalization`) whether it may keep one. GPP sections the server
+cannot decode yet count as an opt-out. TCF consent needs `TCF_VENDOR_ID`; the
+network has no IAB registration, so it is unset by default. The demo site's
+`/consent-test` page answers the IAB APIs with fixed test signals to show each
+outcome.
+
 ## ads.txt and sellers.json
 
 Each publisher's seller id is its organization id. The site's Ad tag tab

@@ -1,9 +1,9 @@
 'use client';
 import { useState, type FormEvent } from 'react';
 import { CheckCircle2, FlaskConical, Plus, RefreshCw, ShieldCheck } from 'lucide-react';
-import { Alert, Async, Badge, Button, Card, CardHeader, Checkbox, CodeBlock, CopyButton, Field, Input, Modal, Select, StatusBadge, Table, Textarea } from '@/components/ui';
+import { Alert, Async, Badge, Button, Card, CardHeader, Checkbox, CodeBlock, CopyButton, DefinitionList, Field, Input, Modal, Select, StatusBadge, Table, Textarea } from '@/components/ui';
 import { useApi, useConfig } from '@/lib/hooks';
-import { ApiError, errorMessage, patch, post } from '@/lib/api';
+import { ApiError, errorMessage, patch, post, put } from '@/lib/api';
 import { formatDate, formatNumber, humanize, timeAgo } from '@/lib/format';
 
 export const CATEGORIES = ['general', 'news', 'technology', 'business', 'finance', 'lifestyle', 'entertainment', 'sports', 'education', 'health', 'travel', 'food', 'automotive', 'gaming', 'parenting', 'real_estate', 'science', 'other'];
@@ -184,6 +184,13 @@ export function SubmitPanel({ orgId, site, onChange }: { orgId: string; site: Si
 }
 
 const POSITIONS = ['header', 'sidebar', 'in_content', 'footer', 'other'];
+const DISPLAYS: Record<string, { label: string; hint: string }> = {
+  inline: { label: 'In the page', hint: 'Shows where you paste the snippet.' },
+  anchor: { label: 'Anchor (sticky bottom bar)', hint: 'A bar fixed to the bottom of the screen that visitors can close. The page gets matching space at the bottom so nothing is hidden. At most 120 px tall; one per page.' },
+  rail_left: { label: 'Side rail, left', hint: 'Fixed beside your content, only on screens wide enough to leave the content clear. At most 300 px wide.' },
+  rail_right: { label: 'Side rail, right', hint: 'Fixed beside your content, only on screens wide enough to leave the content clear. At most 300 px wide.' },
+  interstitial: { label: 'Interstitial (between pages)', hint: 'Full screen when a visitor follows a link to another of your pages, with a clear "Continue" button. At most once every 10 minutes per visitor tab, and never where GDPR applies without consent.' },
+};
 
 export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: string }) {
   const res = useApi<{ data: any[] }>(`/orgs/${orgId}/sites/${siteId}/units`);
@@ -196,7 +203,7 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
     if (!edit) return;
     setBusy(true);
     setError(null);
-    const body = { name: edit.name, formats: edit.formats, responsive: edit.responsive, width: edit.responsive ? null : Number(edit.width) || null, height: edit.responsive ? null : Number(edit.height) || null, position: edit.position };
+    const body = { name: edit.name, formats: edit.formats, responsive: edit.responsive, width: Number(edit.width) || null, height: Number(edit.height) || null, position: edit.position, display: edit.display, noFill: edit.noFill };
     try {
       if (edit.id) await patch(`/orgs/${orgId}/units/${edit.id}`, body);
       else await post(`/orgs/${orgId}/sites/${siteId}/units`, { ...body, key: edit.key });
@@ -211,19 +218,20 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
 
   return (
     <Card>
-      <CardHeader title="Placements" description="Each placement is a slot on your pages where an ad can appear." actions={<Button size="sm" onClick={() => setEdit({ key: '', name: '', formats: ['image', 'text'], responsive: true, width: '', height: '', position: 'in_content' })}><Plus className="size-4" /> Add placement</Button>} />
+      <CardHeader title="Placements" description="Each placement is a slot on your pages where an ad can appear." actions={<Button size="sm" onClick={() => setEdit({ key: '', name: '', formats: ['image', 'text'], responsive: true, width: '', height: '', position: 'in_content', display: 'inline', noFill: 'collapse' })}><Plus className="size-4" /> Add placement</Button>} />
       <Async res={res}>
         {({ data }) => <Table rows={data} rowKey={(r) => r.id} empty="No placements yet. Add one to get an ad tag." columns={[
           { key: 'n', header: 'Name', cell: (r) => <span className="font-medium">{r.name}</span> },
           { key: 'k', header: 'Slot key', cell: (r) => <code className="text-xs">{r.key}</code> },
           { key: 'f', header: 'Formats', cell: (r) => r.formats.map(humanize).join(', ') },
-          { key: 's', header: 'Size', cell: (r) => (r.responsive ? 'Responsive' : `${r.width}×${r.height}`) },
+          { key: 's', header: 'Size', cell: (r) => (r.responsive ? (r.width ? `Responsive, ${r.width}×${r.height}` : 'Responsive') : `${r.width}×${r.height}`) },
+          { key: 'd', header: 'Type', cell: (r) => DISPLAYS[r.display]?.label ?? humanize(r.display) },
           { key: 'p', header: 'Position', cell: (r) => humanize(r.position) },
           { key: 'st', header: 'Status', cell: (r) => <span className="flex gap-1"><StatusBadge status={r.status} />{r.adminBlocked && <Badge tone="danger">Blocked by network</Badge>}</span> },
           { key: 'a', header: '', cell: (r) => r.status !== 'archived' && (
             <span className="flex gap-1">
               <Button size="sm" variant="ghost" onClick={() => setEdit({ ...r, width: r.width ?? '', height: r.height ?? '' })}>Edit</Button>
-              <Button size="sm" variant="ghost" onClick={async () => { try { await patch(`/orgs/${orgId}/units/${r.id}`, { status: r.status === 'active' ? 'paused' : 'active' }); res.reload(); } catch (e) { setError(errorMessage(e)); } }}>{r.status === 'active' ? 'Pause' : 'Activate'}</Button>
+              <Button size="sm" variant="ghost" onClick={async () => { try { await post(`/orgs/${orgId}/units/${r.id}/${r.status === 'active' ? 'pause' : 'activate'}`); res.reload(); } catch (e) { setError(errorMessage(e)); } }}>{r.status === 'active' ? 'Pause' : 'Activate'}</Button>
             </span>
           ) },
         ]} />}
@@ -237,7 +245,9 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
             {!edit.id && <Field label="Slot key" htmlFor="uk" required hint="Used in the ad tag. Lowercase letters, numbers, hyphens and underscores."><Input id="uk" required pattern="^[a-z0-9][a-z0-9_-]{1,63}$" value={edit.key} onChange={(e) => setEdit({ ...edit, key: e.target.value })} placeholder="sidebar-top" /></Field>}
             <fieldset><legend className="mb-2 text-sm font-medium">Allowed formats</legend><div className="flex gap-4">{['image', 'text', 'native'].map((f) => <Checkbox key={f} label={humanize(f)} checked={edit.formats.includes(f)} onChange={(v) => setEdit({ ...edit, formats: v ? [...edit.formats, f] : edit.formats.filter((x: string) => x !== f) })} />)}</div></fieldset>
             <Checkbox label="Responsive (fits the container width)" checked={edit.responsive} onChange={(v) => setEdit({ ...edit, responsive: v })} />
-            {!edit.responsive && <div className="grid grid-cols-2 gap-3"><Field label="Width (px)" htmlFor="uw"><Input id="uw" type="number" min={1} value={edit.width} onChange={(e) => setEdit({ ...edit, width: e.target.value })} /></Field><Field label="Height (px)" htmlFor="uh"><Input id="uh" type="number" min={1} value={edit.height} onChange={(e) => setEdit({ ...edit, height: e.target.value })} /></Field></div>}
+            <div className="grid grid-cols-2 gap-3"><Field label={edit.responsive ? 'Typical width (px)' : 'Width (px)'} htmlFor="uw"><Input id="uw" type="number" min={1} value={edit.width} onChange={(e) => setEdit({ ...edit, width: e.target.value })} /></Field><Field label={edit.responsive ? 'Typical height (px)' : 'Height (px)'} htmlFor="uh" hint={edit.responsive ? 'Optional. Reserves this height so the page does not jump when the ad loads.' : undefined}><Input id="uh" type="number" min={1} value={edit.height} onChange={(e) => setEdit({ ...edit, height: e.target.value })} /></Field></div>
+            <Field label="Placement type" htmlFor="ud" hint={DISPLAYS[edit.display]?.hint}><Select id="ud" value={edit.display} onChange={(e) => setEdit({ ...edit, display: e.target.value })}>{Object.entries(DISPLAYS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</Select></Field>
+            {edit.display === 'inline' && <Field label="When no ad is available" htmlFor="unf" hint={edit.noFill === 'keep_space' ? 'The reserved space stays empty, so nothing on the page moves.' : 'The slot disappears. Content below it may move up.'}><Select id="unf" value={edit.noFill} onChange={(e) => setEdit({ ...edit, noFill: e.target.value })}><option value="collapse">Hide the slot</option><option value="keep_space">Keep the reserved space</option></Select></Field>}
             <Field label="Position on the page" htmlFor="up"><Select id="up" value={edit.position} onChange={(e) => setEdit({ ...edit, position: e.target.value })}>{POSITIONS.map((p) => <option key={p} value={p}>{humanize(p)}</option>)}</Select></Field>
           </form>
         )}
@@ -267,10 +277,89 @@ export function TagPanel({ orgId, siteId }: { orgId: string; siteId: string }) {
               </div>
             )}
           </Card>
-          {data.consentNote && <Alert tone="info" title="Consent">{data.consentNote}</Alert>}
+          {data.consent && <ConsentPanel consent={data.consent} />}
         </div>
       )}
     </Async>
+  );
+}
+
+/** How the tag reads the site's consent tool, and what that means for the ads it gets. */
+function ConsentPanel({ consent }: { consent: { personalizedAllowed: boolean; tcfVendorRegistered: boolean; signals: string[] } }) {
+  return (
+    <Card>
+      <CardHeader title="Consent and privacy"
+        description="If your site uses a consent management platform (CMP), the tag reads its signals automatically. You don't need any extra code." />
+      <DefinitionList items={[
+        ['Signals read', consent.signals.join(' · ')],
+        ['Personalized ads on this network', consent.personalizedAllowed ? 'On, when the visitor\'s signals allow it' : 'Off: every ad is contextual'],
+        ['Visitors where GDPR applies', consent.tcfVendorRegistered ? 'Personalized only with TCF consent for our vendor and purposes 1, 3 and 4' : 'Contextual ads only (the network has no IAB vendor registration yet)'],
+        ['Without a signal', 'Contextual ads that store nothing on the visitor\'s device'],
+      ]} />
+      <div className="mt-4 space-y-2 border-t border-border pt-4 text-sm text-muted">
+        <p>The tag waits up to 2 seconds for your CMP before requesting ads. An opt-out (GPC, a US opt-out of sale, sharing or targeted ads, or a TCF refusal) always means contextual ads, and any stored visitor id is removed.</p>
+        <p>No CMP? Call <code className="text-xs">window.blissnova.setConsent({'{'} personalized: true {'}'})</code> where you have consent, or <code className="text-xs">false</code> to turn personalization off. Run <code className="text-xs">window.blissnova.getPrivacy()</code> in the browser console to see what the last request was allowed to do.</p>
+      </div>
+    </Card>
+  );
+}
+
+/** Automatic in-article placement: where and how often the tag may add ads between paragraphs. */
+export function AutoAdsPanel({ orgId, siteId, approved }: { orgId: string; siteId: string; approved: boolean }) {
+  const res = useApi<{ data: any }>(`/orgs/${orgId}/sites/${siteId}/auto-ads`);
+  const units = useApi<{ data: any[] }>(`/orgs/${orgId}/sites/${siteId}/units`);
+  const [f, setF] = useState<Record<string, any> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null);
+  const cur = f ?? res.data?.data;
+  const inline = (units.data?.data ?? []).filter((u: any) => u.display === 'inline' && u.status !== 'archived');
+
+  async function save(ev: FormEvent) {
+    ev.preventDefault();
+    if (!cur) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await put<{ data: any }>(`/orgs/${orgId}/sites/${siteId}/auto-ads`, {
+        enabled: cur.enabled, unitId: cur.unitId || null, maxAds: Number(cur.maxAds), spacing: Number(cur.spacing), firstAfter: Number(cur.firstAfter), selector: cur.selector || null,
+      });
+      res.setData(r);
+      setF(null);
+      setMsg({ tone: 'success', text: 'Saved. Pages with the automatic tag pick this up within 5 minutes.' });
+    } catch (e) {
+      setMsg({ tone: 'danger', text: errorMessage(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader title="Automatic in-article ads" description="Let the tag place ads between the paragraphs of your articles, so you don't need to paste a snippet into each one. Every ad is labelled Sponsored." />
+      {!cur ? <p className="text-sm text-muted">Loading...</p> : (
+        <form onSubmit={save} className="max-w-2xl space-y-4">
+          <Checkbox label="Place ads in articles automatically" checked={!!cur.enabled} onChange={(v) => setF({ ...cur, enabled: v })} />
+          <Field label="Placement to use" htmlFor="aa-unit" hint={inline.length ? 'An in-page placement. Its reports include the automatic ads.' : 'Add an in-page placement first.'}>
+            <Select id="aa-unit" value={cur.unitId ?? ''} onChange={(e) => setF({ ...cur, unitId: e.target.value || null })}>
+              <option value="">Choose a placement</option>
+              {inline.map((u: any) => <option key={u.id} value={u.id}>{u.name} ({u.key})</option>)}
+            </Select>
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Most ads per article" htmlFor="aa-max"><Input id="aa-max" type="number" min={1} max={6} value={cur.maxAds} onChange={(e) => setF({ ...cur, maxAds: e.target.value })} /></Field>
+            <Field label="First ad after paragraph" htmlFor="aa-first"><Input id="aa-first" type="number" min={1} max={20} value={cur.firstAfter} onChange={(e) => setF({ ...cur, firstAfter: e.target.value })} /></Field>
+            <Field label="Paragraphs between ads" htmlFor="aa-gap"><Input id="aa-gap" type="number" min={2} max={20} value={cur.spacing} onChange={(e) => setF({ ...cur, spacing: e.target.value })} /></Field>
+          </div>
+          <Field label="Article container (optional)" htmlFor="aa-sel" hint="A CSS selector such as .post-body. Leave empty and the tag finds the article itself.">
+            <Input id="aa-sel" value={cur.selector ?? ''} onChange={(e) => setF({ ...cur, selector: e.target.value })} placeholder=".post-body" />
+          </Field>
+          <p className="text-sm text-muted">Ads are never placed next to another ad slot or after the last paragraph. Short paragraphs, lists, tables and quotes are skipped.</p>
+          {approved ? <CodeBlock code={res.data!.data.loader} label="Add this once to every article page (for example in your theme's footer)" /> : <p className="text-sm text-muted">The tag becomes available once the site is approved.</p>}
+          {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
+          <Button type="submit" loading={busy}>Save automatic ads</Button>
+        </form>
+      )}
+    </Card>
   );
 }
 

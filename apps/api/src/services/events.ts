@@ -115,10 +115,10 @@ export async function processAdmittedEvent(ctx: Pick<AppContext, 'db' | 'redis'>
 
   const billableType = (c.pm === 'cpm' && e.type === 'render') || (c.pm === 'cpc' && e.type === 'click');
   return withTransaction(ctx.db as never, async (client: PoolClient) => {
-    const base = [c.d, e.type, result.valid ? 'valid' : 'invalid', result.reason, result.score, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, e.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, e.receivedAt, e.clientEventId];
+    const base = [c.d, e.type, result.valid ? 'valid' : 'invalid', result.reason, result.score, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, e.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, e.receivedAt, e.clientEventId, c.pp ?? null];
     const ins = await client.query<{ id: string }>(
-      `INSERT INTO ad_events (event_key, delivery_id, type, status, invalid_reason, ivt_score, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, client_event_id)
-       VALUES ($21, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, to_timestamp($19 / 1000.0), $20)
+      `INSERT INTO ad_events (event_key, delivery_id, type, status, invalid_reason, ivt_score, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, client_event_id, page_path)
+       VALUES ($22, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, to_timestamp($19 / 1000.0), $20, $21)
        ON CONFLICT DO NOTHING RETURNING id`,
       [...base, e.flags.duplicate ? null : `${c.d}:${e.type}`]);
     if (!ins.rows[0]) {
@@ -128,8 +128,8 @@ export async function processAdmittedEvent(ctx: Pick<AppContext, 'db' | 'redis'>
       base[2] = 'invalid';
       base[3] = 'duplicate';
       await client.query(
-        `INSERT INTO ad_events (delivery_id, type, status, invalid_reason, ivt_score, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, client_event_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, to_timestamp($19 / 1000.0), $20) ON CONFLICT DO NOTHING`, base);
+        `INSERT INTO ad_events (delivery_id, type, status, invalid_reason, ivt_score, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, client_event_id, page_path)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, to_timestamp($19 / 1000.0), $20, $21) ON CONFLICT DO NOTHING`, base);
       return { status: 'invalid' as const, reason: 'duplicate' };
     }
     let billable = false;
@@ -169,6 +169,15 @@ export async function aggregateDay(db: AppContext['db'], day: string) {
          COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0)
        FROM ad_events WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1
        GROUP BY campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device`, [day]);
+    await c.query('DELETE FROM page_daily_stats WHERE day = $1', [day]);
+    await c.query(
+      `INSERT INTO page_daily_stats (day, site_id, publisher_org_id, page_path, valid_impressions, valid_clicks, publisher_micros)
+       SELECT $1::date, site_id, publisher_org_id, page_path,
+         count(*) FILTER (WHERE type = 'render' AND status = 'valid'),
+         count(*) FILTER (WHERE type = 'click' AND status = 'valid'),
+         COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0)
+       FROM ad_events WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1 AND page_path IS NOT NULL
+       GROUP BY site_id, publisher_org_id, page_path`, [day]);
   });
 }
 

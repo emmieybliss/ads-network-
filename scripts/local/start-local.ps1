@@ -17,12 +17,30 @@ if ([int]($nodeVersion.TrimStart('v').Split('.')[0]) -lt 20) { Fail "Node.js $no
 # 2. Ports must be free
 foreach ($port in 3000, 4000, 3100) {
   if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
-    Fail "Port $port is already in use. If the demo is already running, use it or run 'Stop BlissNova demo' first. Otherwise close the program using port $port."
+    Fail "Port $port is already in use. If the BlissNova demo is already running, use it or run 'Stop BlissNova demo' first. Another local demo (for example the eSIM demo) may be using it: stop that one first."
   }
 }
 
+# The built-in database: a crashed run can leave Postgres processes behind that
+# still hold its port. The API is not running (port 4000 is free), so any
+# Postgres started from this folder is a leftover: stop it.
+Get-CimInstance Win32_Process -Filter "Name='postgres.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.ExecutablePath -like "$($root.Path)\node_modules\*" } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 1
+$pgPort = if ($env:LOCAL_PG_PORT) { [int]$env:LOCAL_PG_PORT } else { 54329 }
+if (Get-NetTCPConnection -LocalPort $pgPort -State Listen -ErrorAction SilentlyContinue) {
+  Fail "Port $pgPort, used by BlissNova's built-in database, is taken by another program. Restart the PC, or set LOCAL_PG_PORT to another free port."
+}
+
 # 3. pnpm: use an installed one, otherwise run the pinned version through npx.
-function Pnpm { if (Get-Command pnpm -ErrorAction SilentlyContinue) { & pnpm @args } else { & npx --yes pnpm@10.28.0 @args }; if ($LASTEXITCODE -ne 0) { Fail "pnpm $($args -join ' ') failed. Scroll up for the error." } }
+# Look for a real program only (-CommandType Application): PowerShell names are
+# case-insensitive, so a plain Get-Command would find this helper itself.
+$pnpmExe = Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+function Invoke-Pnpm {
+  if ($pnpmExe) { & $pnpmExe.Source @args } else { & npx.cmd --yes pnpm@10.28.0 @args }
+  if ($LASTEXITCODE -ne 0) { Fail "pnpm $($args -join ' ') failed. Scroll up for the error." }
+}
 
 # 4. Install and build when the code changed since the last start.
 $lockHash = (Get-FileHash pnpm-lock.yaml).Hash
@@ -32,11 +50,11 @@ $stampFile = Join-Path $env:LOCAL_DATA_DIR 'build-stamp.txt'
 $built = (Test-Path $stampFile) -and ((Get-Content $stampFile -Raw).Trim() -eq $stamp) -and (Test-Path 'apps\web\.next\BUILD_ID') -and (Test-Path 'apps\api\dist\local.js')
 if (-not $built) {
   Write-Host 'Installing packages and building BlissNova. The first time takes several minutes...' -ForegroundColor Cyan
-  Pnpm install --frozen-lockfile
-  Pnpm --filter '@blissnova/ad-tag' build
-  Pnpm --filter '@blissnova/api' build
-  $env:API_INTERNAL_URL = 'http://localhost:4000'; $env:NEXT_PUBLIC_DEMO_MODE = 'true'; Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
-  Pnpm --filter '@blissnova/web' build
+  Invoke-Pnpm install --frozen-lockfile
+  Invoke-Pnpm --filter '@blissnova/ad-tag' build
+  Invoke-Pnpm --filter '@blissnova/api' build
+  $env:API_INTERNAL_URL = 'http://127.0.0.1:4000'; $env:NEXT_PUBLIC_DEMO_MODE = 'true'; Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
+  Invoke-Pnpm --filter '@blissnova/web' build
   Set-Content -Path $stampFile -Value $stamp
 }
 
@@ -48,16 +66,18 @@ Start-Window 'BlissNova API' 'apps\api' 'node dist\local.js'
 Write-Host 'Starting the API and its database...' -ForegroundColor Cyan
 $ready = $false
 for ($i = 0; $i -lt 150; $i++) {
-  try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://localhost:4000/ready).StatusCode -eq 200) { $ready = $true; break } } catch { }
+  try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://127.0.0.1:4000/ready).StatusCode -eq 200) { $ready = $true; break } } catch { }
   Start-Sleep -Seconds 2
 }
 if (-not $ready) { Fail 'The API did not start within 5 minutes. Open the "BlissNova API" window from the taskbar to see why.' }
 Start-Window 'BlissNova website' 'apps\web' 'node node_modules\next\dist\bin\next start --port 3000'
 Start-Window 'BlissNova demo site' 'apps\demo-site' 'node server.mjs'
+$webReady = $false
 for ($i = 0; $i -lt 60; $i++) {
-  try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://localhost:3000).StatusCode -eq 200) { break } } catch { }
+  try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://127.0.0.1:3000).StatusCode -eq 200) { $webReady = $true; break } } catch { }
   Start-Sleep -Seconds 2
 }
+if (-not $webReady) { Fail 'The website did not start within 2 minutes. Open the "BlissNova website" window from the taskbar to see why, then run "Stop BlissNova demo".' }
 
 $secrets = Get-Content (Join-Path $env:LOCAL_DATA_DIR 'secrets.json') -Raw | ConvertFrom-Json
 Write-Host ''

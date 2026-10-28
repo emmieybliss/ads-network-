@@ -44,6 +44,7 @@ PUBLIC_SITE_URL=https://YOUR_DOMAIN
 PUBLIC_API_URL=https://YOUR_DOMAIN
 CORS_ORIGINS=https://YOUR_DOMAIN
 ADS_TXT_DOMAIN=YOUR_DOMAIN       # what publishers write in ads.txt; defaults to the PUBLIC_SITE_URL host
+TCF_VENDOR_ID=                   # IAB Global Vendor List id, only after registering with IAB Europe; empty = ads under GDPR stay contextual
 COOKIE_SECURE=true
 TRUST_PROXY=true                 # only when the reverse proxy below is in front
 GEO_COUNTRY_HEADER=              # e.g. cf-ipcountry if your CDN sets one

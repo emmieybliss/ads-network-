@@ -63,7 +63,14 @@ async function org(c: PoolClient, name: string, type: 'advertiser' | 'publisher'
   return id;
 }
 
-interface SampleSpec { campaignId: string; creativeId: string; unitId: string; pricing: 'cpm' | 'cpc'; rateMicros: bigint; perDay: [number, number]; ctr: number }
+// Demo-site pages each placement appears on (the demo home page shows the first article).
+const SAMPLE_PAGES: Record<string, string[]> = {
+  'demo-native': ['/', '/calmer-workday'],
+  'demo-auto': ['/houseplants-guide'],
+  default: ['/', '/', '/calmer-workday', '/houseplants-guide'],
+};
+
+interface SampleSpec { campaignId: string; creativeId: string; unitId: string; pricing: 'cpm' | 'cpc'; rateMicros: bigint; perDay: [number, number]; ctr: number; pages: string[] }
 
 /**
  * Two weeks of generated sample events for the demo campaigns, inserted as
@@ -87,24 +94,24 @@ async function sampleHistory(c: PoolClient, specs: SampleSpec[], ctx: { siteId: 
                   (ARRAY['US','US','US','GB','CA','DE','IN','ZZ'])[1 + floor(random() * 8)::int] AS country,
                   (ARRAY['desktop','desktop','mobile','mobile','tablet'])[1 + floor(random() * 5)::int] AS device,
                   random() < 0.03 AS invalid, random() < 0.66 AS viewable, random() < $9::float AS clicked,
-                  md5(random()::text) AS visitor
+                  md5(random()::text) AS visitor, ($15::text[])[1 + floor(random() * cardinality($15::text[]))::int] AS page
            FROM generate_series(1, $2::int)
          ), ev AS (
-           SELECT delivery, at, country, device, visitor, 'served' AS type, false AS invalid FROM d
-           UNION ALL SELECT delivery, at + interval '1 second', country, device, visitor, 'render', invalid FROM d
-           UNION ALL SELECT delivery, at + interval '3 seconds', country, device, visitor, 'viewable', false FROM d WHERE viewable AND NOT invalid
-           UNION ALL SELECT delivery, at + interval '20 seconds', country, device, visitor, 'click', false FROM d WHERE clicked AND NOT invalid
+           SELECT delivery, at, country, device, visitor, page, 'served' AS type, false AS invalid FROM d
+           UNION ALL SELECT delivery, at + interval '1 second', country, device, visitor, page, 'render', invalid FROM d
+           UNION ALL SELECT delivery, at + interval '3 seconds', country, device, visitor, page, 'viewable', false FROM d WHERE viewable AND NOT invalid
+           UNION ALL SELECT delivery, at + interval '20 seconds', country, device, visitor, page, 'click', false FROM d WHERE clicked AND NOT invalid
          )
          INSERT INTO ad_events (client_event_id, delivery_id, type, status, invalid_reason, ivt_score, billable, cost_micros, publisher_micros, currency,
-                                campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, page_host, occurred_at, received_at)
+                                campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, page_host, page_path, occurred_at, received_at)
          SELECT 'demo-sample:' || gen_random_uuid(), delivery, type, CASE WHEN invalid THEN 'invalid' ELSE 'valid' END, CASE WHEN invalid THEN 'anomaly_score' END,
                 CASE WHEN invalid THEN 75 ELSE 0 END,
                 NOT invalid AND ((type = 'render' AND $10::bigint > 0) OR (type = 'click' AND $11::bigint > 0)),
                 CASE WHEN invalid THEN 0 WHEN type = 'render' THEN $10::bigint WHEN type = 'click' THEN $11::bigint ELSE 0 END,
                 CASE WHEN invalid THEN 0 WHEN type = 'render' THEN $10::bigint * $12::int / 10000 WHEN type = 'click' THEN $11::bigint * $12::int / 10000 ELSE 0 END,
-                $13, $3, $4, $5, $6, $7, $8, visitor, md5(visitor), country, device, $14, at, at
+                $13, $3, $4, $5, $6, $7, $8, visitor, md5(visitor), country, device, $14, page, at, at
          FROM ev`,
-        [day, renders, s.campaignId, s.creativeId, ctx.advOrg, ctx.siteId, s.unitId, ctx.pubOrg, s.ctr, costPerImp.toString(), costPerClick.toString(), ctx.shareBps, CURRENCY, DEMO_SITE_DOMAIN],
+        [day, renders, s.campaignId, s.creativeId, ctx.advOrg, ctx.siteId, s.unitId, ctx.pubOrg, s.ctr, costPerImp.toString(), costPerClick.toString(), ctx.shareBps, CURRENCY, DEMO_SITE_DOMAIN, s.pages],
       );
       await c.query(
         `INSERT INTO campaign_daily_spend (campaign_id, day, spent_micros, impressions, clicks)
@@ -114,6 +121,18 @@ async function sampleHistory(c: PoolClient, specs: SampleSpec[], ctx: { siteId: 
         [s.campaignId, day],
       );
     }
+    // Each sample campaign serves at most one ad per page view, so a page's
+    // views are the most ads any one campaign served on it that day.
+    await c.query(
+      `INSERT INTO page_views (day, site_id, page_path, views)
+       SELECT $1::date, $2, page_path, max(n) FROM (
+         SELECT page_path, campaign_id, count(*) AS n FROM ad_events
+         WHERE site_id = $2 AND type = 'served' AND page_path IS NOT NULL AND occurred_at >= $1::date AND occurred_at < $1::date + 1
+         GROUP BY page_path, campaign_id) u
+       GROUP BY page_path
+       ON CONFLICT (day, site_id, page_path) DO UPDATE SET views = EXCLUDED.views`,
+      [day, ctx.siteId],
+    );
   }
   for (const s of specs) {
     await c.query(
@@ -217,15 +236,21 @@ async function main() {
       { key: 'demo-leaderboard', name: 'Header leaderboard', w: 728, h: 90, pos: 'header', formats: ['image'] },
       { key: 'demo-sidebar', name: 'Sidebar text unit', w: null as number | null, h: null as number | null, pos: 'sidebar', formats: ['text'] },
       { key: 'demo-native', name: 'In-article native unit', w: null as number | null, h: null as number | null, pos: 'in_content', formats: ['native'] },
-    ];
+      { key: 'demo-anchor', name: 'Sticky bottom anchor', w: 728, h: 90, pos: 'footer', formats: ['image'], display: 'anchor', responsive: true },
+      { key: 'demo-rail', name: 'Right side rail', w: 160, h: 600, pos: 'sidebar', formats: ['image'], display: 'rail_right' },
+      { key: 'demo-auto', name: 'Automatic in-article ads', w: null as number | null, h: null as number | null, pos: 'in_content', formats: ['native', 'text'] },
+      { key: 'demo-interstitial', name: 'Between-pages interstitial', w: null as number | null, h: null as number | null, pos: 'other', formats: ['native'], display: 'interstitial' },
+    ] as Array<{ key: string; name: string; w: number | null; h: number | null; pos: string; formats: string[]; display?: string; responsive?: boolean }>;
     const units: Record<string, string> = {};
     for (const u of unitSpecs) {
       units[u.key] = (await c.query<{ id: string }>(
-        `INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active') RETURNING id`,
-        [site, u.key, u.name, u.formats, u.w, u.h, u.w === null, u.pos],
+        `INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position, display, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active') RETURNING id`,
+        [site, u.key, u.name, u.formats, u.w, u.h, u.responsive ?? u.w === null, u.pos, u.display ?? 'inline'],
       )).rows[0]!.id;
     }
+    // Automatic in-article ads on the demo site (the second demo article uses them).
+    await c.query(`UPDATE sites SET auto_ads_enabled = true, auto_ads_unit_id = $2, auto_ads_max = 3, auto_ads_spacing = 3, auto_ads_first_after = 2 WHERE id = $1`, [site, units['demo-auto']]);
     await c.query(
       `INSERT INTO payout_profiles (org_id, method, display_label, currency, updated_by) VALUES ($1, 'bank_transfer', 'Demo account (no real details)', $2, $3)
        ON CONFLICT (org_id) DO NOTHING`,
@@ -236,7 +261,7 @@ async function main() {
     const payment = (await c.query<{ id: string }>(
       `INSERT INTO payments (id, org_id, provider, idempotency_key, amount_micros, fee_micros, currency, status, refunded_micros, created_by)
        VALUES (gen_random_uuid(), $1, 'dev_simulated', $2, $3, 0, $4, 'pending', 0, $5) RETURNING id`,
-      [advOrg, `seed-${randomToken(8)}`, toMicros('1000').toString(), CURRENCY, advUser],
+      [advOrg, `seed-${randomToken(8)}`, toMicros('2000').toString(), CURRENCY, advUser],
     )).rows[0]!.id;
     await confirmPayment(c, { paymentId: payment, actor: system, feeBps: 0, providerRef: 'demo-seed', note: 'Simulated demo funding. No money moved.', invoicePrefix: 'DEMO' });
 
@@ -250,6 +275,17 @@ async function main() {
        VALUES ($1, $2, 'image/png', $3, 728, 90, $4, $5)
        ON CONFLICT (storage_key) DO UPDATE SET storage_key = EXCLUDED.storage_key RETURNING id`,
       [advOrg, sha, png.byteLength, storageKey, advUser],
+    )).rows[0]!.id;
+
+    const railPng = demoBannerPng(160, 600);
+    const railSha = createHash('sha256').update(railPng).digest('hex');
+    const railKey = `creatives/${advOrg}/${railSha}.png`;
+    await new LocalStorage(storageDir, '').put(railKey, railPng);
+    const railAsset = (await c.query<{ id: string }>(
+      `INSERT INTO assets (org_id, sha256, mime_type, size_bytes, width, height, storage_key, created_by)
+       VALUES ($1, $2, 'image/png', $3, 160, 600, $4, $5)
+       ON CONFLICT (storage_key) DO UPDATE SET storage_key = EXCLUDED.storage_key RETURNING id`,
+      [advOrg, railSha, railPng.byteLength, railKey, advUser],
     )).rows[0]!.id;
 
     const nativePng = demoBannerPng(600, 314);
@@ -269,7 +305,12 @@ async function main() {
       { name: `Banner campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '2.50', lifetime: '400', daily: '40', unit: 'demo-leaderboard', format: 'image' as const },
       { name: `Text ad campaign ${DEMO_TAG}`, model: 'cpc' as const, rate: '0.20', lifetime: '300', daily: '30', unit: 'demo-sidebar', format: 'text' as const },
       { name: `Native ad campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '4.00', lifetime: '200', daily: '20', unit: 'demo-native', format: 'native' as const },
-    ];
+      { name: `Anchor campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '2.00', lifetime: '150', daily: '15', unit: 'demo-anchor', format: 'image' as const },
+      { name: `Side rail campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '2.00', lifetime: '150', daily: '15', unit: 'demo-rail', format: 'image' as const, rail: true },
+      { name: `In-article native campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '3.00', lifetime: '150', daily: '15', unit: 'demo-auto', format: 'native' as const },
+      { name: `In-article text campaign ${DEMO_TAG}`, model: 'cpc' as const, rate: '0.15', lifetime: '150', daily: '15', unit: 'demo-auto', format: 'text' as const },
+      { name: `Interstitial campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '5.00', lifetime: '150', daily: '15', unit: 'demo-interstitial', format: 'native' as const },
+    ] as Array<{ name: string; model: 'cpm' | 'cpc'; rate: string; lifetime: string; daily: string; unit: string; format: 'image' | 'text' | 'native'; rail?: boolean }>;
     for (const s of specs) {
       const camp = (await c.query<{ id: string }>(
         `INSERT INTO campaigns (org_id, name, status, pricing_model, rate_micros, currency, lifetime_budget_micros, daily_budget_micros, timezone, start_at, pacing, priority, submitted_at, approved_at, created_by)
@@ -281,7 +322,9 @@ async function main() {
       await reserveCampaignBudget(c, camp, system);
 
       const dest = 'https://example.com/demo-offer';
-      const v = s.format === 'image'
+      const v = s.format === 'image' && s.rail
+        ? { headline: null, body: null, cta: null, asset: railAsset, w: 160, h: 600, alt: 'Demo advertisement skyscraper', sponsor: null, snapshot: { format: 'image', assetId: railAsset, storageKey: railKey, width: 160, height: 600, destinationUrl: dest, displayUrl: 'example.com', altText: 'Demo advertisement skyscraper' } }
+        : s.format === 'image'
         ? { headline: null, body: null, cta: null, asset, w: 728, h: 90, alt: 'Demo advertisement banner', sponsor: null, snapshot: { format: 'image', assetId: asset, storageKey, width: 728, height: 90, destinationUrl: dest, displayUrl: 'example.com', altText: 'Demo advertisement banner' } }
         : s.format === 'native'
           ? { headline: 'Demo native advertisement', body: 'A sample native ad served by your local BlissNova demo. It is labelled Sponsored with the advertiser name.', cta: 'Learn more', asset: nativeAsset, w: 600, h: 314, alt: 'Demo native advertisement image', sponsor: `Demo Advertiser Co ${DEMO_TAG}`,
@@ -303,7 +346,7 @@ async function main() {
     if (sampleDays > 0) {
       days = await sampleHistory(c, campaigns.map((x) => ({
         campaignId: x.id, creativeId: x.creativeId, unitId: units[x.unit]!, pricing: x.pricing, rateMicros: x.rate,
-        perDay: x.pricing === 'cpm' ? [600, 1400] : [300, 700], ctr: x.pricing === 'cpm' ? 0.006 : 0.012,
+        perDay: x.pricing === 'cpm' ? [600, 1400] : [300, 700], ctr: x.pricing === 'cpm' ? 0.006 : 0.012, pages: SAMPLE_PAGES[x.unit] ?? SAMPLE_PAGES.default!,
       })), { siteId: site, advOrg, pubOrg, shareBps }, sampleDays);
       for (const x of campaigns) await settleCampaign(c, x.id, holdDays);
     }

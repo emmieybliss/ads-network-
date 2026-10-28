@@ -3,6 +3,7 @@ import { decide, unitCostMicros, type CampaignCandidate, type CreativeCandidate 
 import type { PlatformSettings } from '@blissnova/shared';
 import { deviceCategory, hostAuthorized, isKnownCrawler, normalizeHost, signDeliveryToken, visitorHash, type DeliveryClaims } from '@blissnova/tracking';
 import type { AppContext } from '../lib/context';
+import { decideConsent, type ConsentReason, type ConsentSignals } from './consent';
 
 /**
  * Ad-serving runtime. Holds an in-memory snapshot of approved inventory and
@@ -13,7 +14,8 @@ import type { AppContext } from '../lib/context';
  * Postgres transaction, when an impression or click becomes billable.
  */
 export interface SiteSnap { id: string; orgId: string; domain: string; allowedDomains: string[]; includeSubdomains: boolean; category: string; allowedFormats: string[]; revenueShareBps: number; blockedCategories: string[]; floorCpmMicros: bigint | null; floorCpcMicros: bigint | null; premiumOnly: boolean }
-export interface UnitSnap { id: string; siteId: string; key: string; formats: string[]; width: number | null; height: number | null; responsive: boolean }
+export interface UnitSnap { id: string; siteId: string; key: string; formats: string[]; width: number | null; height: number | null; responsive: boolean; display: UnitDisplay }
+export type UnitDisplay = 'inline' | 'anchor' | 'rail_left' | 'rail_right' | 'interstitial';
 export interface CreativeSnap extends CreativeCandidate { snapshot: { headline?: string; body?: string; cta?: string; storageKey?: string | null; altText?: string; displayUrl?: string; sponsorName?: string; destinationUrl: string } }
 export interface CampaignSnap extends CampaignCandidate { caps: Array<{ scope: 'visitor' | 'page'; max: number; window: number }>; orgCaps: Array<{ max: number; window: number }>; creatives: CreativeSnap[] }
 
@@ -47,7 +49,7 @@ async function loadSnapshot(ctx: AppContext): Promise<Snapshot> {
   }
   const units = new Map<string, UnitSnap>();
   const unitRows = (await ctx.db.query(`SELECT u.* FROM ad_units u JOIN sites s ON s.id = u.site_id WHERE u.status = 'active' AND NOT u.admin_blocked AND s.status = 'approved'`)).rows;
-  for (const u of unitRows) units.set(`${u.site_id}:${u.key}`, { id: u.id, siteId: u.site_id, key: u.key, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive });
+  for (const u of unitRows) units.set(`${u.site_id}:${u.key}`, { id: u.id, siteId: u.site_id, key: u.key, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, display: u.display ?? 'inline' });
 
   const camps = (await ctx.db.query(
     `SELECT c.*, o.tier AS org_tier, t.countries, t.devices, t.site_categories, t.keywords, t.include_site_ids, t.exclude_site_ids, t.include_unit_ids, t.exclude_unit_ids, t.require_personalized
@@ -127,18 +129,22 @@ export interface ServeRequest {
   siteKey: string;
   units: Array<{ slot: string }>;
   page: { url: string; keywords?: string[] };
-  consent?: { personalized?: boolean; gdprApplies?: boolean };
+  consent?: ConsentSignals;
   vid?: string;
   pv: string;
 }
-export interface ServeMeta { ip: string; ipHash: string; ua: string; origin: string | null; country: string; requestId: string }
+export interface ServeMeta { ip: string; ipHash: string; ua: string; origin: string | null; country: string; requestId: string; secGpc?: boolean }
 export interface ServedAd {
   slot: string;
+  /** How the tag shows this placement; absent when the slot is unknown. */
+  display?: UnitDisplay;
   ad: null | { format: 'image' | 'text' | 'native'; token: string; clickUrl: string; width: number | null; height: number | null; image?: { url: string; alt: string }; text?: { headline: string; body: string; cta: string; displayUrl: string }; native?: { imageUrl: string; alt: string; headline: string; body: string; cta: string; displayUrl: string; sponsor: string } };
 }
-export interface ServeLog { deliveries: Array<{ claims: DeliveryClaims; ipHash: string; uaHash: string | null }>; counters: Array<{ unitId: string; field: 'requests' | 'filled' | 'no_fill' | 'cap_rejects' | 'budget_rejects' | 'blocked' }>; day: string }
+export interface ServeLog { pageView?: { siteId: string; path: string }; deliveries: Array<{ claims: DeliveryClaims; ipHash: string; uaHash: string | null }>; counters: Array<{ unitId: string; field: 'requests' | 'filled' | 'no_fill' | 'cap_rejects' | 'budget_rejects' | 'blocked' }>; day: string }
 
-export type ServeOutcome = { status: 'ok' | 'inactive' | 'blocked' | 'disabled'; ads: ServedAd[]; log: ServeLog | null };
+/** What the tag may do on the device: keep a visitor id only when personalization is allowed. */
+export interface ServePrivacy { personalization: boolean; reason: ConsentReason }
+export type ServeOutcome = { status: 'ok' | 'inactive' | 'blocked' | 'disabled'; ads: ServedAd[]; log: ServeLog | null; privacy?: ServePrivacy };
 
 export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMeta, settings: PlatformSettings): Promise<ServeOutcome> {
   const empty = (status: ServeOutcome['status']): ServeOutcome => ({ status, ads: req.units.map((u) => ({ slot: u.slot, ad: null })), log: null });
@@ -163,7 +169,13 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     return { ...empty('blocked'), log };
   }
 
-  const personalized = Boolean(req.consent?.personalized && settings.tracking.personalizedAllowed && req.vid && /^[A-Za-z0-9_-]{16,64}$/.test(req.vid));
+  // One page view per pv id, counted at the page's first ad request.
+  const pagePath = pathOf(req.page.url);
+  if (await ctx.redis.set(`pv:${req.pv.slice(0, 64)}`, '1', 'EX', 1800, 'NX')) log.pageView = { siteId: site.id, path: pagePath };
+
+  const consent = decideConsent(req.consent, { personalizedAllowed: settings.tracking.personalizedAllowed, vendorId: ctx.config.TCF_VENDOR_ID, secGpc: !!meta.secGpc });
+  const privacy: ServePrivacy = { personalization: consent.personalized, reason: consent.reason };
+  const personalized = Boolean(consent.personalized && req.vid && /^[A-Za-z0-9_-]{16,64}$/.test(req.vid));
   const vHash = personalized ? visitorHash(ctx.config.APP_SECRET, req.vid!) : undefined;
   const device = deviceCategory(meta.ua);
   const keywords = (req.page.keywords ?? []).map((k) => k.toLowerCase().slice(0, 60)).slice(0, 20);
@@ -210,7 +222,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     if (!chosen) {
       const budgetRejected = result.rejected.some((r) => r.reason === 'budget' || r.reason === 'daily_budget' || r.reason === 'pacing');
       log.counters.push({ unitId: unit.id, field: capRejected ? 'cap_rejects' : budgetRejected ? 'budget_rejects' : 'no_fill' });
-      ads.push({ slot, ad: null });
+      ads.push({ slot, display: unit.display, ad: null });
       continue;
     }
     const c = chosen.campaign as CampaignSnap;
@@ -220,7 +232,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     if (cost > 0n) await ctx.redis.multi().incrby(`spend:${c.id}:${dayInZone(now, c.timezone)}`, Number(cost)).expire(`spend:${c.id}:${dayInZone(now, c.timezone)}`, 3 * 86400).exec();
     const claims: DeliveryClaims = {
       d: randomUUID(), c: c.id, cr: cr.id, ao: c.orgId, s: site.id, u: unit.id, po: site.orgId, pm: c.pricingModel, r: c.rateMicros.toString(), cur: c.currency,
-      sh: site.revenueShareBps, ph: pageHost, co: meta.country, dv: device, ct: !personalized, v: vHash, iat: now, exp: now + settings.tracking.tokenTtlSeconds * 1000,
+      sh: site.revenueShareBps, ph: pageHost, pp: pagePath, co: meta.country, dv: device, ct: !personalized, v: vHash, iat: now, exp: now + settings.tracking.tokenTtlSeconds * 1000,
     };
     const token = signDeliveryToken(ctx.tokens, claims);
     log.deliveries.push({ claims, ipHash: meta.ipHash, uaHash: null });
@@ -228,6 +240,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     const snapC = cr.snapshot;
     ads.push({
       slot,
+      display: unit.display,
       ad: {
         format: cr.format, token, clickUrl: `${ctx.config.PUBLIC_API_URL}/api/v1/click?t=${encodeURIComponent(token)}`, width: cr.width, height: cr.height,
         ...(cr.format === 'image' && snapC.storageKey ? { image: { url: ctx.storage.publicUrl(snapC.storageKey), alt: snapC.altText ?? snapC.headline ?? 'Advertisement' } } : {}),
@@ -236,7 +249,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
       },
     });
   }
-  return { status: 'ok', ads, log };
+  return { status: 'ok', ads, log, privacy };
 }
 
 function hostOf(url: string) {
@@ -248,14 +261,29 @@ function hostOf(url: string) {
 }
 
 /** Persist served deliveries and request counters (called by the worker, or inline). Idempotent per delivery id. */
+/** The page path for reports: no query or fragment, at most 300 characters. */
+export function pathOf(url: string): string {
+  try {
+    const p = new URL(url).pathname || '/';
+    return p.length > 300 ? p.slice(0, 300) : p;
+  } catch {
+    return '/';
+  }
+}
+
 export async function writeServeLog(db: AppContext['db'], log: ServeLog) {
+  if (log.pageView) {
+    await db.query(
+      `INSERT INTO page_views (day, site_id, page_path, views) VALUES ($1, $2, $3, 1) ON CONFLICT (day, site_id, page_path) DO UPDATE SET views = page_views.views + 1`,
+      [log.day, log.pageView.siteId, log.pageView.path]);
+  }
   for (const d of log.deliveries) {
     const c = d.claims;
     await db.query(
-      `INSERT INTO ad_events (event_key, delivery_id, type, status, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at)
-       VALUES ($1, $2, 'served', 'valid', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16 / 1000.0))
+      `INSERT INTO ad_events (event_key, delivery_id, type, status, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, page_path)
+       VALUES ($1, $2, 'served', 'valid', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16 / 1000.0), $17)
        ON CONFLICT DO NOTHING`,
-      [`${c.d}:served`, c.d, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, d.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, c.iat]);
+      [`${c.d}:served`, c.d, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, d.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, c.iat, c.pp ?? null]);
   }
   const agg = new Map<string, Record<string, number>>();
   for (const k of log.counters) {

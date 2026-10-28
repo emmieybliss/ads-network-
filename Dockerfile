@@ -14,7 +14,7 @@ COPY . .
 RUN pnpm install --frozen-lockfile
 ARG API_INTERNAL_URL=http://api:4000
 ARG NEXT_PUBLIC_DEMO_MODE=false
-ENV API_INTERNAL_URL=$API_INTERNAL_URL NEXT_PUBLIC_DEMO_MODE=$NEXT_PUBLIC_DEMO_MODE
+ENV API_INTERNAL_URL=$API_INTERNAL_URL NEXT_PUBLIC_DEMO_MODE=$NEXT_PUBLIC_DEMO_MODE NEXT_STANDALONE=1
 RUN pnpm --filter @blissnova/ad-tag build \
  && pnpm --filter @blissnova/api build \
  && pnpm --filter @blissnova/worker build \

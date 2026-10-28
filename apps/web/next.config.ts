@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import type { NextConfig } from 'next';
 
 /**
@@ -18,7 +19,12 @@ const securityHeaders = [
 ];
 
 const config: NextConfig = {
-  output: 'standalone',
+  // The Docker image runs the standalone server (NEXT_STANDALONE=1). Local runs
+  // use `next start`, and standalone output needs symlinks that Windows only
+  // allows with Developer Mode on, so it is off by default.
+  output: process.env.NEXT_STANDALONE === '1' ? 'standalone' : undefined,
+  // The pnpm workspace root, so a stray lockfile in a parent folder is not taken for it.
+  outputFileTracingRoot: resolve(process.cwd(), '../..'),
   reactStrictMode: true,
   poweredByHeader: false,
   transpilePackages: ['@blissnova/shared'],

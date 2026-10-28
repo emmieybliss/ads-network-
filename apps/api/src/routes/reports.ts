@@ -5,7 +5,7 @@ import { METRIC_DEFINITIONS, formatMicros } from '@blissnova/shared';
 import { badRequest } from '../lib/errors';
 import { dateRange, orgParams, queryOf, resolveRange, toCsv } from '../lib/http';
 import { requireOrg } from '../plugins/auth';
-import { requestStats, runReport, type GroupBy } from '../services/reports';
+import { pageReport, pageviewTotal, requestStats, runReport, type GroupBy } from '../services/reports';
 
 const reportQuery = dateRange.extend({
   groupBy: z.enum(['day', 'campaign', 'creative', 'site', 'unit', 'device', 'country']).default('day'),
@@ -13,6 +13,8 @@ const reportQuery = dateRange.extend({
   siteId: z.uuid().optional(),
   unitId: z.uuid().optional(),
 });
+
+const pageQuery = dateRange.extend({ siteId: z.uuid().optional() });
 
 const ADV_GROUPS: GroupBy[] = ['day', 'campaign', 'creative', 'site', 'unit', 'device', 'country'];
 const PUB_GROUPS: GroupBy[] = ['day', 'site', 'unit', 'device', 'country'];
@@ -52,6 +54,33 @@ export async function reportRoutes(app: FastifyInstance) {
     return reply.type('text/csv; charset=utf-8').header('content-disposition', `attachment; filename="report-${q.groupBy}-${range.from}-${range.to}.csv"`).send(toCsv(rows, cols));
   });
 
+  function publisherOnly(type: string) {
+    if (type !== 'publisher') throw badRequest('Page reports are for publisher accounts');
+  }
+
+  app.get('/orgs/:orgId/reports/pages', { preHandler: requireOrg('report:read', { allowSuspended: true }), schema: { tags: ['reports'], params: orgParams, querystring: pageQuery, description: 'Per-page performance. Page views are pages where the ad tag requested at least one ad. Page RPM = estimated earnings / page views x 1000.' } }, async (req) => {
+    publisherOnly(req.org!.type);
+    const q = queryOf(req, pageQuery);
+    const range = resolveRange(q);
+    const report = await pageReport(db, req.org!.id, { ...range, siteId: q.siteId });
+    return { data: { ...report, range, currency: req.org!.currency } };
+  });
+
+  app.get('/orgs/:orgId/reports/pages/export', { preHandler: requireOrg('report:read', { allowSuspended: true }), schema: { tags: ['reports'], params: orgParams, querystring: pageQuery } }, async (req, reply) => {
+    publisherOnly(req.org!.type);
+    const q = queryOf(req, pageQuery);
+    const range = resolveRange(q);
+    const report = await pageReport(db, req.org!.id, { ...range, siteId: q.siteId }, 10_000);
+    const money = (v: unknown) => (v === null || v === undefined ? '' : formatMicros(String(v), 4));
+    const rows = report.rows.map((r) => ({ ...r, ctr: r.ctr === null ? '' : r.ctr.toFixed(4), earnings: money(r.earningsMicros), pageRpm: money(r.pageRpmMicros) }));
+    const cols = [
+      { key: 'domain', label: 'Site' }, { key: 'path', label: 'Page' }, { key: 'pageviews', label: 'Page views' }, { key: 'validImpressions', label: 'Valid impressions' },
+      { key: 'validClicks', label: 'Valid clicks' }, { key: 'ctr', label: 'CTR %' }, { key: 'earnings', label: `Estimated earnings (${req.org!.currency})` }, { key: 'pageRpm', label: 'Page RPM' },
+    ];
+    await db.query('INSERT INTO data_exports (kind, requested_by, org_id, params, row_count) VALUES ($1, $2, $3, $4, $5)', ['report:pages', req.auth?.user?.id ?? null, req.org!.id, JSON.stringify(q), rows.length]).catch(() => undefined);
+    return reply.type('text/csv; charset=utf-8').header('content-disposition', `attachment; filename="report-pages-${range.from}-${range.to}.csv"`).send(toCsv(rows, cols));
+  });
+
   app.get('/orgs/:orgId/dashboard', { preHandler: requireOrg('report:read', { allowSuspended: true }), schema: { tags: ['reports'], params: orgParams, querystring: dateRange } }, async (req) => {
     const range = resolveRange(queryOf(req, dateRange));
     const org = req.org!;
@@ -71,8 +100,9 @@ export async function reportRoutes(app: FastifyInstance) {
       runReport(db, scope, range, 'day', 'publisher'), runReport(db, scope, range, 'site', 'publisher', 10), runReport(db, scope, range, 'unit', 'publisher', 10), runReport(db, scope, range, 'device', 'publisher', 10),
     ]);
     const sites = (await db.query(`SELECT status, count(*)::int AS n FROM sites WHERE org_id = $1 GROUP BY status`, [org.id])).rows;
-    const [pending, available] = await Promise.all([balance(db as never, { kind: 'publisher_pending', orgId: org.id }, org.currency), balance(db as never, { kind: 'publisher_available', orgId: org.id }, org.currency)]);
-    return { data: { type: 'publisher', range, currency: org.currency, totals: trend.totals, trend: trend.rows, bySite: bySite.rows, byUnit: byUnit.rows, byDevice: byDevice.rows,
+    const [pending, available, pageviews] = await Promise.all([balance(db as never, { kind: 'publisher_pending', orgId: org.id }, org.currency), balance(db as never, { kind: 'publisher_available', orgId: org.id }, org.currency), pageviewTotal(db, org.id, range)]);
+    const earned = BigInt(String(trend.totals.earningsMicros ?? '0'));
+    return { data: { type: 'publisher', range, currency: org.currency, totals: trend.totals, pageviews, pageRpmMicros: pageviews ? ((earned * 1000n) / BigInt(pageviews)).toString() : null, trend: trend.rows, bySite: bySite.rows, byUnit: byUnit.rows, byDevice: byDevice.rows,
       requests: await requestStats(db, org.id, range), sites: Object.fromEntries(sites.map((s) => [s.status, s.n])), pendingMicros: pending.toString(), availableMicros: available.toString() } };
   });
 }
