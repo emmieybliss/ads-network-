@@ -21,6 +21,8 @@ function ManualPay({ payout, onClose, onDone }: { payout: any; onClose: () => vo
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Once marked as being sent, a retry (for example after a mistyped hash) only records the payment.
+  const [started, setStarted] = useState(payout.status !== 'approved');
   const crypto = payout.method === 'crypto';
   async function reveal() {
     setError(null);
@@ -35,7 +37,10 @@ function ManualPay({ payout, onClose, onDone }: { payout: any; onClose: () => vo
     setBusy(true);
     setError(null);
     try {
-      if (payout.status === 'approved') await post(`/admin/payouts/${payout.id}/processing`, { provider: 'manual' });
+      if (!started) {
+        await post(`/admin/payouts/${payout.id}/processing`, { provider: 'manual' });
+        setStarted(true);
+      }
       await post(`/admin/payouts/${payout.id}/paid`, { providerRef: ref.trim(), reason });
       onDone();
     } catch (err) {
@@ -137,7 +142,7 @@ export default function Payouts() {
         { key: 'a', header: 'Amount', align: 'right', cell: (r) => formatMicros(r.amount_micros, r.currency) },
         { key: 'm', header: 'Method', cell: (r) => <div><p>{r.method_label ?? '—'}</p>{r.provider && <p className="text-xs text-muted">via {humanize(r.provider)}</p>}</div> },
         { key: 's', header: 'Status', cell: (r) => <StatusBadge status={r.status} /> },
-        { key: 'r', header: 'Reference / notes', cell: (r) => <span className="break-all text-xs">{r.provider_ref ? <span className="font-mono">{r.provider_ref}</span> : null} {r.failure_reason ?? r.review_reason ?? ''}</span> },
+        { key: 'r', header: 'Reference / notes', cell: (r) => <span className="text-xs">{r.provider_ref ? <span className="block break-all font-mono">{r.provider_ref}</span> : null}{r.failure_reason ?? r.review_reason ?? ''}</span> },
         { key: 'x', header: '', cell: (r) => manage && (
           <span className="flex flex-wrap gap-1">
             {r.status === 'requested' && <ReasonAction label="Approve" title="Approve payout" path={`/admin/payouts/${r.id}/approve`} variant="primary" onDone={done} description="Moves the amount out of the publisher's available balance and reserves it for this payout." />}
