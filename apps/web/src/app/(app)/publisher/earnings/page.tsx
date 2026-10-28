@@ -1,31 +1,12 @@
 'use client';
 import { useState, type FormEvent } from 'react';
-import { Alert, Async, Badge, Button, Card, CardHeader, Field, Input, Modal, PageHeader, Select, Stat, StatusBadge, Table } from '@/components/ui';
+import { ExternalLink } from 'lucide-react';
+import { Alert, Async, Badge, Button, Card, CardHeader, Field, Input, PageHeader, Stat, StatusBadge, Table } from '@/components/ui';
+import { PayoutMethodCard } from '@/components/publisher/PayoutMethod';
 import { useApi } from '@/lib/hooks';
 import { useOrg, useSession } from '@/lib/session';
-import { errorMessage, idempotencyKey, post, put } from '@/lib/api';
-import { formatDate, formatMicros, formatNumber, humanize } from '@/lib/format';
-
-function PayoutProfile({ orgId }: { orgId: string }) {
-  const res = useApi<{ data: { method: string; display_label: string; updated_at: string } | null }>(`/orgs/${orgId}/payout-profile`);
-  const [edit, setEdit] = useState<{ method: string; displayLabel: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  return (
-    <Card>
-      <CardHeader title="Payout method" description="We store only a label you choose. Never enter full bank or card numbers here; finance staff collect payment details through a secure channel." actions={<Button size="sm" variant="secondary" onClick={() => setEdit({ method: res.data?.data?.method ?? 'bank_transfer', displayLabel: res.data?.data?.display_label ?? '' })}>{res.data?.data ? 'Change' : 'Set up'}</Button>} />
-      <Async res={res}>{({ data }) => data ? <p className="text-sm">{humanize(data.method)} · {data.display_label} <span className="text-muted">(updated {formatDate(data.updated_at)})</span></p> : <p className="text-sm text-muted">No payout method yet.</p>}</Async>
-      <Modal open={!!edit} onClose={() => setEdit(null)} title="Payout method" footer={<Button onClick={async () => { try { await put(`/orgs/${orgId}/payout-profile`, edit); setEdit(null); res.reload(); } catch (e) { setError(errorMessage(e)); } }}>Save</Button>}>
-        {edit && (
-          <div className="space-y-4">
-            {error && <Alert tone="danger">{error}</Alert>}
-            <Field label="Method" htmlFor="pm"><Select id="pm" value={edit.method} onChange={(e) => setEdit({ ...edit, method: e.target.value })}><option value="bank_transfer">Bank transfer</option><option value="paypal">PayPal</option><option value="other">Other</option></Select></Field>
-            <Field label="Label" htmlFor="pl" hint="For example “Business account ending 1234”."><Input id="pl" minLength={3} maxLength={120} value={edit.displayLabel} onChange={(e) => setEdit({ ...edit, displayLabel: e.target.value })} /></Field>
-          </div>
-        )}
-      </Modal>
-    </Card>
-  );
-}
+import { errorMessage, idempotencyKey, post } from '@/lib/api';
+import { formatDate, formatMicros, formatNumber, microsToInput } from '@/lib/format';
 
 export default function Earnings() {
   const org = useOrg();
@@ -98,12 +79,13 @@ export default function Earnings() {
               </Card>
             )}
             <div className="grid gap-5 lg:grid-cols-2">
-              <PayoutProfile orgId={org.id} />
+              <PayoutMethodCard orgId={org.id} allowed={data.payoutMethods ?? ['paypal', 'bank_transfer', 'crypto']} autoPayoutDay={data.autoPayoutDay ?? 0} canEdit={can('payout:request')} />
               <Card>
-                <CardHeader title="Request a payout" description={`Minimum payout ${money(data.minimumPayoutMicros)}.`} />
+                <CardHeader title="Request a payout" description={<>Minimum payout {money(data.minimumPayoutMicros)}. {data.autoPayoutDay ? `Or turn on monthly payouts and we request it for you on day ${data.autoPayoutDay}.` : ''}</>} />
                 {org.status !== 'approved' ? <p className="text-sm text-muted">Payouts are available once your publisher account is approved.</p> : !can('payout:request') ? <p className="text-sm text-muted">Your role cannot request payouts.</p> : (
                   <form onSubmit={request} className="flex flex-wrap items-end gap-3">
                     <Field label="Amount" htmlFor="pa"><Input id="pa" inputMode="decimal" required pattern="^\d+(\.\d{1,2})?$" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></Field>
+                    {BigInt(data.availableMicros) >= 10_000n && <Button type="button" variant="ghost" onClick={() => setAmount(microsToInput(((BigInt(data.availableMicros) / 10_000n) * 10_000n).toString()))}>Use full balance</Button>}
                     <Button type="submit" loading={busy}>Request payout</Button>
                   </form>
                 )}
@@ -116,8 +98,12 @@ export default function Earnings() {
                 {({ data: rows }) => <Table rows={rows} rowKey={(r) => r.id} empty="No payouts yet." columns={[
                   { key: 'd', header: 'Requested', cell: (r) => formatDate(r.created_at) },
                   { key: 'a', header: 'Amount', align: 'right', cell: (r) => money(r.amount_micros) },
-                  { key: 'm', header: 'Method', cell: (r) => r.method_label ?? '' },
+                  { key: 'm', header: 'Method', cell: (r) => <span>{r.method_label ?? ''}{r.auto_requested && <Badge tone="info" className="ml-2">Monthly</Badge>}</span> },
                   { key: 's', header: 'Status', cell: (r) => <StatusBadge status={r.status} /> },
+                  { key: 'p', header: 'Paid', cell: (r) => (r.paid_at ? formatDate(r.paid_at) : r.sent_at ? `Sent ${formatDate(r.sent_at)}` : '') },
+                  { key: 'ref', header: 'Reference', cell: (r) => r.status !== 'paid' || !r.provider_ref ? '' : r.explorer_url
+                    ? <a href={r.explorer_url} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 font-mono text-xs text-primary hover:underline">{String(r.provider_ref).slice(0, 10)}… <ExternalLink className="size-3" /></a>
+                    : <span className="font-mono text-xs">{r.provider_ref}</span> },
                   { key: 'n', header: 'Notes', cell: (r) => r.failure_reason ?? r.review_reason ?? '' },
                   { key: 'x', header: '', cell: (r) => r.status === 'requested' && <Button size="sm" variant="ghost" onClick={async () => { try { await post(`/orgs/${org.id}/payouts/${r.id}/cancel`); payouts.reload(); res.reload(); } catch (e) { setMsg({ tone: 'danger', text: errorMessage(e) }); } }}>Cancel</Button> },
                 ]} />}

@@ -104,7 +104,7 @@ export async function adminPlatformRoutes(app: FastifyInstance) {
     const s = await ctx.settings.get();
     const updated = (await db.query(`SELECT p.key, p.updated_at, u.name AS updated_by FROM platform_settings p LEFT JOIN users u ON u.id = p.updated_by`)).rows;
     // Secrets are never returned; only whether they are configured.
-    const secrets = { smtpConfigured: Boolean(config.SMTP_HOST), stripeConfigured: Boolean(config.STRIPE_SECRET_KEY && config.STRIPE_WEBHOOK_SECRET), errorReportingConfigured: Boolean(config.ERROR_REPORT_WEBHOOK_URL) };
+    const secrets = { smtpConfigured: Boolean(config.SMTP_HOST), stripeConfigured: Boolean(config.STRIPE_SECRET_KEY && config.STRIPE_WEBHOOK_SECRET), paypalConfigured: Boolean(config.PAYPAL_CLIENT_ID && config.PAYPAL_CLIENT_SECRET && config.PAYPAL_WEBHOOK_ID), errorReportingConfigured: Boolean(config.ERROR_REPORT_WEBHOOK_URL) };
     return { data: { settings: s, updated, secrets, groups: SETTINGS_GROUPS } };
   });
 

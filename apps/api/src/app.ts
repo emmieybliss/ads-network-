@@ -21,7 +21,8 @@ import { createQueues } from './lib/queue';
 import { openGeoDb } from './lib/geo';
 import { hit } from './lib/ratelimit';
 import { authPlugin } from './plugins/auth';
-import { PaymentProviderRegistry } from './services/payments/registry';
+import { PaymentProviderRegistry, paypalClientFor } from './services/payments/registry';
+import { PayoutProviderRegistry } from './services/payouts/registry';
 import { PartnerRegistry } from './services/partners';
 import { registerRoutes } from './routes';
 
@@ -61,13 +62,15 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   const db = opts.overrides?.db ?? createPool(config.DATABASE_URL);
   const redis = opts.overrides?.redis ?? new Redis(config.REDIS_URL, { maxRetriesPerRequest: null, lazyConnect: false });
   const queues = createQueues(redis, config.EVENT_PROCESSING === 'queue');
+  const paypal = paypalClientFor(config);
   const ctx: AppContext = {
     config, db, redis, queues,
     settings: new SettingsService(db),
     mailer: opts.overrides?.mailer ?? createMailer(config, (o, m) => app.log.info(o, m)),
     storage: new LocalStorage(config.STORAGE_DIR, config.PUBLIC_API_URL),
     tokens: parseKeyring(config.TRACKING_TOKEN_KEYS),
-    payments: new PaymentProviderRegistry(config),
+    payments: new PaymentProviderRegistry(config, paypal),
+    payouts: new PayoutProviderRegistry(config, paypal),
     partners: opts.overrides?.partners ?? new PartnerRegistry(config, redis),
     verifier: opts.overrides?.verifier ?? {},
     geo: openGeoDb(config.GEOIP_DB_PATH, (m) => app.log.warn(m)),

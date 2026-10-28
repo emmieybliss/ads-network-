@@ -1,19 +1,23 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { approvePayout, confirmPayment, failPayment, finalizeEarnings, manualAdjustment, markPayoutFailed, markPayoutPaid, markPayoutProcessing, reconcile, refundPayment, rejectPayout, settleCampaign } from '@blissnova/billing';
-import { formatMicros, formatMoney, toMicros } from '@blissnova/shared';
+import { CRYPTO_NETWORKS, formatMicros, formatMoney, isValidTxHash, toMicros } from '@blissnova/shared';
 import { audit } from '../../lib/audit';
-import { badRequest, conflict, notFound } from '../../lib/errors';
+import { badRequest, conflict, notFound, providerError } from '../../lib/errors';
 import { bodyOf, idParams, moneyString, paramsOf, queryOf, toCsv } from '../../lib/http';
 import { tx } from '../../lib/tx';
 import { requireUser } from '../../plugins/auth';
 import { notifyOrg } from '../../services/notifications';
+import { DevSimulatedPayoutProvider } from '../../services/payouts/dev';
+import { decryptDestination, handlePayoutWebhook, PayoutSendError, sendPayout, type PayoutCtx } from '../../services/payouts/service';
 import { adminList, guard, meta, mgmt, reasonRequired, sortSql, Where } from './common';
 
 const confirmBody = z.object({ reason: z.string().trim().min(3).max(1000), providerRef: z.string().trim().min(3).max(120) });
 const refundBody = z.object({ amount: moneyString, reason: z.string().trim().min(3).max(1000) });
 const adjustBody = z.object({ orgId: z.uuid(), account: z.enum(['advertiser_wallet', 'publisher_available']), amount: z.string().regex(/^-?\d{1,12}(\.\d{1,6})?$/), reason: z.string().trim().min(10).max(1000) });
 const paidBody = z.object({ providerRef: z.string().trim().min(3).max(120), reason: z.string().trim().min(3).max(1000) });
+const sendBody = z.object({ provider: z.string().regex(/^[a-z_]{2,40}$/) });
+const simulateBody = z.object({ outcome: z.enum(['paid', 'failed']) });
 const processingBody = z.object({ provider: z.string().trim().min(2).max(40).default('manual'), providerRef: z.string().trim().max(120).optional() });
 
 export async function adminFinanceRoutes(app: FastifyInstance) {
@@ -76,12 +80,30 @@ export async function adminFinanceRoutes(app: FastifyInstance) {
     const b = bodyOf(req, refundBody);
     const key = idemKey(req);
     const s = await ctx.settings.get();
-    const p = (await db.query('SELECT confirmed_at, org_id FROM payments WHERE id = $1', [id])).rows[0];
+    const p = (await db.query('SELECT id, confirmed_at, org_id, provider, provider_charge_ref, currency, status, amount_micros, refunded_micros FROM payments WHERE id = $1', [id])).rows[0];
     if (!p) throw notFound();
     if (p.confirmed_at && Date.now() - new Date(p.confirmed_at).getTime() > s.pricing.refundWindowDays * 86_400_000) throw conflict(`Refunds are allowed within ${s.pricing.refundWindowDays} days of payment`);
+    const amount = toMicros(b.amount);
+    // Card and PayPal payments are refunded through the provider first (idempotent per key);
+    // the ledger is debited only once the provider accepted the refund.
+    const provider = ctx.payments.get(p.provider);
+    let providerRef: string | undefined;
+    const prior = (await db.query('SELECT 1 FROM refunds WHERE idempotency_key = $1', [`${id}:${key}`])).rowCount;
+    if (provider?.refund && !prior) {
+      if (!['succeeded', 'partially_refunded'].includes(p.status)) throw conflict('Only settled payments can be refunded');
+      if (amount <= 0n || amount > BigInt(p.amount_micros) - BigInt(p.refunded_micros)) throw conflict('Refund exceeds the refundable amount of this payment');
+      const w = (await db.query<{ t: string }>(`SELECT COALESCE(-sum(e.amount_micros), 0)::text AS t FROM ledger_entries e JOIN ledger_accounts a ON a.id = e.account_id WHERE a.kind = 'advertiser_wallet' AND a.org_id = $1 AND a.currency = $2`, [p.org_id, p.currency])).rows[0]!.t;
+      if (BigInt(w) < amount) throw conflict('Refund exceeds the unreserved wallet balance. Release campaign budgets first.');
+      try {
+        providerRef = (await provider.refund(p, amount, `${id}:${key}`)).providerRef;
+      } catch (err) {
+        await audit(db, req, { action: 'payment.refund_failed', resourceType: 'payment', resourceId: id, orgId: p.org_id, after: { error: (err as Error).message } });
+        throw providerError((err as Error).message);
+      }
+    }
     const res = await tx(ctx, async (c) => {
-      const r = await refundPayment(c, { paymentId: id, amount: toMicros(b.amount), actor: { type: 'user', userId: actor.id }, reason: b.reason, idempotencyKey: `${id}:${key}`, invoicePrefix: s.pricing.invoicePrefix });
-      await audit(c, req, { action: 'payment.refund', resourceType: 'payment', resourceId: id, orgId: p.org_id, after: { amount: b.amount }, reason: b.reason });
+      const r = await refundPayment(c, { paymentId: id, amount, actor: { type: 'user', userId: actor.id }, reason: b.reason, idempotencyKey: `${id}:${key}`, invoicePrefix: s.pricing.invoicePrefix, providerRef });
+      await audit(c, req, { action: 'payment.refund', resourceType: 'payment', resourceId: id, orgId: p.org_id, after: { amount: b.amount, provider: provider?.refund ? p.provider : 'recorded', providerRef }, reason: b.reason });
       return r;
     });
     return { data: res.refund };
@@ -159,11 +181,14 @@ export async function adminFinanceRoutes(app: FastifyInstance) {
 
   app.get('/admin/finance/providers', { preHandler: guard('admin:finance:read'), schema: { tags: ['admin: finance'] } }, async () => {
     const checks = (await db.query(`SELECT DISTINCT ON (provider) provider, ok, detail, created_at FROM provider_checks ORDER BY provider, created_at DESC`)).rows;
-    const known = [{ id: 'stripe', label: 'Stripe Checkout', configured: Boolean(ctx.config.STRIPE_SECRET_KEY && ctx.config.STRIPE_WEBHOOK_SECRET), supportsCheckout: true, supportsWebhooks: true, detail: 'Requires STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET.' }];
+    const known = [
+      { id: 'stripe', label: 'Card (Stripe)', configured: Boolean(ctx.config.STRIPE_SECRET_KEY && ctx.config.STRIPE_WEBHOOK_SECRET), supportsCheckout: true, supportsWebhooks: true, detail: 'Requires STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET.' },
+      { id: 'paypal', label: 'PayPal', configured: false, supportsCheckout: true, supportsWebhooks: true, detail: 'Requires PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET and PAYPAL_WEBHOOK_ID.' },
+    ];
     const list = [...ctx.payments.list().map((p) => p.status()), ...known.filter((k) => !ctx.payments.get(k.id))];
     return { data: list.map((p) => {
       const last = checks.find((c) => c.provider === p.id);
-      return { ...p, lastCheck: last ?? null, connected: Boolean(p.configured && last?.ok), webhookUrl: p.supportsWebhooks ? `${ctx.config.PUBLIC_API_URL}/api/v1/webhooks/payments/${p.id}` : null };
+      return { ...p, lastCheck: last ?? null, connected: Boolean(p.configured && last?.ok), webhookUrl: p.supportsWebhooks ? `${ctx.config.PUBLIC_API_URL}/api/v1/webhooks/${p.id === 'paypal' ? 'paypal' : `payments/${p.id}`}` : null };
     }) };
   });
 
@@ -199,8 +224,81 @@ export async function adminFinanceRoutes(app: FastifyInstance) {
     const w = new Where();
     if (q.status) w.add('p.status = ?', q.status);
     const total = Number((await db.query(`SELECT count(*)::int AS n FROM payouts p ${w.sql}`, w.params)).rows[0].n);
-    const rows = (await db.query(`SELECT p.*, o.name AS org_name, u.name AS requested_by_name FROM payouts p JOIN organizations o ON o.id = p.org_id JOIN users u ON u.id = p.requested_by ${w.sql} ${sortSql(q, { created: 'p.created_at', amount: 'p.amount_micros' }, 'created')}`, w.params)).rows;
-    return { data: rows, meta: meta(q, total) };
+    const rows = (await db.query(`SELECT p.*, o.name AS org_name, u.name AS requested_by_name, pp.details_changed_at FROM payouts p JOIN organizations o ON o.id = p.org_id JOIN users u ON u.id = p.requested_by LEFT JOIN payout_profiles pp ON pp.org_id = p.org_id ${w.sql} ${sortSql(q, { created: 'p.created_at', amount: 'p.amount_micros' }, 'created')}`, w.params)).rows;
+    const providers = ctx.payouts.list().filter((x) => x.status().configured);
+    return {
+      data: rows.map(({ destination_encrypted, ...r }) => ({
+        ...r,
+        has_destination: Boolean(destination_encrypted),
+        // Details changed within a week of the request: worth a second look before paying.
+        details_recently_changed: Boolean(r.details_changed_at && new Date(r.created_at).getTime() - new Date(r.details_changed_at).getTime() < 7 * 86_400_000),
+        send_options: destination_encrypted ? providers.filter((x) => x.methods.includes(r.method) && (!x.supportsCurrency || x.supportsCurrency(r.currency))).map((x) => ({ id: x.id, label: x.label, mode: x.status().mode })) : [],
+      })),
+      meta: meta(q, total),
+    };
+  });
+
+  const payoutCtx: PayoutCtx = { ...ctx, notify: (orgId, n) => notifyOrg(ctx, orgId, n) };
+
+  app.get('/admin/finance/payout-providers', { preHandler: guard('admin:finance:read'), schema: { tags: ['admin: finance'] } }, async () => {
+    const list = ctx.payouts.list().map((p) => p.status());
+    if (!ctx.payouts.get('paypal')) list.push({ id: 'paypal', label: 'PayPal Payouts', configured: false, methods: ['paypal'], mode: ctx.config.PAYPAL_ENV === 'live' ? 'live' : 'test', supportsWebhooks: true, detail: 'Set PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET and PAYPAL_WEBHOOK_ID, and enable Payouts on the PayPal business account.' });
+    return { data: { providers: list.map((p) => ({ ...p, webhookUrl: p.id === 'paypal' ? `${ctx.config.PUBLIC_API_URL}/api/v1/webhooks/paypal` : null })), manual: ['bank_transfer', 'crypto'] } };
+  });
+
+  app.post('/admin/payouts/:id/send', { config: mgmt, preHandler: guard('admin:payouts:manage', { stepUp: true }), schema: { tags: ['admin: finance'], params: idParams, body: sendBody, description: 'Send an approved payout through a payout provider (PayPal Payouts, or the development simulator). The provider call is idempotent per payout.' } }, async (req) => {
+    const actor = requireUser(req);
+    const { id } = paramsOf(req, idParams);
+    const { provider } = bodyOf(req, sendBody);
+    try {
+      const r = await sendPayout(payoutCtx, id, provider, { type: 'user', userId: actor.id });
+      await audit(db, req, { action: 'payout.send', resourceType: 'payout', resourceId: id, orgId: r.org_id, after: { provider, status: r.status, providerRef: r.provider_ref } });
+      const { destination_encrypted: _d, ...out } = r;
+      return { data: out };
+    } catch (err) {
+      if (err instanceof PayoutSendError) {
+        await audit(db, req, { action: 'payout.send_failed', resourceType: 'payout', resourceId: id, after: { provider, error: err.message } });
+        throw providerError(err.message);
+      }
+      throw err;
+    }
+  });
+
+  app.get('/admin/payouts/:id/destination', { preHandler: guard('admin:payouts:manage', { stepUp: true }), schema: { tags: ['admin: finance'], params: idParams, description: 'Full payout destination, for staff paying manually by bank transfer or crypto. Every view is audited.' } }, async (req) => {
+    const { id } = paramsOf(req, idParams);
+    const p = (await db.query('SELECT id, org_id, method, method_label, destination_encrypted FROM payouts WHERE id = $1', [id])).rows[0];
+    if (!p) throw notFound();
+    const d = decryptDestination(ctx.config.ENCRYPTION_KEY, p.destination_encrypted);
+    await audit(db, req, { action: 'payout.destination_viewed', resourceType: 'payout', resourceId: id, orgId: p.org_id, after: { label: p.method_label } });
+    return { data: d ? { ...d, ...(d.method === 'crypto' ? { networkLabel: CRYPTO_NETWORKS[d.network].label } : {}) } : null };
+  });
+
+  app.get('/admin/payouts/export', { preHandler: guard('admin:payouts:manage', { stepUp: true }), schema: { tags: ['admin: finance'], querystring: z.object({ method: z.enum(['bank_transfer', 'crypto']) }), description: 'CSV of approved payouts with full destination details, for a bulk bank upload or a wallet batch. Audited.' } }, async (req, reply) => {
+    const { method } = req.query as { method: 'bank_transfer' | 'crypto' };
+    const rows = (await db.query(`SELECT p.id, p.amount_micros, p.currency, p.destination_encrypted, o.name AS organization FROM payouts p JOIN organizations o ON o.id = p.org_id WHERE p.status = 'approved' AND p.method = $1 ORDER BY p.created_at`, [method])).rows;
+    const out = rows.map((r) => {
+      const d = decryptDestination(ctx.config.ENCRYPTION_KEY, r.destination_encrypted) as Record<string, string> | null;
+      return { payout_id: r.id, organization: r.organization, amount: formatMicros(r.amount_micros), currency: r.currency, reference: `PAYOUT-${String(r.id).slice(0, 8).toUpperCase()}`, ...(d ?? {}) };
+    });
+    const cols = method === 'bank_transfer'
+      ? ['payout_id', 'organization', 'amount', 'currency', 'reference', 'accountHolder', 'bankName', 'country', 'iban', 'accountNumber', 'routingNumber', 'swift']
+      : ['payout_id', 'organization', 'amount', 'currency', 'reference', 'asset', 'network', 'address', 'memo'];
+    await audit(db, req, { action: 'payout.export', resourceType: 'payout', resourceId: method, after: { rows: out.length } });
+    return reply.type('text/csv; charset=utf-8').header('content-disposition', `attachment; filename="approved-${method}-payouts.csv"`).send(toCsv(out, cols.map((c) => ({ key: c, label: c }))));
+  });
+
+  // Development only: report the outcome of a simulated payout through the signed webhook path.
+  app.post('/admin/payouts/:id/simulate', { config: mgmt, preHandler: guard('admin:payouts:manage'), schema: { tags: ['admin: finance'], params: idParams, body: simulateBody, hide: ctx.config.isProd } }, async (req) => {
+    const provider = ctx.payouts.get('dev_simulated');
+    if (!(provider instanceof DevSimulatedPayoutProvider)) throw notFound();
+    const { id } = paramsOf(req, idParams);
+    const p = (await db.query(`SELECT id, status FROM payouts WHERE id = $1 AND provider = 'dev_simulated'`, [id])).rows[0];
+    if (!p) throw notFound();
+    if (p.status !== 'processing') throw conflict('Only a simulated payout that is processing can be completed');
+    const { outcome } = bodyOf(req, simulateBody);
+    const body = JSON.stringify({ id: `devpayoutevt_${id}_${outcome}`, payoutId: id, outcome, reason: outcome === 'failed' ? 'Simulated failure' : undefined });
+    const res = await handlePayoutWebhook(payoutCtx, 'dev_simulated', Buffer.from(body), { 'x-dev-signature': provider.sign(body) });
+    return { ok: res.status === 200, simulated: true };
   });
 
   async function afterPayout(p: { org_id: string; amount_micros: string; currency: string; status: string; review_reason?: string | null; failure_reason?: string | null }) {
@@ -249,6 +347,11 @@ export async function adminFinanceRoutes(app: FastifyInstance) {
     const { id } = paramsOf(req, idParams);
     const b = bodyOf(req, paidBody);
     const p = await tx(ctx, async (c) => {
+      const cur = (await c.query('SELECT method, destination_encrypted FROM payouts WHERE id = $1', [id])).rows[0];
+      if (cur?.method === 'crypto') {
+        const d = decryptDestination(ctx.config.ENCRYPTION_KEY, cur.destination_encrypted);
+        if (d?.method === 'crypto' && !isValidTxHash(d.network, b.providerRef)) throw badRequest(`Enter the ${CRYPTO_NETWORKS[d.network].label} transaction hash of the transfer`);
+      }
       const r = await markPayoutPaid(c, id, { type: 'user', userId: actor.id }, b.providerRef, b.reason);
       await audit(c, req, { action: 'payout.paid', resourceType: 'payout', resourceId: id, orgId: r.org_id, after: { providerRef: b.providerRef }, reason: b.reason });
       return r;

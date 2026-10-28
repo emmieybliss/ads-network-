@@ -164,10 +164,13 @@ pnpm audit
 ## Status and honest limits
 
 - Nothing has been deployed to a public server.
-- No real payment provider is connected. Stripe support is written but has not
-  been tested against Stripe. Until a provider is configured, funding is by bank
-  transfer confirmed by platform finance staff. The simulated provider works only
-  outside production.
+- No real payment provider is connected. Stripe (cards) and PayPal (deposits
+  and publisher payouts) are written and tested against simulated API
+  responses, not against the live services. Until they are configured, funding
+  is by bank transfer confirmed by finance staff, and bank and crypto payouts
+  are paid by staff and recorded with their reference. The simulated provider
+  works only outside production. See docs/PAYMENTS_AND_PAYOUTS.md for the
+  accounts and keys needed to go live.
 - No GeoIP database is bundled. Country targeting relies on a header from a CDN
   you trust, or reports "ZZ" (unknown).
 - No company registration details, addresses, customers, testimonials or

@@ -156,6 +156,7 @@ const log = { info: (o: object, m?: string) => app.log.info(o, m), warn: (o: obj
 const jobCtx: import('../../worker/src/jobs').JobCtx = {
   db: app.ctx.db, redis, settings: () => app.ctx.settings.get(), log, partners: app.ctx.partners, publicUrl: (k) => app.ctx.storage.publicUrl(k), siteUrl: config.PUBLIC_SITE_URL,
   email: async (to, template, vars) => { await queueEmail(app.ctx, to, template, vars); },
+  app: app.ctx,
   notify: async (orgId, n) => {
     const members = (await app.ctx.db.query<{ user_id: string; email: string; name: string }>(
       `SELECT m.user_id, u.email, u.name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = $1 AND u.status = 'active' AND ($2::text[] IS NULL OR m.role = ANY($2))`, [orgId, n.roles ?? null])).rows;
@@ -179,7 +180,7 @@ async function run(name: string, fn: () => Promise<unknown>) {
   }
 }
 const minutely = () => run('minutely', async () => { await jobs.refreshAggregates(jobCtx); await jobs.campaignLifecycle(jobCtx); await jobs.settleAll(jobCtx); await jobs.syncPartners(jobCtx); await jobs.syncSpendCounters(jobCtx); });
-const fiveMinutely = () => run('five-minutely', async () => { await jobs.budgetAlerts(jobCtx); await jobs.lowBalanceAlerts(jobCtx); await jobs.reportEmails(jobCtx); await jobs.detectAnomalies(jobCtx); });
+const fiveMinutely = () => run('five-minutely', async () => { await jobs.budgetAlerts(jobCtx); await jobs.lowBalanceAlerts(jobCtx); await jobs.reportEmails(jobCtx); await jobs.detectAnomalies(jobCtx); await jobs.syncProviders(jobCtx); });
 const daily = () => run('daily', () => jobs.dailyMaintenance(jobCtx));
 const timers = [setInterval(minutely, 60_000), setInterval(fiveMinutely, 300_000), setInterval(daily, 86_400_000)];
 await minutely();

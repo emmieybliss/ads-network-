@@ -12,7 +12,9 @@ import { deliverOutbox, queueEmail } from '@blissnova/api/services/notifications
 import { EMAIL_TEMPLATES } from '@blissnova/api/lib/mailer';
 import { LocalStorage } from '@blissnova/api/lib/storage';
 import { PartnerRegistry } from '@blissnova/api/services/partners';
-import { budgetAlerts, campaignLifecycle, dailyMaintenance, detectAnomalies, lowBalanceAlerts, refreshAggregates, reportEmails, settleAll, syncPartners, syncSpendCounters, type JobCtx } from './jobs';
+import { PaymentProviderRegistry, paypalClientFor } from '@blissnova/api/services/payments/registry';
+import { PayoutProviderRegistry } from '@blissnova/api/services/payouts/registry';
+import { budgetAlerts, campaignLifecycle, dailyMaintenance, detectAnomalies, lowBalanceAlerts, refreshAggregates, reportEmails, settleAll, syncPartners, syncProviders, syncSpendCounters, type JobCtx } from './jobs';
 
 /**
  * Background worker: event processing, serve logs, email delivery and
@@ -44,7 +46,10 @@ const email: JobCtx['email'] = async (to, template, vars) => {
   await queueEmail({ config, db, redis: connection, settings, mailer, queues: { email: emailQueue } } as never, to, template, vars);
 };
 const storage = new LocalStorage(config.STORAGE_DIR, config.PUBLIC_API_URL);
-const jobCtx: JobCtx = { db, redis: connection, settings: () => settings.get(), log, notify, email, siteUrl: config.PUBLIC_SITE_URL, partners: new PartnerRegistry(config, connection), publicUrl: (k) => storage.publicUrl(k) };
+const paypal = paypalClientFor(config);
+// The subset of the API context that provider sync jobs use.
+const app = { config, db, redis: connection, settings, mailer, queues: { email: emailQueue }, payments: new PaymentProviderRegistry(config, paypal), payouts: new PayoutProviderRegistry(config, paypal), log } as never;
+const jobCtx: JobCtx = { db, redis: connection, settings: () => settings.get(), log, notify, email, siteUrl: config.PUBLIC_SITE_URL, partners: new PartnerRegistry(config, connection), publicUrl: (k) => storage.publicUrl(k), app };
 
 const workers = [
   new Worker(QUEUE_NAMES.events, async (job: Job<AdmittedEvent>) => {
@@ -75,7 +80,7 @@ const workers = [
         await budgetAlerts(jobCtx);
         await lowBalanceAlerts(jobCtx);
         await reportEmails(jobCtx);
-        return { anomalies: await detectAnomalies(jobCtx) };
+        return { anomalies: await detectAnomalies(jobCtx), providers: await syncProviders(jobCtx) };
       case 'daily':
         return dailyMaintenance(jobCtx);
       default:

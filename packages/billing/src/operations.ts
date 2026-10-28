@@ -380,7 +380,7 @@ export async function excludeEvents(client: PoolClient, a: { eventIds: string[];
 
 // ---------------------------------------------------------------- payouts
 
-export async function requestPayout(client: PoolClient, a: { orgId: string; amount: bigint; currency: string; userId: string; idempotencyKey: string; minimum: bigint }) {
+export async function requestPayout(client: PoolClient, a: { orgId: string; amount: bigint; currency: string; userId: string; idempotencyKey: string; minimum: bigint; auto?: boolean }) {
   const prior = await client.query('SELECT * FROM payouts WHERE idempotency_key = $1', [a.idempotencyKey]);
   if (prior.rows[0]) return prior.rows[0];
   if (a.amount < a.minimum) throw new BillingError(`Minimum payout is ${a.minimum} micros`, 'limit');
@@ -390,8 +390,8 @@ export async function requestPayout(client: PoolClient, a: { orgId: string; amou
   const available = await balance(client, { kind: 'publisher_available', orgId: a.orgId }, a.currency);
   if (a.amount > available) throw new BillingError('Requested amount exceeds the available balance', 'insufficient_funds');
   const r = await client.query(
-    `INSERT INTO payouts (org_id, amount_micros, currency, method_label, idempotency_key, requested_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-    [a.orgId, a.amount.toString(), a.currency, profile.display_label, a.idempotencyKey, a.userId],
+    `INSERT INTO payouts (org_id, amount_micros, currency, method_label, method, destination_encrypted, auto_requested, idempotency_key, requested_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    [a.orgId, a.amount.toString(), a.currency, profile.display_label, profile.method, profile.details_encrypted ?? null, a.auto ?? false, a.idempotencyKey, a.userId],
   ).catch((err: { code?: string }) => {
     if (err.code === '23505') throw new BillingError('A payout request is already open for this account', 'conflict');
     throw err;
@@ -428,7 +428,7 @@ export async function rejectPayout(client: PoolClient, id: string, actor: { type
 export async function markPayoutProcessing(client: PoolClient, id: string, provider: string, providerRef: string | null) {
   const p = await lockPayout(client, id);
   if (p.status !== 'approved') throw new BillingError(`Payout is ${p.status}`, 'conflict');
-  return (await client.query(`UPDATE payouts SET status = 'processing', provider = $2, provider_ref = $3, updated_at = now() WHERE id = $1 RETURNING *`, [id, provider, providerRef])).rows[0];
+  return (await client.query(`UPDATE payouts SET status = 'processing', provider = $2, provider_ref = $3, sent_at = now(), updated_at = now() WHERE id = $1 RETURNING *`, [id, provider, providerRef])).rows[0];
 }
 
 export async function markPayoutPaid(client: PoolClient, id: string, actor: Actor, providerRef: string, reason: string) {
@@ -442,7 +442,7 @@ export async function markPayoutPaid(client: PoolClient, id: string, actor: Acto
       { account: { kind: 'cash_clearing' }, amount: -big(p.amount_micros) },
     ],
   });
-  return (await client.query(`UPDATE payouts SET status = 'paid', provider_ref = $2, final_txn_id = $3, updated_at = now() WHERE id = $1 RETURNING *`, [id, providerRef, txn.id])).rows[0];
+  return (await client.query(`UPDATE payouts SET status = 'paid', provider_ref = $2, final_txn_id = $3, paid_at = now(), updated_at = now() WHERE id = $1 RETURNING *`, [id, providerRef, txn.id])).rows[0];
 }
 
 export async function markPayoutFailed(client: PoolClient, id: string, actor: Actor, failureReason: string) {

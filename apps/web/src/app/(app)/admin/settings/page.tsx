@@ -12,7 +12,7 @@ const GROUP_HELP: Record<string, string> = {
   ivt: 'Thresholds for automated invalid-traffic filtering.',
   frequency: 'Network-wide frequency defaults.',
   creatives: 'Accepted creative formats and upload limits.',
-  publishers: 'Revenue share, earnings hold and payout minimum.',
+  publishers: 'Revenue share, earnings hold, payout minimum, payout methods and the automatic payout day (0 = off).',
   verification: 'Domain verification methods and limits.',
   eligibility: 'Publisher requirements shown publicly and used in review. Thresholds are optional and configurable, never fixed.',
   pricing: 'Enabled pricing models, minimum rates, the minimum advertiser deposit and currencies.',
