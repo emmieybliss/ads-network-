@@ -357,3 +357,49 @@ describe('country report', () => {
     expect(warnings).toHaveLength(2);
   });
 });
+
+describe('scheduled report emails', () => {
+  it('stores the choice per user, sends each complete period once and emails a sample on request', async () => {
+    const s = await setup();
+    const ad = await serve(s);
+    await events(s, [{ type: 'render', t: ad.token }]);
+    await aggregate();
+
+    expect((await s.pubCl.get(`/api/v1/orgs/${s.pub}/report-email`)).body.data).toMatchObject({ frequency: 'off', nextSendAt: null });
+    const on = await s.pubCl.put(`/api/v1/orgs/${s.pub}/report-email`, { frequency: 'daily' });
+    expect(on.status).toBe(200);
+    expect(on.body.data.frequency).toBe('daily');
+    expect(typeof on.body.data.nextSendAt).toBe('string');
+
+    const { sendDueReports } = await import('@blissnova/api/services/report-emails');
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    tomorrow.setUTCHours(2, 0, 0, 0);
+    const mails: Array<{ to: string; vars: Record<string, string> }> = [];
+    const send = async (to: string, vars: Record<string, string>) => { mails.push({ to, vars }); };
+    // The advertiser never subscribed, so only the publisher's user gets one; a second run sends nothing.
+    expect(await sendDueReports(h.db, send, 'http://localhost:3000', tomorrow)).toBe(1);
+    expect(await sendDueReports(h.db, send, 'http://localhost:3000', tomorrow)).toBe(0);
+    expect(mails[0]!.vars.period).toBe(today());
+    expect(mails[0]!.vars.report).toContain('Estimated earnings');
+    expect(mails[0]!.vars.report).toMatch(/Valid impressions\s+\d/);
+    expect(mails[0]!.vars.report).toContain('Top websites');
+    expect(mails[0]!.vars.link).toBe('http://localhost:3000/publisher/analytics');
+    // Before 01:00 UTC nothing goes out, so the day's aggregates can settle.
+    const early = new Date(tomorrow.getTime() + 86_400_000); early.setUTCHours(0, 30, 0, 0);
+    expect(await sendDueReports(h.db, send, 'http://localhost:3000', early)).toBe(0);
+
+    expect((await s.pubCl.put(`/api/v1/orgs/${s.pub}/report-email`, { frequency: 'off' })).body.data.frequency).toBe('off');
+    expect((await h.db.query('SELECT count(*)::int AS n FROM report_subscriptions')).rows[0].n).toBe(0);
+
+    const sample = await s.advCl.post(`/api/v1/orgs/${s.adv}/report-email/test`, {});
+    expect(sample.status).toBe(200);
+    const queued = (await h.db.query(`SELECT to_address, subject, body_text FROM email_outbox WHERE template = 'performance_report'`)).rows;
+    expect(queued).toHaveLength(1);
+    expect(queued[0].to_address).toBe(sample.body.data.sentTo);
+    expect(queued[0].body_text).toContain('Advertiser report for');
+    expect(queued[0].body_text).toContain('CPA');
+
+    // Another organization's setting is out of reach.
+    expect([403, 404]).toContain((await s.pubCl.put(`/api/v1/orgs/${s.adv}/report-email`, { frequency: 'weekly' })).status);
+  });
+});

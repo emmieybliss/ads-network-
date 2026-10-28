@@ -19,7 +19,7 @@ export default function AdvertiserAnalytics() {
           </Select>
         </Field>
       } />
-      <AnalyticsDashboard basePath={`/orgs/${org.id}/analytics`} exportPath={`/orgs/${org.id}/reports/export`} audience="advertiser" currency={org.currency} filters={{ campaignId: campaignId || undefined }} />
+      <AnalyticsDashboard basePath={`/orgs/${org.id}/analytics`} exportPath={`/orgs/${org.id}/reports/export`} reportEmailPath={`/orgs/${org.id}/report-email`} audience="advertiser" currency={org.currency} filters={{ campaignId: campaignId || undefined }} />
     </>
   );
 }

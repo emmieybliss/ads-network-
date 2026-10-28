@@ -7,6 +7,7 @@ import { qs } from '@/lib/api';
 import { formatMicros, formatNumber, formatPercent, isoDay } from '@/lib/format';
 import { Delta, Funnel, Heatmap, KpiTile, PeriodChart, RealtimePanel, ShareBars, countryName, dimLabel } from './parts';
 import { CountryMap } from './CountryMap';
+import { ReportEmailControl } from './ReportEmail';
 
 type Audience = 'advertiser' | 'publisher' | 'admin';
 type Row = Record<string, any> & { key: string; label: string };
@@ -58,7 +59,7 @@ const IVT_TYPES: Record<string, string> = { render: 'Impressions', click: 'Click
  * invalid traffic by reason and plain-language insights. Every number comes
  * from the analytics API, which reads validated events only.
  */
-export function AnalyticsDashboard({ basePath, audience, currency, filters = {}, exportPath }: { basePath: string; audience: Audience; currency: string; filters?: Record<string, string | undefined>; exportPath?: string }) {
+export function AnalyticsDashboard({ basePath, audience, currency, filters = {}, exportPath, reportEmailPath }: { basePath: string; audience: Audience; currency: string; filters?: Record<string, string | undefined>; exportPath?: string; reportEmailPath?: string }) {
   const [preset, setPreset] = useState<string>('30');
   const [range, setRange] = useState(rangeFor(30));
   const query = qs({ ...range, ...filters });
@@ -84,6 +85,7 @@ export function AnalyticsDashboard({ basePath, audience, currency, filters = {},
             </a>
           )}
         </div>
+        {reportEmailPath && <div className="mt-3 border-t border-border pt-3"><ReportEmailControl path={reportEmailPath} /></div>}
       </Card>
 
       <Async res={res}>

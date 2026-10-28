@@ -5,8 +5,14 @@ import { withTransaction } from '@blissnova/database';
 import { formatMoney, type PlatformSettings } from '@blissnova/shared';
 import { aggregateDay, allocateFlatRate } from '@blissnova/api/services/events';
 import { dayInZone, invalidateServingCache } from '@blissnova/api/services/serving';
+import { sendDueReports } from '@blissnova/api/services/report-emails';
 
-export interface JobCtx { db: Pool; redis: Redis; settings: () => Promise<PlatformSettings>; log: { info: (o: object, m?: string) => void; warn: (o: object, m?: string) => void; error: (o: object, m?: string) => void }; notify: (orgId: string, n: { type: string; title: string; body?: string; link?: string; template?: string; vars?: Record<string, string | number | undefined>; roles?: string[] }) => Promise<void> }
+export interface JobCtx { db: Pool; redis: Redis; settings: () => Promise<PlatformSettings>; log: { info: (o: object, m?: string) => void; warn: (o: object, m?: string) => void; error: (o: object, m?: string) => void }; notify: (orgId: string, n: { type: string; title: string; body?: string; link?: string; template?: string; vars?: Record<string, string | number | undefined>; roles?: string[] }) => Promise<void>;
+  /** Queue one templated email to one address. */
+  email: (to: string, template: string, vars: Record<string, string | number | undefined>) => Promise<void>;
+  /** Public dashboard URL, for links in emails. */
+  siteUrl: string;
+}
 
 interface StatementAccum { currency: string; lines: Array<{ description: string; amountMicros: string }>; total: bigint }
 
@@ -167,4 +173,11 @@ export async function dailyMaintenance(ctx: JobCtx) {
     }
   }
   return { flat, guaranteeTopups, purged: purged.rowCount, statements };
+}
+
+/** Scheduled performance report emails whose latest complete period has not gone out yet. */
+export async function reportEmails(ctx: JobCtx, now = new Date()) {
+  const sent = await sendDueReports(ctx.db, (to, vars) => ctx.email(to, 'performance_report', vars), ctx.siteUrl, now);
+  if (sent) ctx.log.info({ sent }, 'performance report emails queued');
+  return sent;
 }

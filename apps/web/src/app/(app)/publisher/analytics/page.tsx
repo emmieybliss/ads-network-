@@ -19,7 +19,7 @@ export default function PublisherAnalytics() {
           </Select>
         </Field>
       } />
-      <AnalyticsDashboard basePath={`/orgs/${org.id}/analytics`} exportPath={`/orgs/${org.id}/reports/export`} audience="publisher" currency={org.currency} filters={{ siteId: siteId || undefined }} />
+      <AnalyticsDashboard basePath={`/orgs/${org.id}/analytics`} exportPath={`/orgs/${org.id}/reports/export`} reportEmailPath={`/orgs/${org.id}/report-email`} audience="publisher" currency={org.currency} filters={{ siteId: siteId || undefined }} />
     </>
   );
 }

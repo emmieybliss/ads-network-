@@ -211,6 +211,13 @@ validated events as reports, plus a few more fields. Migration 0014.
   outlines, pre-projected into `world-110m.json` and loaded in their own
   chunk) above a sortable table. The country itself comes from the CDN header
   or the GeoIP database (see Limits).
+- **Report emails.** Each user can turn on a daily, weekly (Monday to Sunday)
+  or monthly email for an organization (`/orgs/:orgId/report-email`,
+  migration 0015). The five-minute job sends the latest complete UTC period
+  once, from 01:00 UTC, so the day's aggregates have settled: headline numbers
+  against the period before, top countries and top websites or campaigns, as
+  plain text through the email outbox. "Send me one now" emails the last seven
+  days straight away.
 - **Existing demos.** The local runner adds the new sample fields to demo data
   seeded before this version, once, touching only `demo-sample:` events
   (`apps/api/src/scripts/demo-analytics.ts`).

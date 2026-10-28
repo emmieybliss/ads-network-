@@ -52,3 +52,20 @@ describe('comparison period', () => {
     expect(previousRange({ from: '2026-10-28', to: '2026-10-28' })).toEqual({ from: '2026-10-27', to: '2026-10-27', days: 1 });
   });
 });
+
+describe('report email periods', () => {
+  it('picks the latest complete day, Monday-to-Sunday week and calendar month in UTC', async () => {
+    const { latestPeriod, nextSendAt } = await import('@blissnova/api/services/report-emails');
+    const wed = new Date('2026-10-28T08:00:00Z');
+    expect(latestPeriod('daily', wed)).toMatchObject({ from: '2026-10-27', to: '2026-10-27' });
+    expect(latestPeriod('weekly', wed)).toMatchObject({ from: '2026-10-19', to: '2026-10-25' });
+    expect(latestPeriod('weekly', new Date('2026-10-26T05:00:00Z'))).toMatchObject({ from: '2026-10-19', to: '2026-10-25' });
+    expect(latestPeriod('monthly', wed)).toMatchObject({ from: '2026-09-01', to: '2026-09-30', label: 'September 2026' });
+    expect(latestPeriod('monthly', new Date('2026-01-05T00:00:00Z'))).toMatchObject({ from: '2025-12-01', to: '2025-12-31' });
+    // Not sent yet: now. Already sent: 01:00 UTC on the day the next period is complete.
+    expect(nextSendAt('weekly', null, wed)).toBe(wed.toISOString());
+    expect(nextSendAt('weekly', '2026-10-25', wed)).toBe('2026-11-02T01:00:00.000Z');
+    expect(nextSendAt('monthly', '2026-09-30', wed)).toBe('2026-11-01T01:00:00.000Z');
+    expect(nextSendAt('daily', '2026-10-27', wed)).toBe('2026-10-29T01:00:00.000Z');
+  });
+});
