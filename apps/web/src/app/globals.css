@@ -100,7 +100,8 @@
   }
 }
 
-:root.dark {
+/* .scheme-dark keeps a band of the marketing site dark in either theme. */
+:root.dark, .scheme-dark {
   --bg: #0c0d1a;
   --surface: #14162a;
   --surface-2: #1b1e36;
@@ -145,6 +146,27 @@ body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; text-
   mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, black 40%, transparent 100%);
 }
 .glow { background: radial-gradient(600px 300px at 50% 0%, color-mix(in srgb, var(--primary) 22%, transparent), transparent 70%); }
+
+/* Marketing: soft colour mesh behind the hero. */
+.mesh {
+  background:
+    radial-gradient(40% 55% at 78% 22%, color-mix(in srgb, var(--primary) 55%, transparent), transparent 70%),
+    radial-gradient(35% 45% at 95% 55%, color-mix(in srgb, var(--accent) 45%, transparent), transparent 70%),
+    radial-gradient(30% 40% at 62% 70%, color-mix(in srgb, var(--chart-3) 30%, transparent), transparent 70%),
+    radial-gradient(30% 40% at 88% 5%, color-mix(in srgb, var(--info) 40%, transparent), transparent 70%);
+  filter: blur(20px) saturate(1.1);
+}
+.dot-grid {
+  background-image: radial-gradient(color-mix(in srgb, var(--border-strong) 70%, transparent) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+.text-gradient {
+  background: linear-gradient(100deg, var(--primary) 10%, color-mix(in srgb, var(--primary) 40%, var(--accent)) 60%, var(--accent));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+@keyframes bn-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+.float-slow { animation: bn-float 7s ease-in-out infinite; }
+.float-slower { animation: bn-float 9s ease-in-out 1.5s infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
