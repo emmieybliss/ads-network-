@@ -23,7 +23,8 @@
 import type { PoolClient } from 'pg';
 import { createPool, withTransaction } from '@blissnova/database';
 import { confirmPayment, reserveCampaignBudget, settleCampaign } from '@blissnova/billing';
-import { toMicros } from '@blissnova/shared';
+import { payoutLabel, toMicros, type PayoutDetails } from '@blissnova/shared';
+import { encryptDestination } from '../services/payouts/service';
 import { hashPassword, randomToken } from '../lib/crypto';
 import { aggregateDay } from '../services/events';
 import { LocalStorage } from '../lib/storage';
@@ -289,10 +290,13 @@ async function main() {
     }
     // Automatic in-article ads on the demo site (the second demo article uses them).
     await c.query(`UPDATE sites SET auto_ads_enabled = true, auto_ads_unit_id = $2, auto_ads_max = 3, auto_ads_spacing = 3, auto_ads_first_after = 2 WHERE id = $1`, [site, units['demo-auto']]);
+    // A fictional PayPal payout address on a reserved domain, encrypted like real details.
+    const demoPayout: PayoutDetails = { method: 'paypal', email: 'demo-publisher@example.com' };
+    const key = process.env.ENCRYPTION_KEY;
     await c.query(
-      `INSERT INTO payout_profiles (org_id, method, display_label, currency, updated_by) VALUES ($1, 'bank_transfer', 'Demo account (no real details)', $2, $3)
+      `INSERT INTO payout_profiles (org_id, method, display_label, currency, details_encrypted, details_changed_at, updated_by) VALUES ($1, $2, $3, $4, $5, now(), $6)
        ON CONFLICT (org_id) DO NOTHING`,
-      [pubOrg, CURRENCY, pubUser],
+      key ? [pubOrg, 'paypal', `${payoutLabel(demoPayout)} [demo]`, CURRENCY, encryptDestination(key, demoPayout), pubUser] : [pubOrg, 'bank_transfer', 'Demo account (no real details)', CURRENCY, null, pubUser],
     );
 
     // --- advertiser funding through the simulated provider (no money moves) ----

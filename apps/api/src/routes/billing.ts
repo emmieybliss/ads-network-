@@ -4,10 +4,12 @@ import { z } from 'zod';
 import { balance } from '@blissnova/billing';
 import { formatMicros, formatMoney, toMicros, MICROS_PER_MINOR } from '@blissnova/shared';
 import { audit } from '../lib/audit';
-import { badRequest, conflict, notFound } from '../lib/errors';
+import { badRequest, conflict, notFound, providerError } from '../lib/errors';
 import { bodyOf, idParams, moneyString, orgIdParams, orgParams, paramsOf } from '../lib/http';
 import { requireOrg, requireUser } from '../plugins/auth';
-import { handlePaymentWebhook } from '../services/payments/webhook';
+import { capturePayment, handlePaymentWebhook } from '../services/payments/webhook';
+import { handlePayoutWebhook, type PayoutCtx } from '../services/payouts/service';
+import { notifyOrg } from '../services/notifications';
 import { DevSimulatedProvider } from '../services/payments/dev';
 
 const fundBody = z.object({ amount: moneyString, provider: z.string().max(40) });
@@ -28,7 +30,7 @@ export async function billingRoutes(app: FastifyInstance) {
       `SELECT COALESCE(-sum(e.amount_micros), 0)::text AS t FROM ledger_entries e JOIN ledger_accounts a ON a.id = e.account_id WHERE a.kind = 'campaign_reserve' AND a.org_id = $1 AND a.currency = $2`, [org.id, org.currency])).rows[0]!.t;
     const pending = (await db.query<{ t: string }>(`SELECT COALESCE(sum(amount_micros), 0)::text AS t FROM payments WHERE org_id = $1 AND status = 'pending'`, [org.id])).rows[0]!.t;
     const spend = (await db.query<{ t: string; m: string }>(`SELECT COALESCE(sum(spent_micros), 0)::text AS t, '0' AS m FROM campaigns WHERE org_id = $1`, [org.id])).rows[0]!.t;
-    const providers = ctx.payments.list().map((p) => p.status()).filter((p) => p.configured);
+    const providers = ctx.payments.list().filter((p) => p.status().configured && (!p.supportsCurrency || p.supportsCurrency(org.currency))).map((p) => p.status());
     const s = await ctx.settings.get();
     return { data: { currency: org.currency, availableMicros: wallet.toString(), reservedMicros: reserved, pendingPaymentsMicros: pending, lifetimeSpendMicros: spend, minDepositMicros: s.pricing.minDepositMicros, providers } };
   });
@@ -45,6 +47,7 @@ export async function billingRoutes(app: FastifyInstance) {
     if (typeof key !== 'string' || !/^[A-Za-z0-9_-]{8,80}$/.test(key)) throw badRequest('An Idempotency-Key header is required');
     const provider = ctx.payments.get(b.provider);
     if (!provider || !provider.status().configured) throw badRequest('That payment method is not available');
+    if (provider.supportsCurrency && !provider.supportsCurrency(req.org!.currency)) throw badRequest(`${provider.label} does not accept ${req.org!.currency}`);
     const amount = toMicros(b.amount);
     if (amount % MICROS_PER_MINOR !== 0n) throw badRequest('Enter an amount with at most two decimal places');
     const s = await ctx.settings.get();
@@ -58,12 +61,27 @@ export async function billingRoutes(app: FastifyInstance) {
     const checkout = await provider.createCheckout({
       paymentId: id, orgId: req.org!.id, amountMicros: amount, currency: req.org!.currency, description: `${s.branding.productName} account funding`,
       successUrl: `${ctx.config.PUBLIC_SITE_URL}/advertiser/billing?payment=${id}&status=returned`, cancelUrl: `${ctx.config.PUBLIC_SITE_URL}/advertiser/billing?payment=${id}&status=cancelled`,
+    }).catch((err: Error) => {
+      req.log.warn({ err: err.message, provider: provider.id }, 'checkout creation failed');
+      throw providerError(`${provider.label} could not start the payment. Try again, or choose another method.`);
     });
     const row = (await db.query(
       `INSERT INTO payments (id, org_id, provider, provider_ref, idempotency_key, amount_micros, currency, checkout_url, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
       [id, req.org!.id, provider.id, checkout.providerRef, idem, amount.toString(), req.org!.currency, checkout.checkoutUrl, user.id])).rows[0];
     await audit(db, req, { action: 'payment.create', resourceType: 'payment', resourceId: id, orgId: req.org!.id, after: { provider: provider.id, amount: amount.toString() } });
     return reply.status(201).send({ data: { ...row, instructions: checkout.instructions ?? null } });
+  });
+
+  app.post('/orgs/:orgId/billing/payments/:id/return', { config: mgmt, preHandler: requireOrg('billing:read', adv), schema: { tags: ['billing'], params: orgIdParams, description: 'Called when the advertiser comes back from a provider checkout that needs a server-side capture (PayPal). The result comes from the provider API, never from the browser.' } }, async (req) => {
+    const { id } = paramsOf(req, orgIdParams);
+    const p = (await db.query('SELECT * FROM payments WHERE id = $1 AND org_id = $2', [id, req.org!.id])).rows[0];
+    if (!p) throw notFound();
+    try {
+      return { data: await capturePayment(ctx, p) };
+    } catch (err) {
+      req.log.warn({ err: (err as Error).message, payment: id }, 'capture on return failed');
+      return { data: { status: 'pending' } };
+    }
   });
 
   app.get('/orgs/:orgId/billing/invoices', { preHandler: requireOrg('billing:read', { ...adv, allowSuspended: true }), schema: { tags: ['billing'], params: orgParams } }, async (req) => {
@@ -137,6 +155,30 @@ export async function webhookRoutes(app: FastifyInstance) {
     const { provider } = req.params as { provider: string };
     const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from('');
     const res = await handlePaymentWebhook(app.ctx, provider, raw, req.headers as Record<string, string>);
+    return reply.status(res.status).send(res.body);
+  });
+
+  const payoutCtx: PayoutCtx = { ...app.ctx, notify: (orgId, n) => notifyOrg(app.ctx, orgId, n) };
+  app.post('/webhooks/payouts/:provider', { config: { rateLimit: { bucket: 'webhook', limit: 600 }, csrfExempt: true, allowDuringMaintenance: true }, schema: { tags: ['webhooks'], params: z.object({ provider: z.string().regex(/^[a-z_]{2,40}$/) }) } }, async (req, reply) => {
+    const { provider } = req.params as { provider: string };
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from('');
+    const res = await handlePayoutWebhook(payoutCtx, provider, raw, req.headers as Record<string, string>);
+    return reply.status(res.status).send(res.body);
+  });
+
+  // PayPal sends checkout and payout events to one URL. The event type only
+  // routes the delivery; each handler verifies the signature with PayPal.
+  app.post('/webhooks/paypal', { config: { rateLimit: { bucket: 'webhook', limit: 600 }, csrfExempt: true, allowDuringMaintenance: true }, schema: { tags: ['webhooks'] } }, async (req, reply) => {
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from('');
+    let type = '';
+    try {
+      type = String(JSON.parse(raw.toString('utf8')).event_type ?? '');
+    } catch {
+      return reply.status(400).send({ error: 'invalid body' });
+    }
+    const res = type.startsWith('PAYMENT.PAYOUTS')
+      ? await handlePayoutWebhook(payoutCtx, 'paypal', raw, req.headers as Record<string, string>)
+      : await handlePaymentWebhook(app.ctx, 'paypal', raw, req.headers as Record<string, string>);
     return reply.status(res.status).send(res.body);
   });
 }

@@ -3,7 +3,7 @@ import type { PoolClient } from 'pg';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { balance, requestPayout } from '@blissnova/billing';
-import { toMicros, type PlatformSettings } from '@blissnova/shared';
+import { MICROS_PER_MINOR, explorerUrl, maskedPayoutDetails, payoutDetailsSchema, payoutLabel, toMicros, type PlatformSettings } from '@blissnova/shared';
 import { audit } from '../lib/audit';
 import { AppError, badRequest, conflict, notFound } from '../lib/errors';
 import { bodyOf, moneyString, orgIdParams, orgParams, paramsOf } from '../lib/http';
@@ -11,7 +11,8 @@ import { tx } from '../lib/tx';
 import { requireOrg, requireUser } from '../plugins/auth';
 import { checkVerification, isReservedHostname, newVerificationToken, normalizeDomain, txtRecordName, verificationInstructions, type VerificationMethod } from '../services/verification';
 import { hit } from '../lib/ratelimit';
-import { notifyStaff } from '../services/notifications';
+import { notifyOrg, notifyStaff } from '../services/notifications';
+import { decryptDestination, encryptDestination } from '../services/payouts/service';
 import { invalidateServingCache } from '../services/serving';
 import { adsTxtLine, checkAdsTxt, networkDomain } from '../services/adstxt';
 
@@ -92,7 +93,7 @@ function placementFormats(display: string, formats: string[], pop: PlatformSetti
   return formats;
 }
 const siteUnitParams = z.object({ orgId: z.uuid(), siteId: z.uuid() });
-const payoutProfileBody = z.object({ method: z.enum(['bank_transfer', 'paypal', 'other']), displayLabel: z.string().trim().min(3).max(120) });
+const payoutProfileBody = z.object({ details: payoutDetailsSchema, autoPayout: z.boolean().default(false) });
 const payoutBody = z.object({ amount: moneyString });
 
 export function siteKey() {
@@ -575,30 +576,65 @@ export async function publisherRoutes(app: FastifyInstance) {
         paidMicros: paid,
         holdDays: settings.publishers.earningsHoldDays,
         minimumPayoutMicros: settings.publishers.minimumPayoutMicros,
+        payoutMethods: settings.publishers.payoutMethods,
+        autoPayoutDay: settings.publishers.autoPayoutDay,
         settlements: settlements.map((s) => ({ id: s.id, events: s.event_count, earningsMicros: s.publisher_micros, reversedMicros: s.reversed_publisher_micros, holdUntil: s.hold_until, finalizedAt: s.finalized_at, createdAt: s.created_at })),
       },
     };
   });
 
-  app.get('/orgs/:orgId/payout-profile', { preHandler: requireOrg('earnings:read', { ...pub, allowSuspended: true }), schema: { tags: ['earnings'], params: orgParams } }, async (req) => {
-    const p = (await db.query('SELECT method, display_label, currency, updated_at FROM payout_profiles WHERE org_id = $1', [req.org!.id])).rows[0];
-    return { data: p ?? null };
+  app.get('/orgs/:orgId/payout-profile', { preHandler: requireOrg('earnings:read', { ...pub, allowSuspended: true }), schema: { tags: ['earnings'], params: orgParams, description: 'The saved payout method, masked. Full details are never returned.' } }, async (req) => {
+    const p = (await db.query('SELECT method, display_label, currency, auto_payout, details_encrypted, details_changed_at, updated_at FROM payout_profiles WHERE org_id = $1', [req.org!.id])).rows[0];
+    if (!p) return { data: null };
+    let masked: Record<string, string> | null = null;
+    try {
+      const d = decryptDestination(app.ctx.config.ENCRYPTION_KEY, p.details_encrypted);
+      masked = d ? maskedPayoutDetails(d) : null;
+    } catch {
+      masked = null;
+    }
+    return { data: { method: p.method, display_label: p.display_label, currency: p.currency, auto_payout: p.auto_payout, masked, needs_update: !p.details_encrypted, details_changed_at: p.details_changed_at, updated_at: p.updated_at } };
   });
 
-  app.put('/orgs/:orgId/payout-profile', { config: mgmt, preHandler: requireOrg('payout:request', pub), schema: { tags: ['earnings'], params: orgParams, body: payoutProfileBody } }, async (req) => {
+  app.put('/orgs/:orgId/payout-profile', { config: mgmt, preHandler: requireOrg('payout:request', pub), schema: { tags: ['earnings'], params: orgParams, body: payoutProfileBody, description: 'Save the payout method. Details are encrypted at rest; payouts already requested keep the destination they were requested with.' } }, async (req) => {
     const user = requireUser(req);
     const b = bodyOf(req, payoutProfileBody);
-    if (/\d{7,}/.test(b.displayLabel.replace(/\s/g, ''))) throw badRequest('Do not enter full account numbers. Use a masked label such as "Bank transfer ****1234".');
-    const before = (await db.query('SELECT * FROM payout_profiles WHERE org_id = $1', [req.org!.id])).rows[0];
-    await db.query(`INSERT INTO payout_profiles (org_id, method, display_label, currency, updated_by) VALUES ($1, $2, $3, $4, $5)
-                    ON CONFLICT (org_id) DO UPDATE SET method = EXCLUDED.method, display_label = EXCLUDED.display_label, updated_by = EXCLUDED.updated_by, updated_at = now()`, [req.org!.id, b.method, b.displayLabel, req.org!.currency, user.id]);
-    await audit(db, req, { action: 'payout_profile.update', resourceType: 'organization', resourceId: req.org!.id, orgId: req.org!.id, before, after: b });
-    return { ok: true };
+    const settings = await app.ctx.settings.get();
+    if (!settings.publishers.payoutMethods.includes(b.details.method)) throw badRequest('That payout method is not offered');
+    const label = payoutLabel(b.details);
+    const blob = encryptDestination(app.ctx.config.ENCRYPTION_KEY, b.details);
+    const before = (await db.query('SELECT method, display_label, auto_payout, details_encrypted FROM payout_profiles WHERE org_id = $1', [req.org!.id])).rows[0];
+    let changed = !before;
+    if (before) {
+      try {
+        changed = JSON.stringify(decryptDestination(app.ctx.config.ENCRYPTION_KEY, before.details_encrypted)) !== JSON.stringify(b.details);
+      } catch {
+        changed = true;
+      }
+    }
+    await db.query(`INSERT INTO payout_profiles (org_id, method, display_label, currency, details_encrypted, auto_payout, details_changed_at, updated_by) VALUES ($1, $2, $3, $4, $5, $6, now(), $7)
+                    ON CONFLICT (org_id) DO UPDATE SET method = EXCLUDED.method, display_label = EXCLUDED.display_label, details_encrypted = EXCLUDED.details_encrypted, auto_payout = EXCLUDED.auto_payout,
+                      details_changed_at = CASE WHEN $8 THEN now() ELSE payout_profiles.details_changed_at END, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [req.org!.id, b.details.method, label, req.org!.currency, blob, b.autoPayout, user.id, changed]);
+    // Audit the masked label only; the full account details never enter logs.
+    await audit(db, req, { action: 'payout_profile.update', resourceType: 'organization', resourceId: req.org!.id, orgId: req.org!.id, before: before ? { method: before.method, label: before.display_label, autoPayout: before.auto_payout } : null, after: { method: b.details.method, label, autoPayout: b.autoPayout, detailsChanged: changed } });
+    // Warn every owner, so a hijacked session cannot quietly redirect earnings.
+    if (changed && before) await notifyOrg(app.ctx, req.org!.id, { type: 'payout_method_changed', title: 'Payout method changed', body: label, link: '/publisher/earnings', template: 'payout_method_changed', vars: { label, by: user.email }, roles: ['owner'] }).catch(() => undefined);
+    return { ok: true, data: { method: b.details.method, display_label: label, auto_payout: b.autoPayout, masked: maskedPayoutDetails(b.details) } };
   });
 
   app.get('/orgs/:orgId/payouts', { preHandler: requireOrg('earnings:read', { ...pub, allowSuspended: true }), schema: { tags: ['earnings'], params: orgParams } }, async (req) => {
-    const rows = (await db.query(`SELECT id, amount_micros, currency, status, method_label, review_reason, failure_reason, provider_ref, created_at, updated_at FROM payouts WHERE org_id = $1 ORDER BY created_at DESC LIMIT 200`, [req.org!.id])).rows;
-    return { data: rows };
+    const rows = (await db.query(`SELECT id, amount_micros, currency, status, method, method_label, provider, review_reason, failure_reason, provider_ref, auto_requested, sent_at, paid_at, created_at, updated_at, destination_encrypted FROM payouts WHERE org_id = $1 ORDER BY created_at DESC LIMIT 200`, [req.org!.id])).rows;
+    return { data: rows.map(({ destination_encrypted, ...r }) => {
+      let explorer: string | null = null;
+      if (r.method === 'crypto' && r.status === 'paid' && r.provider_ref) {
+        try {
+          const d = decryptDestination(app.ctx.config.ENCRYPTION_KEY, destination_encrypted);
+          if (d?.method === 'crypto') explorer = explorerUrl(d.network, r.provider_ref);
+        } catch { /* legacy or unreadable destination: no link */ }
+      }
+      return { ...r, explorer_url: explorer };
+    }) };
   });
 
   app.post('/orgs/:orgId/payouts', { config: mgmt, preHandler: requireOrg('payout:request', pub), schema: { tags: ['earnings'], params: orgParams, body: payoutBody } }, async (req, reply) => {
@@ -608,6 +644,7 @@ export async function publisherRoutes(app: FastifyInstance) {
     if (typeof key !== 'string' || !/^[A-Za-z0-9_-]{8,80}$/.test(key)) throw badRequest('An Idempotency-Key header is required');
     const settings = await app.ctx.settings.get();
     const amount = toMicros(bodyOf(req, payoutBody).amount);
+    if (amount % MICROS_PER_MINOR !== 0n) throw badRequest('Enter an amount with at most two decimal places');
     const payout = await tx(app.ctx, async (c) => {
       const p = await requestPayout(c, { orgId: req.org!.id, amount, currency: req.org!.currency, userId: user.id, idempotencyKey: `${req.org!.id}:${key}`, minimum: BigInt(settings.publishers.minimumPayoutMicros) });
       await audit(c, req, { action: 'payout.request', resourceType: 'payout', resourceId: p.id, orgId: req.org!.id, after: { amount: amount.toString() } });

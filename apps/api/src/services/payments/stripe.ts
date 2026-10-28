@@ -7,12 +7,16 @@ const ZERO_DECIMAL = new Set(['JPY', 'KRW', 'VND', 'CLP', 'PYG', 'UGX', 'XAF', '
 /** Stripe Checkout integration using the REST API directly (no SDK dependency). Live verification requires real credentials. */
 export class StripeProvider implements PaymentProvider {
   readonly id = 'stripe';
-  readonly label = 'Stripe Checkout';
+  readonly label = 'Card (Stripe)';
   constructor(private secretKey: string | undefined, private webhookSecret: string | undefined, private fetchImpl: typeof fetch = fetch) {}
 
   status(): ProviderStatus {
     const configured = Boolean(this.secretKey && this.webhookSecret);
-    return { id: this.id, label: this.label, configured, supportsCheckout: true, supportsWebhooks: true, detail: configured ? 'Credentials present. Run a connection test before enabling.' : 'Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET.' };
+    const mode = this.secretKey?.includes('_live_') ? 'live' : 'test';
+    return {
+      id: this.id, label: this.label, configured, supportsCheckout: true, supportsWebhooks: true, supportsRefunds: true, mode,
+      detail: !configured ? 'Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET.' : mode === 'test' ? 'Test mode: use Stripe test cards, no real money moves.' : 'Live mode. Run a connection test before taking payments.',
+    };
   }
 
   private toMinor(micros: bigint, currency: string): bigint {
@@ -76,7 +80,23 @@ export class StripeProvider implements PaymentProvider {
     let outcome: 'succeeded' | 'failed' | 'ignored' = 'ignored';
     if ((evt.type === 'checkout.session.completed' && obj.payment_status === 'paid') || evt.type === 'checkout.session.async_payment_succeeded') outcome = 'succeeded';
     else if (evt.type === 'checkout.session.async_payment_failed' || evt.type === 'checkout.session.expired') outcome = 'failed';
-    return { ok: true, raw: evt, event: { eventId: evt.id, type: evt.type, paymentId, providerRef: (obj.id as string) ?? null, outcome, amountMicros: amount, currency, failureReason: outcome === 'failed' ? evt.type : undefined } };
+    const chargeRef = typeof obj.payment_intent === 'string' ? obj.payment_intent : null;
+    return { ok: true, raw: evt, event: { eventId: evt.id, type: evt.type, paymentId, providerRef: (obj.id as string) ?? null, outcome, amountMicros: amount, currency, chargeRef, failureReason: outcome === 'failed' ? evt.type : undefined } };
+  }
+
+  async refund(payment: { id: string; provider_charge_ref: string | null; currency: string }, amountMicros: bigint, idempotencyKey: string) {
+    if (!this.secretKey) throw new Error('Stripe is not configured');
+    if (!payment.provider_charge_ref) throw new Error('This payment has no Stripe PaymentIntent on record, so it cannot be refunded through Stripe');
+    const form = new URLSearchParams({ payment_intent: payment.provider_charge_ref, amount: this.toMinor(amountMicros, payment.currency).toString(), 'metadata[payment_id]': payment.id });
+    const res = await this.fetchImpl('https://api.stripe.com/v1/refunds', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.secretKey}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Idempotency-Key': `refund-${idempotencyKey}` },
+      body: form,
+    });
+    const body = (await res.json()) as { id?: string; status?: string; error?: { message?: string } };
+    if (!res.ok || !body.id) throw new Error(`Stripe refund failed: ${body.error?.message ?? res.status}`);
+    if (body.status === 'failed' || body.status === 'canceled') throw new Error(`Stripe refund ${body.status}`);
+    return { providerRef: body.id };
   }
 
   async testConnection() {

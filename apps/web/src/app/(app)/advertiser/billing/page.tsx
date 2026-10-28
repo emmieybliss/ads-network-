@@ -1,14 +1,17 @@
 'use client';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useState, type FormEvent } from 'react';
-import { Download, Plus } from 'lucide-react';
-import { Alert, Async, Badge, Button, Card, CardHeader, Field, Input, Modal, PageHeader, Select, Stat, StatusBadge, Table, Tabs, Textarea } from '@/components/ui';
+import { Suspense, useEffect, useState, type FormEvent } from 'react';
+import { Building2, CreditCard, Download, FlaskConical, Plus, Wallet } from 'lucide-react';
+import { Alert, Async, Badge, Button, Card, CardHeader, Field, Input, Modal, PageHeader, Select, Stat, StatusBadge, Table, Tabs, Textarea, cn } from '@/components/ui';
 import { useApi } from '@/lib/hooks';
 import { useOrg, useSession } from '@/lib/session';
 import { errorMessage, idempotencyKey, post } from '@/lib/api';
 import { formatDate, formatMicros, humanize } from '@/lib/format';
 
-interface Provider { id: string; label: string; supportsCheckout: boolean; detail?: string }
+interface Provider { id: string; label: string; supportsCheckout: boolean; detail?: string; mode?: string }
+
+const METHOD_ICON: Record<string, typeof CreditCard> = { stripe: CreditCard, paypal: Wallet, bank_transfer: Building2, dev_simulated: FlaskConical };
+const METHOD_LABEL: Record<string, string> = { stripe: 'Card', paypal: 'PayPal', bank_transfer: 'Bank transfer', dev_simulated: 'Simulated' };
 
 function AddFunds({ orgId, currency, minDepositMicros, providers, onDone }: { orgId: string; currency: string; minDepositMicros: string; providers: Provider[]; onDone: (msg: string) => void }) {
   const [open, setOpen] = useState(false);
@@ -49,12 +52,24 @@ function AddFunds({ orgId, currency, minDepositMicros, providers, onDone }: { or
           {error && <Alert tone="danger">{error}</Alert>}
           <Field label="Amount" htmlFor="amt" required hint={`Minimum deposit: ${minimum}`}><Input id="amt" inputMode="decimal" required pattern="^\d+(\.\d{1,2})?$" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="100.00" /></Field>
           <div className="flex flex-wrap gap-2">{[1, 2.5, 5, 25].map((m) => Math.round(Number(minDepositMicros) * m / 1_000_000)).filter((v, i, a) => v > 0 && a.indexOf(v) === i).map((v) => <Button key={v} type="button" size="sm" variant="secondary" onClick={() => setAmount(v.toFixed(2))}>{formatMicros(String(v * 1_000_000), currency)}</Button>)}</div>
-          <Field label="Payment method" htmlFor="prov">
-            <Select id="prov" value={provider} onChange={(e) => setProvider(e.target.value)}>
-              {providers.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-            </Select>
-          </Field>
+          <fieldset>
+            <legend className="mb-1.5 text-sm font-medium text-fg">Payment method</legend>
+            <div role="radiogroup" className="grid gap-2 sm:grid-cols-2">
+              {providers.map((p) => {
+                const Icon = METHOD_ICON[p.id] ?? CreditCard;
+                return (
+                  <button key={p.id} type="button" role="radio" aria-checked={provider === p.id} onClick={() => setProvider(p.id)}
+                    className={cn('flex items-start gap-2.5 rounded-xl border p-3 text-left text-sm transition-colors', provider === p.id ? 'border-primary bg-primary-soft' : 'border-border hover:bg-surface-2')}>
+                    <Icon className={cn('mt-0.5 size-4 shrink-0', provider === p.id ? 'text-primary' : 'text-muted')} />
+                    <span><span className="font-medium">{p.label}</span>{p.mode === 'test' && <Badge tone="warning" className="ml-1.5">Test mode</Badge>}
+                      <span className="block text-xs text-muted">{p.id === 'stripe' ? 'Visa, Mastercard, Amex and wallets, on Stripe’s secure page.' : p.id === 'paypal' ? 'Pay with your PayPal balance or a card on PayPal.' : p.id === 'bank_transfer' ? 'Credited after finance confirms receipt.' : 'Local testing only.'}</span></span>
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
           {provider === 'dev_simulated' && <Alert tone="warning" title="Simulated payment">This local development provider moves no real money. It is refused in production.</Alert>}
+          {providers.find((p) => p.id === provider)?.mode === 'test' && <Alert tone="info" title="Test mode">This provider is connected with test credentials. Use its test cards or sandbox accounts; no real money moves.</Alert>}
           <p className="text-xs text-muted">Your balance is credited only after the payment provider confirms the payment. Returning from a checkout page does not by itself add funds.</p>
         </form>
       </Modal>
@@ -103,6 +118,17 @@ function Billing() {
   const refunds = useApi<{ data: any[] }>(tab === 'refunds' ? `/orgs/${org.id}/billing/refunds` : null);
   const money = (v: string) => formatMicros(v, org.currency);
   const returned = params.get('status');
+  const returnedPayment = params.get('payment');
+  // Providers such as PayPal need a server-side capture after the buyer approves. The API asks the provider; the browser's word counts for nothing.
+  useEffect(() => {
+    if (returned !== 'returned' || !returnedPayment) return;
+    post<{ data: { status: string } }>(`/orgs/${org.id}/billing/payments/${returnedPayment}/return`).then((r) => {
+      if (r.data.status === 'succeeded') setNotice('Payment confirmed. Your balance has been updated.');
+      summary.reload();
+      payments.reload();
+    }, () => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [returned, returnedPayment, org.id]);
 
   return (
     <>
@@ -127,7 +153,7 @@ function Billing() {
             <Async res={payments}>
               {({ data }) => <Table rows={data} rowKey={(r) => r.id} empty="No payments yet." columns={[
                 { key: 'd', header: 'Date', cell: (r) => formatDate(r.created_at, true) },
-                { key: 'p', header: 'Method', cell: (r) => <span>{humanize(r.provider)}{r.provider === 'dev_simulated' && <Badge tone="warning" className="ml-2">Simulated</Badge>}</span> },
+                { key: 'p', header: 'Method', cell: (r) => <span>{METHOD_LABEL[r.provider] ?? humanize(r.provider)}{r.provider === 'dev_simulated' && <Badge tone="warning" className="ml-2">Simulated</Badge>}</span> },
                 { key: 'a', header: 'Amount', align: 'right', cell: (r) => money(r.amount_micros) },
                 { key: 's', header: 'Status', cell: (r) => <StatusBadge status={r.status} /> },
                 { key: 'x', header: '', cell: (r) => r.status === 'pending' && r.checkout_url ? <a className="text-sm text-primary hover:underline" href={r.checkout_url}>Continue checkout</a> : r.failure_reason ?? '' },

@@ -43,7 +43,13 @@ const envSchema = z.object({
   SMTP_SECURE: bool(false),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
-  /** Enables the development-only simulated payment provider. Never enable in production. */
+  /** PayPal REST app (developer.paypal.com). Used for PayPal deposits by advertisers and PayPal payouts to publishers. */
+  PAYPAL_CLIENT_ID: z.string().optional(),
+  PAYPAL_CLIENT_SECRET: z.string().optional(),
+  /** Webhook id shown by PayPal when you add the webhook URL; required to verify PayPal webhooks. */
+  PAYPAL_WEBHOOK_ID: z.string().optional(),
+  PAYPAL_ENV: z.enum(['sandbox', 'live']).default('sandbox'),
+  /** Enables the development-only simulated payment provider (deposits and payouts). Never enable in production. */
   ENABLE_DEV_PAYMENTS: bool(false),
   /**
    * Development-only simulated partner network. It pretends to be an outside
@@ -98,6 +104,11 @@ export function productionProblems(c: z.infer<typeof envSchema>, corsOrigins: st
   const p: string[] = [];
   if (c.ENABLE_DEV_PAYMENTS) p.push('ENABLE_DEV_PAYMENTS must be false: the simulated payment provider is for local development only');
   if (c.ENABLE_DEV_PARTNER_SIMULATOR) p.push('ENABLE_DEV_PARTNER_SIMULATOR must be false: the simulated partner network is for local development only');
+  if (Boolean(c.STRIPE_SECRET_KEY) !== Boolean(c.STRIPE_WEBHOOK_SECRET)) p.push('Set both STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET, or neither');
+  if (c.STRIPE_SECRET_KEY && !/^(sk|rk)_live_/.test(c.STRIPE_SECRET_KEY)) p.push('STRIPE_SECRET_KEY must be a live key (sk_live_ or rk_live_); test keys take no real payments');
+  const paypal = [c.PAYPAL_CLIENT_ID, c.PAYPAL_CLIENT_SECRET, c.PAYPAL_WEBHOOK_ID].filter(Boolean).length;
+  if (paypal > 0 && paypal < 3) p.push('Set PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET and PAYPAL_WEBHOOK_ID together, or none of them');
+  if (paypal === 3 && c.PAYPAL_ENV !== 'live') p.push('PAYPAL_ENV must be live in production; sandbox moves no real money');
   if (c.ENABLE_DEV_VERIFICATION_SIMULATOR) p.push('ENABLE_DEV_VERIFICATION_SIMULATOR must be false: simulated domain verification is for local development only');
   if (c.VERIFICATION_ALLOW_HTTP || c.VERIFICATION_PRIVATE_HOST_ALLOWLIST) p.push('VERIFICATION_ALLOW_HTTP and VERIFICATION_PRIVATE_HOST_ALLOWLIST are development overrides and must be unset');
   if (c.SEED_DEMO_DATA) p.push('SEED_DEMO_DATA must be false');

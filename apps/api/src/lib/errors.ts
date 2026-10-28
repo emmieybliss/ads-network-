@@ -19,6 +19,8 @@ export const forbidden = (m = 'You do not have permission to perform this action
 /** Used for missing resources AND for resources owned by another organization, so existence is never leaked. */
 export const notFound = (m = 'Resource not found') => new AppError(404, 'not_found', m);
 export const conflict = (m: string, d?: unknown) => new AppError(409, 'conflict', m, d);
+/** A payment or payout provider refused or could not be reached. */
+export const providerError = (m: string) => new AppError(502, 'service_unavailable', m);
 
 export function errorHandler(err: FastifyError | Error, req: FastifyRequest, reply: FastifyReply) {
   const requestId = req.id;
