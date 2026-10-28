@@ -21,6 +21,18 @@ foreach ($port in 3000, 4000, 3100) {
   }
 }
 
+# The built-in database: a crashed run can leave Postgres processes behind that
+# still hold its port. The API is not running (port 4000 is free), so any
+# Postgres started from this folder is a leftover: stop it.
+Get-CimInstance Win32_Process -Filter "Name='postgres.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.ExecutablePath -like "$($root.Path)\node_modules\*" } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 1
+$pgPort = if ($env:LOCAL_PG_PORT) { [int]$env:LOCAL_PG_PORT } else { 54329 }
+if (Get-NetTCPConnection -LocalPort $pgPort -State Listen -ErrorAction SilentlyContinue) {
+  Fail "Port $pgPort, used by BlissNova's built-in database, is taken by another program. Restart the PC, or set LOCAL_PG_PORT to another free port."
+}
+
 # 3. pnpm: use an installed one, otherwise run the pinned version through npx.
 # Look for a real program only (-CommandType Application): PowerShell names are
 # case-insensitive, so a plain Get-Command would find this helper itself.

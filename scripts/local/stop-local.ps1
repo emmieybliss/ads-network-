@@ -11,6 +11,12 @@ if (Test-Path $runner) {
   Pop-Location
 }
 
+# Any Postgres from this folder still running (for example a worker left over
+# from a crash, which pg_ctl cannot see) is stopped too.
+Get-CimInstance Win32_Process -Filter "Name='postgres.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.ExecutablePath -like "$($root.Path)\node_modules\*" } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
 # 2. Close the three windows start-local.ps1 opened (titles "BlissNova API",
 #    "BlissNova website", "BlissNova demo site") and the programs in them.
 foreach ($title in 'BlissNova API', 'BlissNova website', 'BlissNova demo site') {
