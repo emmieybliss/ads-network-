@@ -48,6 +48,7 @@ TCF_VENDOR_ID=                   # IAB Global Vendor List id, only after registe
 COOKIE_SECURE=true
 TRUST_PROXY=true                 # only when the reverse proxy below is in front
 GEO_COUNTRY_HEADER=              # e.g. cf-ipcountry if your CDN sets one
+GEOIP_DB_PATH=                   # else a .mmdb country database (DB-IP Lite or GeoLite2), refreshed monthly
 EMAIL_PROVIDER=smtp              # with SMTP_* filled in
 EVENT_PROCESSING=queue
 STORAGE_DIR=/data/storage        # a persistent volume

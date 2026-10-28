@@ -4,7 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   BarChart3, Bell, Building2, ChevronsUpDown, CreditCard, FileText, Gauge, Globe2, KeyRound, LayoutDashboard, LifeBuoy, LogOut, Megaphone, Menu,
-  ScrollText, Settings, Shield, ShieldAlert, SlidersHorizontal, Ticket, Users, Wallet, X, Image as ImageIcon, Landmark, Activity, Search, Network,
+  ScrollText, Settings, Shield, ShieldAlert, SlidersHorizontal, Ticket, Users, Wallet, X, Image as ImageIcon, Landmark, Activity, Search, Network, LineChart,
 } from 'lucide-react';
 import { Badge, Loading, Logo, cn } from './ui';
 import { useSession, type OrgSummary } from '@/lib/session';
@@ -21,6 +21,7 @@ const NAV: Record<Exclude<Portal, 'account'>, Array<{ section?: string; items: N
     { items: [
       { href: '/advertiser', label: 'Overview', icon: LayoutDashboard },
       { href: '/advertiser/campaigns', label: 'Campaigns', icon: Megaphone },
+      { href: '/advertiser/analytics', label: 'Analytics', icon: LineChart },
       { href: '/advertiser/reports', label: 'Reports', icon: BarChart3 },
       { href: '/advertiser/billing', label: 'Billing', icon: Wallet, perm: 'billing:read' },
     ] },
@@ -29,13 +30,14 @@ const NAV: Record<Exclude<Portal, 'account'>, Array<{ section?: string; items: N
     { items: [
       { href: '/publisher', label: 'Overview', icon: LayoutDashboard },
       { href: '/publisher/sites', label: 'Websites', icon: Globe2 },
+      { href: '/publisher/analytics', label: 'Analytics', icon: LineChart },
       { href: '/publisher/reports', label: 'Reports', icon: BarChart3 },
       { href: '/publisher/earnings', label: 'Earnings & payouts', icon: Wallet, perm: 'earnings:read' },
       { href: '/publisher/policy', label: 'Policy & traffic quality', icon: ShieldAlert },
     ] },
   ],
   admin: [
-    { items: [{ href: '/admin', label: 'Overview', icon: Gauge, perm: 'admin:overview' }] },
+    { items: [{ href: '/admin', label: 'Overview', icon: Gauge, perm: 'admin:overview' }, { href: '/admin/analytics', label: 'Analytics', icon: LineChart, perm: 'admin:overview' }] },
     { section: 'Network', items: [
       { href: '/admin/users', label: 'Users', icon: Users, perm: 'admin:users:read' },
       { href: '/admin/orgs', label: 'Organizations', icon: Building2, perm: 'admin:orgs:read' },

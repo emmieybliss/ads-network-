@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { decide, unitCostMicros, type CampaignCandidate, type CreativeCandidate } from '@blissnova/ad-decision';
 import type { PlatformSettings } from '@blissnova/shared';
-import { deviceCategory, hostAuthorized, isKnownCrawler, normalizeHost, signDeliveryToken, visitorHash, type DeliveryClaims } from '@blissnova/tracking';
+import { browserFamily, deviceCategory, hostAuthorized, isKnownCrawler, normalizeHost, osFamily, referrerHostOf, signDeliveryToken, trafficSource, visitorHash, type DeliveryClaims } from '@blissnova/tracking';
 import type { AppContext } from '../lib/context';
 import { decideConsent, type ConsentReason, type ConsentSignals } from './consent';
 
@@ -128,7 +128,7 @@ export async function reserveCaps(ctx: Pick<AppContext, 'redis'>, keys: string[]
 export interface ServeRequest {
   siteKey: string;
   units: Array<{ slot: string }>;
-  page: { url: string; keywords?: string[] };
+  page: { url: string; keywords?: string[]; referrer?: string };
   consent?: ConsentSignals;
   vid?: string;
   pv: string;
@@ -140,7 +140,7 @@ export interface ServedAd {
   display?: UnitDisplay;
   ad: null | { format: 'image' | 'text' | 'native' | 'pop'; token: string; clickUrl: string; width: number | null; height: number | null; pop?: { url: string }; image?: { url: string; alt: string }; text?: { headline: string; body: string; cta: string; displayUrl: string }; native?: { imageUrl: string; alt: string; headline: string; body: string; cta: string; displayUrl: string; sponsor: string } };
 }
-export interface ServeLog { pageView?: { siteId: string; path: string }; deliveries: Array<{ claims: DeliveryClaims; ipHash: string; uaHash: string | null }>; counters: Array<{ unitId: string; field: 'requests' | 'filled' | 'no_fill' | 'cap_rejects' | 'budget_rejects' | 'blocked' }>; day: string }
+export interface ServeLog { pageView?: { siteId: string; path: string; source: string; device: string; country: string; entrance: boolean }; deliveries: Array<{ claims: DeliveryClaims; ipHash: string; uaHash: string | null }>; counters: Array<{ unitId: string; field: 'requests' | 'filled' | 'no_fill' | 'cap_rejects' | 'budget_rejects' | 'blocked' }>; day: string }
 
 /** What the tag may do on the device: keep a visitor id only when personalization is allowed. */
 export interface ServePrivacy { personalization: boolean; reason: ConsentReason }
@@ -169,15 +169,19 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     return { ...empty('blocked'), log };
   }
 
-  // One page view per pv id, counted at the page's first ad request.
+  // One page view per pv id, counted at the page's first ad request. A page
+  // reached from outside the site (or with no referrer) starts a session.
   const pagePath = pathOf(req.page.url);
-  if (await ctx.redis.set(`pv:${req.pv.slice(0, 64)}`, '1', 'EX', 1800, 'NX')) log.pageView = { siteId: site.id, path: pagePath };
+  const device = deviceCategory(meta.ua);
+  const source = trafficSource(referrerHostOf(req.page.referrer), { domain: site.domain, allowedDomains: site.allowedDomains, includeSubdomains: site.includeSubdomains });
+  if (await ctx.redis.set(`pv:${req.pv.slice(0, 64)}`, '1', 'EX', 1800, 'NX')) log.pageView = { siteId: site.id, path: pagePath, source, device, country: meta.country, entrance: source !== 'internal' };
 
   const consent = decideConsent(req.consent, { personalizedAllowed: settings.tracking.personalizedAllowed, vendorId: ctx.config.TCF_VENDOR_ID, secGpc: !!meta.secGpc });
   const privacy: ServePrivacy = { personalization: consent.personalized, reason: consent.reason };
   const personalized = Boolean(consent.personalized && req.vid && /^[A-Za-z0-9_-]{16,64}$/.test(req.vid));
   const vHash = personalized ? visitorHash(ctx.config.APP_SECRET, req.vid!) : undefined;
-  const device = deviceCategory(meta.ua);
+  const os = osFamily(meta.ua);
+  const browser = browserFamily(meta.ua);
   const keywords = (req.page.keywords ?? []).map((k) => k.toLowerCase().slice(0, 60)).slice(0, 20);
   const now = Date.now();
   const used: string[] = [];
@@ -247,7 +251,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     if (cost > 0n) await ctx.redis.multi().incrby(`spend:${c.id}:${dayInZone(now, c.timezone)}`, Number(cost)).expire(`spend:${c.id}:${dayInZone(now, c.timezone)}`, 3 * 86400).exec();
     const claims: DeliveryClaims = {
       d: randomUUID(), c: c.id, cr: cr.id, ao: c.orgId, s: site.id, u: unit.id, po: site.orgId, pm: c.pricingModel, r: c.rateMicros.toString(), cur: c.currency,
-      sh: site.revenueShareBps, ph: pageHost, pp: pagePath, co: meta.country, dv: device, ct: !personalized, v: vHash, iat: now, exp: now + settings.tracking.tokenTtlSeconds * 1000,
+      sh: site.revenueShareBps, ph: pageHost, pp: pagePath, co: meta.country, dv: device, os, br: browser, src: source, ct: !personalized, v: vHash, iat: now, exp: now + settings.tracking.tokenTtlSeconds * 1000,
     };
     const token = signDeliveryToken(ctx.tokens, claims);
     log.deliveries.push({ claims, ipHash: meta.ipHash, uaHash: null });
@@ -298,17 +302,25 @@ export function pathOf(url: string): string {
 
 export async function writeServeLog(db: AppContext['db'], log: ServeLog) {
   if (log.pageView) {
+    const pv = log.pageView;
     await db.query(
       `INSERT INTO page_views (day, site_id, page_path, views) VALUES ($1, $2, $3, 1) ON CONFLICT (day, site_id, page_path) DO UPDATE SET views = page_views.views + 1`,
-      [log.day, log.pageView.siteId, log.pageView.path]);
+      [log.day, pv.siteId, pv.path]);
+    // Logs written before sessions were tracked carry no source.
+    if (pv.source) {
+      await db.query(
+        `INSERT INTO site_traffic_daily (day, site_id, source, device, country, pageviews, sessions) VALUES ($1, $2, $3, $4, $5, 1, $6)
+         ON CONFLICT (day, site_id, source, device, country) DO UPDATE SET pageviews = site_traffic_daily.pageviews + 1, sessions = site_traffic_daily.sessions + EXCLUDED.sessions`,
+        [log.day, pv.siteId, pv.source, pv.device, pv.country, pv.entrance ? 1 : 0]);
+    }
   }
   for (const d of log.deliveries) {
     const c = d.claims;
     await db.query(
-      `INSERT INTO ad_events (event_key, delivery_id, type, status, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, page_path)
-       VALUES ($1, $2, 'served', 'valid', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16 / 1000.0), $17)
+      `INSERT INTO ad_events (event_key, delivery_id, type, status, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, page_path, os, browser, source)
+       VALUES ($1, $2, 'served', 'valid', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16 / 1000.0), $17, $18, $19, $20)
        ON CONFLICT DO NOTHING`,
-      [`${c.d}:served`, c.d, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, d.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, c.iat, c.pp ?? null]);
+      [`${c.d}:served`, c.d, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, d.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, c.iat, c.pp ?? null, c.os ?? 'other', c.br ?? 'other', c.src ?? 'unknown']);
   }
   const agg = new Map<string, Record<string, number>>();
   for (const k of log.counters) {

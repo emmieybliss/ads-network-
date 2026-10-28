@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { ctr, effectiveCpmMicros } from '@blissnova/shared';
 
-export type GroupBy = 'day' | 'campaign' | 'creative' | 'site' | 'unit' | 'device' | 'country' | 'advertiser' | 'publisher';
+export type GroupBy = 'day' | 'campaign' | 'creative' | 'site' | 'unit' | 'device' | 'country' | 'advertiser' | 'publisher' | 'os' | 'browser' | 'source' | 'format' | 'display';
 export interface ReportScope { advertiserOrgId?: string; publisherOrgId?: string }
 export interface ReportFilters { from: string; to: string; campaignId?: string; siteId?: string; unitId?: string }
 
@@ -15,12 +15,18 @@ const GROUPS: Record<GroupBy, { key: string; label: string; join?: string }> = {
   country: { key: 'd.country', label: `CASE WHEN d.country = 'ZZ' THEN 'Unknown' ELSE d.country END` },
   advertiser: { key: 'd.advertiser_org_id::text', label: 'ao.name', join: 'JOIN organizations ao ON ao.id = d.advertiser_org_id' },
   publisher: { key: 'd.publisher_org_id::text', label: 'po.name', join: 'JOIN organizations po ON po.id = d.publisher_org_id' },
+  os: { key: 'd.os', label: 'd.os' },
+  browser: { key: 'd.browser', label: 'd.browser' },
+  source: { key: 'd.source', label: 'd.source' },
+  format: { key: 'fc.format', label: 'fc.format', join: 'JOIN creatives fc ON fc.id = d.creative_id' },
+  display: { key: 'du.display', label: 'du.display', join: 'JOIN ad_units du ON du.id = d.unit_id' },
 };
 
 const SUMS = `sum(d.served)::bigint AS served, sum(d.rendered)::bigint AS rendered, sum(d.valid_impressions)::bigint AS valid_impressions,
   sum(d.invalid_impressions)::bigint AS invalid_impressions, sum(d.viewable_impressions)::bigint AS viewable_impressions, sum(d.valid_clicks)::bigint AS valid_clicks,
   sum(d.invalid_clicks)::bigint AS invalid_clicks, sum(d.billable_impressions)::bigint AS billable_impressions, sum(d.billable_clicks)::bigint AS billable_clicks,
-  sum(d.spend_micros)::bigint AS spend_micros, sum(d.publisher_micros)::bigint AS publisher_micros`;
+  sum(d.spend_micros)::bigint AS spend_micros, sum(d.publisher_micros)::bigint AS publisher_micros, sum(d.in_view_ms)::bigint AS in_view_ms,
+  sum(d.in_view_samples)::bigint AS in_view_samples, sum(d.conversions)::bigint AS conversions, sum(d.conversion_value_micros)::bigint AS conversion_value_micros`;
 
 function where(scope: ReportScope, f: ReportFilters) {
   const clauses = ['d.day BETWEEN $1::date AND $2::date'];
@@ -34,7 +40,7 @@ function where(scope: ReportScope, f: ReportFilters) {
   return { sql: clauses.join(' AND '), params };
 }
 
-function shape(r: Record<string, string | null>, audience: 'advertiser' | 'publisher' | 'admin') {
+export function shape(r: Record<string, string | null>, audience: 'advertiser' | 'publisher' | 'admin') {
   const n = (k: string) => Number(r[k] ?? 0);
   const spend = BigInt(r.spend_micros ?? 0);
   const out: Record<string, unknown> = {
@@ -44,11 +50,20 @@ function shape(r: Record<string, string | null>, audience: 'advertiser' | 'publi
     ctr: ctr(n('valid_clicks'), n('valid_impressions')),
     viewabilityRate: n('valid_impressions') ? (n('viewable_impressions') / n('valid_impressions')) * 100 : null,
     invalidRate: n('rendered') ? (n('invalid_impressions') / n('rendered')) * 100 : null,
+    // Mean seconds a creative was in view, over impressions whose time in view was reported.
+    avgTimeInViewSec: n('in_view_samples') ? n('in_view_ms') / n('in_view_samples') / 1000 : null,
   };
   if (audience !== 'publisher') {
     out.spendMicros = spend.toString();
     out.ecpmMicros = effectiveCpmMicros(spend, n('valid_impressions'))?.toString() ?? null;
     out.ecpcMicros = n('valid_clicks') ? (spend / BigInt(n('valid_clicks'))).toString() : null;
+    const conv = n('conversions');
+    const value = BigInt(r.conversion_value_micros ?? 0);
+    out.conversions = conv;
+    out.conversionValueMicros = value.toString();
+    out.conversionRate = n('valid_clicks') ? (conv / n('valid_clicks')) * 100 : null;
+    out.cpaMicros = conv ? (spend / BigInt(conv)).toString() : null;
+    out.roas = spend > 0n ? Number((value * 10_000n) / spend) / 10_000 : null;
   }
   if (audience !== 'advertiser') {
     out.earningsMicros = r.publisher_micros ?? '0';

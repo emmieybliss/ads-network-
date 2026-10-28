@@ -15,3 +15,32 @@ export function deviceCategory(ua: string | undefined | null): DeviceCategory {
   if (/windows nt|macintosh|x11|linux|cros/i.test(ua)) return 'desktop';
   return 'other';
 }
+
+export type OsFamily = 'windows' | 'macos' | 'ios' | 'android' | 'linux' | 'chromeos' | 'other';
+
+/** Operating system family, for reports only. Order matters: iPadOS and Android user agents also mention desktop systems. */
+export function osFamily(ua: string | undefined | null): OsFamily {
+  if (!ua) return 'other';
+  if (/iphone|ipad|ipod/i.test(ua)) return 'ios';
+  if (/android/i.test(ua)) return 'android';
+  if (/cros/i.test(ua)) return 'chromeos';
+  if (/windows/i.test(ua)) return 'windows';
+  if (/mac os x|macintosh/i.test(ua)) return 'macos';
+  if (/linux|x11/i.test(ua)) return 'linux';
+  return 'other';
+}
+
+export type BrowserFamily = 'chrome' | 'safari' | 'firefox' | 'edge' | 'samsung' | 'opera' | 'in_app' | 'other';
+
+/** Browser family, for reports only. Brands built on Chromium identify themselves before the Chrome token, so check them first. */
+export function browserFamily(ua: string | undefined | null): BrowserFamily {
+  if (!ua) return 'other';
+  if (/FBAN|FBAV|Instagram|Line\/|; wv\)|GSA\//.test(ua)) return 'in_app';
+  if (/Edg(e|A|iOS)?\//.test(ua)) return 'edge';
+  if (/OPR\/|Opera/.test(ua)) return 'opera';
+  if (/SamsungBrowser/.test(ua)) return 'samsung';
+  if (/Firefox\/|FxiOS/.test(ua)) return 'firefox';
+  if (/Chrome\/|CriOS|Chromium/.test(ua)) return 'chrome';
+  if (/Safari\//.test(ua) && /Version\//.test(ua)) return 'safari';
+  return 'other';
+}

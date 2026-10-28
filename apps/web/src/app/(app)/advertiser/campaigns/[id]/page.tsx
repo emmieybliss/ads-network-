@@ -3,6 +3,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { Archive, Copy, Pause, Pencil, Play, Plus, Send, Trash2 } from 'lucide-react';
 import { ADVERTISER_CAMPAIGN_TRANSITIONS, EDITABLE_CAMPAIGN_STATUSES } from '@blissnova/shared';
+import { ConversionTracking } from '@/components/advertiser/ConversionTracking';
 import { Alert, Async, Badge, Button, Card, CardHeader, DefinitionList, EmptyState, PageHeader, Stat, StatusBadge, Table, Tabs } from '@/components/ui';
 import { CampaignForm } from '@/components/advertiser/CampaignForm';
 import { CreativeEditor, CreativePreview, type Creative } from '@/components/advertiser/CreativeEditor';
@@ -103,6 +104,7 @@ function CampaignDetail() {
                       ['Frequency caps', c.caps.length ? c.caps.map((x: any) => `${x.maxImpressions} per ${x.scope} per ${Math.round(x.windowSeconds / 3600)}h`).join('; ') : 'None'],
                     ]} />
                   </Card>
+                  <ConversionTracking orgId={org.id} campaignId={c.id} canEdit={!['archived', 'suspended'].includes(c.status)} />
                 </div>
               )}
               {tab === 'creatives' && (

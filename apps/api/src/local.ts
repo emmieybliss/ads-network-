@@ -144,11 +144,18 @@ if (!existsSync(seededMarker)) {
   }
   writeFileSync(seededMarker, new Date().toISOString());
 }
+// Demo data seeded by an older version gets the analytics sample fields added once.
+{
+  const { upgradeDemoAnalytics } = await import('./scripts/demo-analytics');
+  const upgraded = await upgradeDemoAnalytics(app.ctx.db, () => console.log('Adding analytics sample fields to the existing demo data (one time, up to a minute)...')).catch((err) => { console.error('Could not add analytics fields to the demo data:', (err as Error).message); return 0; });
+  if (upgraded) console.log(`Added analytics sample fields to ${upgraded} day(s) of demo data.`);
+}
 
 // The worker's scheduled jobs, on timers instead of BullMQ.
 const log = { info: (o: object, m?: string) => app.log.info(o, m), warn: (o: object, m?: string) => app.log.warn(o, m), error: (o: object, m?: string) => app.log.error(o, m) };
 const jobCtx: import('../../worker/src/jobs').JobCtx = {
-  db: app.ctx.db, redis, settings: () => app.ctx.settings.get(), log, partners: app.ctx.partners, publicUrl: (k) => app.ctx.storage.publicUrl(k),
+  db: app.ctx.db, redis, settings: () => app.ctx.settings.get(), log, partners: app.ctx.partners, publicUrl: (k) => app.ctx.storage.publicUrl(k), siteUrl: config.PUBLIC_SITE_URL,
+  email: async (to, template, vars) => { await queueEmail(app.ctx, to, template, vars); },
   notify: async (orgId, n) => {
     const members = (await app.ctx.db.query<{ user_id: string; email: string; name: string }>(
       `SELECT m.user_id, u.email, u.name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = $1 AND u.status = 'active' AND ($2::text[] IS NULL OR m.role = ANY($2))`, [orgId, n.roles ?? null])).rows;
@@ -172,7 +179,7 @@ async function run(name: string, fn: () => Promise<unknown>) {
   }
 }
 const minutely = () => run('minutely', async () => { await jobs.refreshAggregates(jobCtx); await jobs.campaignLifecycle(jobCtx); await jobs.settleAll(jobCtx); await jobs.syncPartners(jobCtx); await jobs.syncSpendCounters(jobCtx); });
-const fiveMinutely = () => run('five-minutely', async () => { await jobs.budgetAlerts(jobCtx); await jobs.lowBalanceAlerts(jobCtx); await jobs.detectAnomalies(jobCtx); });
+const fiveMinutely = () => run('five-minutely', async () => { await jobs.budgetAlerts(jobCtx); await jobs.lowBalanceAlerts(jobCtx); await jobs.reportEmails(jobCtx); await jobs.detectAnomalies(jobCtx); });
 const daily = () => run('daily', () => jobs.dailyMaintenance(jobCtx));
 const timers = [setInterval(minutely, 60_000), setInterval(fiveMinutely, 300_000), setInterval(daily, 86_400_000)];
 await minutely();

@@ -45,6 +45,10 @@
  *   reads the site's settings and adds slots between article paragraphs
  *   (after the first N paragraphs, then every M, up to a maximum), never
  *   next to an existing ad slot and never after the last paragraph.
+ * - Analytics: each ad request carries the referring host (not the full
+ *   referring URL) so reports can split traffic by source; each rendered ad
+ *   reports how long it was at least half in view, once, when the page is
+ *   first hidden. Neither needs cookies or device storage.
  */
 
 type Format = 'image' | 'text' | 'native' | 'pop';
@@ -199,6 +203,15 @@ function dropVid(): void {
   }
 }
 
+/** The referring host only (never the full URL), so the server can tell search, social and internal visits apart. */
+function referrerHost(): string | undefined {
+  try {
+    return document.referrer ? new URL(document.referrer).hostname.slice(0, 253) || undefined : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The page URL without query or fragment: enough for contextual targeting,
  *  and it avoids forwarding whatever a publisher keeps in query strings. */
 function pageUrl(): string {
@@ -304,7 +317,9 @@ class Tag {
   private cmpReady: Promise<void> = Promise.resolve();
   /** The server's last word on personalization for this visitor. */
   private privacy: { personalization: boolean; reason: string } | null = null;
-  private readonly queue: Array<{ id: string; type: 'render' | 'viewable'; t: string }> = [];
+  private readonly queue: Array<{ id: string; type: 'render' | 'viewable' | 'inview'; t: string; ms?: number }> = [];
+  /** Time each rendered ad spent at least half in view; reported once per ad when the page is hidden. */
+  private readonly inView = new Map<string, { ms: number; since: number | null; sent: boolean }>();
   private flushTimer: number | null = null;
   private readonly seen = new WeakSet<Element>();
   private pending: Element[] = [];
@@ -366,9 +381,12 @@ class Tag {
     } catch {
       /* MutationObserver missing: static pages still work */
     }
-    window.addEventListener('pagehide', () => this.flush(true));
+    window.addEventListener('pagehide', () => { this.reportTimeInView(); this.flush(true); });
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') this.flush(true);
+      if (document.visibilityState === 'hidden') {
+        this.reportTimeInView();
+        this.flush(true);
+      }
     });
   }
 
@@ -534,7 +552,7 @@ class Tag {
         body: JSON.stringify({
           siteKey: this.siteKey,
           units: slots.map((slot) => ({ slot })),
-          page: { url: pageUrl(), keywords: keywords() },
+          page: { url: pageUrl(), keywords: keywords(), referrer: referrerHost() },
           consent: {
             personalized: this.consentSet ? this.consent.personalized : undefined,
             gdprApplies: c.gdprApplies ?? (this.consentSet ? this.consent.gdprApplies : undefined),
@@ -776,6 +794,40 @@ class Tag {
     // A render is reported as soon as the creative is in the document.
     this.report('render', ad.token);
     this.watchViewability(host, ad.token);
+    this.trackTimeInView(host, ad.token);
+  }
+
+  /** Accumulate the time the ad is at least half visible in a visible tab. */
+  private trackTimeInView(el: Element, token: string): void {
+    if (!('IntersectionObserver' in window)) return;
+    const t = { ms: 0, since: null as number | null, sent: false };
+    this.inView.set(token, t);
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const e = entries[entries.length - 1];
+        if (!e || t.sent) return;
+        const visible = e.isIntersecting && e.intersectionRatio >= VIEWABLE_RATIO && document.visibilityState !== 'hidden';
+        const now = performance.now();
+        if (visible && t.since === null) t.since = now;
+        else if (!visible && t.since !== null) {
+          t.ms += now - t.since;
+          t.since = null;
+        }
+      },
+      { threshold: [0, VIEWABLE_RATIO, 1] },
+    );
+    obs.observe(el);
+  }
+
+  /** One in-view report per ad, sent the first time the page is hidden after it rendered. */
+  private reportTimeInView(): void {
+    const now = performance.now();
+    for (const [token, t] of this.inView) {
+      if (t.sent) continue;
+      t.sent = true;
+      const ms = Math.round(t.ms + (t.since !== null ? now - t.since : 0));
+      if (ms > 0) this.report('inview', token, Math.min(ms, 3_600_000));
+    }
   }
 
   /** IAB display standard: at least 50% of pixels in view for one second. */
@@ -874,8 +926,8 @@ class Tag {
     try { close.focus(); } catch { /* not focusable yet */ }
   }
 
-  private report(type: 'render' | 'viewable', token: string): void {
-    this.queue.push({ id: randomId(22), type, t: token });
+  private report(type: 'render' | 'viewable' | 'inview', token: string, ms?: number): void {
+    this.queue.push({ id: randomId(22), type, t: token, ...(ms !== undefined ? { ms } : {}) });
     if (this.queue.length >= MAX_BATCH) {
       this.flush(false);
       return;

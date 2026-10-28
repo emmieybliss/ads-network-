@@ -12,7 +12,7 @@ import { deliverOutbox, queueEmail } from '@blissnova/api/services/notifications
 import { EMAIL_TEMPLATES } from '@blissnova/api/lib/mailer';
 import { LocalStorage } from '@blissnova/api/lib/storage';
 import { PartnerRegistry } from '@blissnova/api/services/partners';
-import { budgetAlerts, campaignLifecycle, dailyMaintenance, detectAnomalies, lowBalanceAlerts, refreshAggregates, settleAll, syncPartners, syncSpendCounters, type JobCtx } from './jobs';
+import { budgetAlerts, campaignLifecycle, dailyMaintenance, detectAnomalies, lowBalanceAlerts, refreshAggregates, reportEmails, settleAll, syncPartners, syncSpendCounters, type JobCtx } from './jobs';
 
 /**
  * Background worker: event processing, serve logs, email delivery and
@@ -40,8 +40,11 @@ const notify: JobCtx['notify'] = async (orgId, n) => {
 
 const emailQueue = new Queue(QUEUE_NAMES.email, { connection });
 const maintenanceQueue = new Queue(QUEUE_NAMES.maintenance, { connection });
+const email: JobCtx['email'] = async (to, template, vars) => {
+  await queueEmail({ config, db, redis: connection, settings, mailer, queues: { email: emailQueue } } as never, to, template, vars);
+};
 const storage = new LocalStorage(config.STORAGE_DIR, config.PUBLIC_API_URL);
-const jobCtx: JobCtx = { db, redis: connection, settings: () => settings.get(), log, notify, partners: new PartnerRegistry(config, connection), publicUrl: (k) => storage.publicUrl(k) };
+const jobCtx: JobCtx = { db, redis: connection, settings: () => settings.get(), log, notify, email, siteUrl: config.PUBLIC_SITE_URL, partners: new PartnerRegistry(config, connection), publicUrl: (k) => storage.publicUrl(k) };
 
 const workers = [
   new Worker(QUEUE_NAMES.events, async (job: Job<AdmittedEvent>) => {
@@ -71,6 +74,7 @@ const workers = [
       case 'five-minutely':
         await budgetAlerts(jobCtx);
         await lowBalanceAlerts(jobCtx);
+        await reportEmails(jobCtx);
         return { anomalies: await detectAnomalies(jobCtx) };
       case 'daily':
         return dailyMaintenance(jobCtx);

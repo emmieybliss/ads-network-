@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { Download } from 'lucide-react';
 import { Async, Button, Card, CardHeader, EmptyState, Field, Input, Select, Stat, Table, type Column } from './ui';
 import { TrendChart } from './charts';
+import { dimLabel } from './analytics/parts';
 import { useApi } from '@/lib/hooks';
 import { qs } from '@/lib/api';
 import { formatMicros, formatNumber, formatPercent, isoDay } from '@/lib/format';
@@ -10,8 +11,8 @@ import { formatMicros, formatNumber, formatPercent, isoDay } from '@/lib/format'
 type Row = Record<string, any> & { key: string; label: string };
 
 const GROUPS = {
-  advertiser: [['day', 'Date'], ['campaign', 'Campaign'], ['creative', 'Creative'], ['site', 'Publisher site'], ['unit', 'Placement'], ['device', 'Device'], ['country', 'Country']],
-  publisher: [['day', 'Date'], ['site', 'Website'], ['unit', 'Placement'], ['device', 'Device'], ['country', 'Country']],
+  advertiser: [['day', 'Date'], ['campaign', 'Campaign'], ['creative', 'Creative'], ['site', 'Publisher site'], ['unit', 'Placement'], ['device', 'Device'], ['country', 'Country'], ['os', 'Operating system'], ['browser', 'Browser'], ['source', 'Traffic source'], ['display', 'Placement type'], ['format', 'Ad format']],
+  publisher: [['day', 'Date'], ['site', 'Website'], ['unit', 'Placement'], ['device', 'Device'], ['country', 'Country'], ['os', 'Operating system'], ['browser', 'Browser'], ['source', 'Traffic source'], ['display', 'Placement type'], ['format', 'Ad format']],
 } as const;
 
 export function defaultRange(days = 30) {
@@ -34,7 +35,7 @@ export function ReportExplorer({ orgId, audience, currency, filters = {} }: { or
   const adv = audience === 'advertiser';
 
   const columns = useMemo<Column<Row>[]>(() => [
-    { key: 'label', header: GROUPS[audience].find(([g]) => g === groupBy)?.[1] ?? 'Item', cell: (r) => <span className="font-medium text-fg">{r.label ?? '—'}</span> },
+    { key: 'label', header: GROUPS[audience].find(([g]) => g === groupBy)?.[1] ?? 'Item', cell: (r) => <span className="font-medium text-fg">{dimLabel(groupBy, r.key, r.label)}</span> },
     { key: 'served', header: 'Served', align: 'right', cell: (r) => formatNumber(r.served) },
     { key: 'valid', header: 'Valid impr.', align: 'right', cell: (r) => formatNumber(r.validImpressions) },
     { key: 'viewable', header: 'Viewable', align: 'right', cell: (r) => formatNumber(r.viewableImpressions) },
@@ -46,6 +47,8 @@ export function ReportExplorer({ orgId, audience, currency, filters = {} }: { or
           { key: 'spend', header: 'Spend', align: 'right' as const, cell: (r: Row) => money(r.spendMicros) },
           { key: 'ecpm', header: 'eCPM', align: 'right' as const, cell: (r: Row) => money(r.ecpmMicros) },
           { key: 'ecpc', header: 'eCPC', align: 'right' as const, cell: (r: Row) => money(r.ecpcMicros) },
+          { key: 'conv', header: 'Conv.', align: 'right' as const, cell: (r: Row) => formatNumber(r.conversions) },
+          { key: 'cpa', header: 'CPA', align: 'right' as const, cell: (r: Row) => money(r.cpaMicros) },
         ]
       : [
           { key: 'earn', header: 'Est. earnings', align: 'right' as const, cell: (r: Row) => money(r.earningsMicros) },

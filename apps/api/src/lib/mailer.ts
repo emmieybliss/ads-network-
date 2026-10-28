@@ -98,6 +98,7 @@ export const EMAIL_TEMPLATES: Record<string, { subject: string; body: string }> 
   payout_status: { subject: 'Payout {{status}}: {{amount}}', body: 'Your payout request for {{amount}} is now {{status}}.\n{{reason}}\n\n{{link}}' },
   suspicious_activity: { subject: 'Security notice for your {{productName}} account', body: '{{detail}}\n\nIf this was not you, reset your password and contact {{supportEmail}}.' },
   admin_alert: { subject: '[Admin] {{title}}', body: '{{detail}}\n\n{{link}}' },
+  performance_report: { subject: 'Your {{frequencyLabel}} {{productName}} report: {{period}}', body: 'Hello {{name}},\n\n{{report}}\n\nOpen analytics: {{link}}\n\n{{why}}\n\n{{companyName}}' },
 };
 
 export function renderTemplate(tpl: { subject: string; body: string }, vars: Record<string, string | number | undefined>) {

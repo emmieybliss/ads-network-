@@ -10,6 +10,7 @@ import type { Queues } from './queue';
 import type { PaymentProviderRegistry } from '../services/payments/registry';
 import type { PartnerRegistry } from '../services/partners';
 import type { CheckDeps } from '../services/verification';
+import type { GeoLookup } from './geo';
 
 export interface AppContext {
   config: AppConfig;
@@ -24,5 +25,7 @@ export interface AppContext {
   partners: PartnerRegistry;
   /** DNS resolver and HTTP fetcher used by domain verification. Empty means the real ones; tests substitute fakes. */
   verifier: CheckDeps;
+  /** Country lookup from GEOIP_DB_PATH, or null when none is configured. */
+  geo: GeoLookup | null;
   log: FastifyBaseLogger;
 }

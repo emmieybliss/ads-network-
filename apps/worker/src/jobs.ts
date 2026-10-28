@@ -5,9 +5,15 @@ import { withTransaction } from '@blissnova/database';
 import { formatMoney, type PlatformSettings } from '@blissnova/shared';
 import { aggregateDay, allocateFlatRate } from '@blissnova/api/services/events';
 import { dayInZone, invalidateServingCache } from '@blissnova/api/services/serving';
+import { sendDueReports } from '@blissnova/api/services/report-emails';
 import { syncPartnerCampaigns, type PartnerRegistry } from '@blissnova/api/services/partners';
 
-export interface JobCtx { db: Pool; redis: Redis; settings: () => Promise<PlatformSettings>; partners: PartnerRegistry; publicUrl: (storageKey: string) => string; log: { info: (o: object, m?: string) => void; warn: (o: object, m?: string) => void; error: (o: object, m?: string) => void }; notify: (orgId: string, n: { type: string; title: string; body?: string; link?: string; template?: string; vars?: Record<string, string | number | undefined>; roles?: string[] }) => Promise<void> }
+export interface JobCtx { db: Pool; redis: Redis; settings: () => Promise<PlatformSettings>; partners: PartnerRegistry; publicUrl: (storageKey: string) => string; log: { info: (o: object, m?: string) => void; warn: (o: object, m?: string) => void; error: (o: object, m?: string) => void }; notify: (orgId: string, n: { type: string; title: string; body?: string; link?: string; template?: string; vars?: Record<string, string | number | undefined>; roles?: string[] }) => Promise<void>;
+  /** Queue one templated email to one address. */
+  email: (to: string, template: string, vars: Record<string, string | number | undefined>) => Promise<void>;
+  /** Public dashboard URL, for links in emails. */
+  siteUrl: string;
+}
 
 interface StatementAccum { currency: string; lines: Array<{ description: string; amountMicros: string }>; total: bigint }
 
@@ -147,6 +153,9 @@ export async function dailyMaintenance(ctx: JobCtx) {
   // Raw events past retention are removed only once settled or non-billable; aggregates and settlements keep long-term history.
   const purged = await ctx.db.query(`DELETE FROM ad_events WHERE occurred_at < now() - make_interval(days => $1) AND (settlement_id IS NOT NULL OR NOT billable)`, [s.tracking.rawEventRetentionDays]);
   await ctx.db.query(`DELETE FROM daily_stats WHERE day < CURRENT_DATE - $1::int`, [s.tracking.aggregateRetentionDays]);
+  await ctx.db.query(`DELETE FROM hourly_stats WHERE hour < CURRENT_DATE - $1::int`, [s.tracking.aggregateRetentionDays]);
+  await ctx.db.query(`DELETE FROM ivt_daily_stats WHERE day < CURRENT_DATE - $1::int`, [s.tracking.aggregateRetentionDays]);
+  await ctx.db.query(`DELETE FROM site_traffic_daily WHERE day < CURRENT_DATE - $1::int`, [s.tracking.aggregateRetentionDays]);
   await ctx.db.query(`DELETE FROM sessions WHERE expires_at < now() - interval '30 days' OR revoked_at < now() - interval '30 days'`);
   await ctx.db.query(`DELETE FROM user_tokens WHERE expires_at < now() - interval '7 days'`);
   let statements = 0;
@@ -170,4 +179,11 @@ export async function dailyMaintenance(ctx: JobCtx) {
     }
   }
   return { flat, guaranteeTopups, purged: purged.rowCount, statements };
+}
+
+/** Scheduled performance report emails whose latest complete period has not gone out yet. */
+export async function reportEmails(ctx: JobCtx, now = new Date()) {
+  const sent = await sendDueReports(ctx.db, (to, vars) => ctx.email(to, 'performance_report', vars), ctx.siteUrl, now);
+  if (sent) ctx.log.info({ sent }, 'performance report emails queued');
+  return sent;
 }

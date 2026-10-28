@@ -29,6 +29,7 @@ import { aggregateDay } from '../services/events';
 import { LocalStorage } from '../lib/storage';
 import { createHash } from 'node:crypto';
 import { demoBannerPng } from './demo-banner';
+import { DEMO_COUNTRY_SQL } from './demo-analytics';
 
 const DEMO_TAG = '[demo]';
 const CURRENCY = 'USD';
@@ -88,28 +89,39 @@ async function sampleHistory(c: PoolClient, specs: SampleSpec[], ctx: { siteId: 
       const costPerImp = s.pricing === 'cpm' ? s.rateMicros / 1000n : 0n;
       const costPerClick = s.pricing === 'cpc' ? s.rateMicros : 0n;
       // One row per event; deliveries are synthetic ids. Roughly 3% of renders are marked invalid as the filters would.
+      // Traffic follows a daily curve (busier 08:00-22:00 UTC); country, device, OS, browser and source are drawn from fixed sample mixes.
       await c.query(
-        `WITH d AS (
-           SELECT gen_random_uuid() AS delivery, $1::date + make_interval(secs => floor(random() * 86000)::int) AS at,
-                  (ARRAY['US','US','US','GB','CA','DE','IN','ZZ'])[1 + floor(random() * 8)::int] AS country,
-                  (ARRAY['desktop','desktop','mobile','mobile','tablet'])[1 + floor(random() * 5)::int] AS device,
+        `WITH d0 AS (
+           SELECT gen_random_uuid() AS delivery,
+                  $1::date + make_interval(hours => (ARRAY[0,1,2,3,4,5,6,6,7,7,8,8,8,9,9,9,10,10,10,11,11,11,12,12,12,12,13,13,13,14,14,14,15,15,15,16,16,16,17,17,17,18,18,18,18,19,19,19,19,20,20,20,20,21,21,21,22,22,23])[1 + floor(random() * 59)::int],
+                                           secs => floor(random() * 3599)::int) AS at,
+                  ${DEMO_COUNTRY_SQL} AS country,
+                  (ARRAY['desktop|windows|chrome','desktop|windows|chrome','desktop|windows|edge','desktop|macos|chrome','desktop|macos|safari','desktop|linux|firefox',
+                         'mobile|ios|safari','mobile|ios|safari','mobile|ios|chrome','mobile|android|chrome','mobile|android|chrome','mobile|android|samsung','mobile|android|in_app',
+                         'tablet|ios|safari','tablet|android|chrome'])[1 + floor(random() * 15)::int] AS platform,
+                  (ARRAY['search','search','search','search','social','social','direct','direct','referral','internal','internal','internal'])[1 + floor(random() * 12)::int] AS source,
                   random() < 0.03 AS invalid, random() < 0.66 AS viewable, random() < $9::float AS clicked,
-                  md5(random()::text) AS visitor, ($15::text[])[1 + floor(random() * cardinality($15::text[]))::int] AS page
+                  md5('demo-visitor-' || floor(random() * 20000)::int) AS visitor, ($15::text[])[1 + floor(random() * cardinality($15::text[]))::int] AS page
            FROM generate_series(1, $2::int)
+         ), d AS (
+           SELECT *, split_part(platform, '|', 1) AS device, split_part(platform, '|', 2) AS os, split_part(platform, '|', 3) AS browser FROM d0
          ), ev AS (
-           SELECT delivery, at, country, device, visitor, page, 'served' AS type, false AS invalid FROM d
-           UNION ALL SELECT delivery, at + interval '1 second', country, device, visitor, page, 'render', invalid FROM d
-           UNION ALL SELECT delivery, at + interval '3 seconds', country, device, visitor, page, 'viewable', false FROM d WHERE viewable AND NOT invalid
-           UNION ALL SELECT delivery, at + interval '20 seconds', country, device, visitor, page, 'click', false FROM d WHERE clicked AND NOT invalid
+           SELECT delivery, at, country, device, os, browser, source, visitor, page, 'served' AS type, false AS invalid, NULL::int AS in_view FROM d
+           UNION ALL SELECT delivery, at + interval '1 second', country, device, os, browser, source, visitor, page, 'render', invalid, NULL FROM d
+           UNION ALL SELECT delivery, at + interval '3 seconds', country, device, os, browser, source, visitor, page, 'viewable', false, NULL FROM d WHERE viewable AND NOT invalid
+           UNION ALL SELECT delivery, at + interval '20 seconds', country, device, os, browser, source, visitor, page, 'click', false, NULL FROM d WHERE clicked AND NOT invalid
+           UNION ALL SELECT delivery, at + interval '40 seconds', country, device, os, browser, source, visitor, page, 'inview', false,
+                            CASE WHEN viewable THEN 1000 + floor(random() * 24000)::int ELSE floor(random() * 900)::int END FROM d WHERE NOT invalid
          )
          INSERT INTO ad_events (client_event_id, delivery_id, type, status, invalid_reason, ivt_score, billable, cost_micros, publisher_micros, currency,
-                                campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, page_host, page_path, occurred_at, received_at)
+                                campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, page_host, page_path, occurred_at, received_at,
+                                os, browser, source, in_view_ms)
          SELECT 'demo-sample:' || gen_random_uuid(), delivery, type, CASE WHEN invalid THEN 'invalid' ELSE 'valid' END, CASE WHEN invalid THEN 'anomaly_score' END,
                 CASE WHEN invalid THEN 75 ELSE 0 END,
                 NOT invalid AND ((type = 'render' AND $10::bigint > 0) OR (type = 'click' AND $11::bigint > 0)),
                 CASE WHEN invalid THEN 0 WHEN type = 'render' THEN $10::bigint WHEN type = 'click' THEN $11::bigint ELSE 0 END,
                 CASE WHEN invalid THEN 0 WHEN type = 'render' THEN $10::bigint * $12::int / 10000 WHEN type = 'click' THEN $11::bigint * $12::int / 10000 ELSE 0 END,
-                $13, $3, $4, $5, $6, $7, $8, visitor, md5(visitor), country, device, $14, page, at, at
+                $13, $3, $4, $5, $6, $7, $8, visitor, md5(visitor), country, device, $14, page, at, at, os, browser, source, in_view
          FROM ev`,
         [day, renders, s.campaignId, s.creativeId, ctx.advOrg, ctx.siteId, s.unitId, ctx.pubOrg, s.ctr, costPerImp.toString(), costPerClick.toString(), ctx.shareBps, CURRENCY, DEMO_SITE_DOMAIN, s.pages],
       );
@@ -121,6 +133,19 @@ async function sampleHistory(c: PoolClient, specs: SampleSpec[], ctx: { siteId: 
         [s.campaignId, day],
       );
     }
+    // Sample conversions: about one in ten valid clicks, reported as a purchase with a value or a sign-up.
+    await c.query(
+      `INSERT INTO conversions (delivery_id, event_name, order_ref, value_micros, currency, method, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id,
+                                country, device, os, browser, source, page_path, click_at, occurred_at)
+       SELECT delivery_id, ev, 'demo-sample:' || gen_random_uuid(),
+              CASE WHEN ev = 'purchase' THEN (15 + floor(random() * 65))::bigint * 1000000 ELSE 0 END, currency, CASE WHEN random() < 0.5 THEN 'pixel' ELSE 'postback' END,
+              campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source, page_path, occurred_at,
+              occurred_at + make_interval(mins => 2 + floor(random() * 90)::int)
+       FROM (SELECT *, CASE WHEN random() < 0.6 THEN 'purchase' ELSE 'signup' END AS ev FROM ad_events
+             WHERE site_id = $2 AND type = 'click' AND status = 'valid' AND occurred_at >= $1::date AND occurred_at < $1::date + 1 AND random() < 0.1) k
+       ON CONFLICT DO NOTHING`,
+      [day, ctx.siteId],
+    );
     // Each sample campaign serves at most one ad per page view, so a page's
     // views are the most ads any one campaign served on it that day.
     await c.query(
@@ -133,8 +158,20 @@ async function sampleHistory(c: PoolClient, specs: SampleSpec[], ctx: { siteId: 
        ON CONFLICT (day, site_id, page_path) DO UPDATE SET views = EXCLUDED.views`,
       [day, ctx.siteId],
     );
+    // The day's page views split by source, device and country in the same mix as the served ads.
+    // Each page reached from outside the site starts a session.
+    await c.query(
+      `INSERT INTO site_traffic_daily (day, site_id, source, device, country, pageviews, sessions)
+       SELECT $1::date, $2, source, device, country, pv, CASE WHEN source = 'internal' THEN 0 ELSE pv END FROM (
+         SELECT source, device, country, round((SELECT sum(views) FROM page_views WHERE day = $1::date AND site_id = $2) * count(*)::numeric / sum(count(*)) OVER ())::bigint AS pv
+         FROM ad_events WHERE site_id = $2 AND type = 'served' AND occurred_at >= $1::date AND occurred_at < $1::date + 1 GROUP BY 1, 2, 3) t
+       WHERE pv > 0
+       ON CONFLICT (day, site_id, source, device, country) DO UPDATE SET pageviews = EXCLUDED.pageviews, sessions = EXCLUDED.sessions`,
+      [day, ctx.siteId],
+    );
   }
   for (const s of specs) {
+    await c.query(`UPDATE campaigns SET conversion_tracking = true WHERE id = $1`, [s.campaignId]);
     await c.query(
       `UPDATE campaigns SET spent_micros = t.spend, billable_impressions = t.imps, billable_clicks = t.clicks, updated_at = now()
        FROM (SELECT COALESCE(sum(cost_micros), 0) AS spend, count(*) FILTER (WHERE type = 'render') AS imps, count(*) FILTER (WHERE type = 'click') AS clicks
