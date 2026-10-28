@@ -2,6 +2,12 @@ import type { Pool } from 'pg';
 import { aggregateDay } from '../services/events';
 
 /**
+ * Sample visitor countries, weighted towards the larger markets. A SQL
+ * expression; each evaluation draws one ISO 3166 code ("ZZ" is unknown).
+ */
+export const DEMO_COUNTRY_SQL = `(ARRAY['US','US','US','US','US','US','US','US','US','GB','GB','GB','IN','IN','IN','CA','CA','DE','DE','AU','AU','NG','NG','PH','PH','BR','BR','FR','MX','ES','IT','NL','ZA','KE','GH','PK','ID','JP','SE','PL','TR','EG','AE','SG','IE','NZ','ZZ'])[1 + floor(random() * 47)::int]`;
+
+/**
  * Upgrades demo data seeded before advanced analytics existed, so a demo that
  * is already installed shows the new views without a reset. It touches only
  * generated sample events (client ids starting with "demo-sample:") and the
@@ -20,7 +26,7 @@ export async function upgradeDemoAnalytics(db: Pool, onStart?: () => void): Prom
     await client.query('BEGIN');
     // A one-off pass over every sample event: allow it more than the usual statement time.
     await client.query(`SET LOCAL statement_timeout = '10min'`);
-    // One OS, browser and source per delivery, matching its device, shared by all its events.
+    // One OS, browser, source and country per delivery, matching its device, shared by all its events.
     await client.query(
       `CREATE TEMP TABLE demo_platform ON COMMIT DROP AS
        WITH d AS (
@@ -34,12 +40,13 @@ export async function upgradeDemoAnalytics(db: Pool, onStart?: () => void): Prom
            END AS osbr,
            (ARRAY['search','search','search','search','social','social','direct','direct','referral','internal','internal','internal'])[1 + floor(random() * 12)::int] AS src,
            -- A pool of sample visitors, so reach and frequency look like returning readers rather than one view each.
-           md5('demo-visitor-' || floor(random() * 20000)::int) AS vis
+           md5('demo-visitor-' || floor(random() * 20000)::int) AS vis,
+           ${DEMO_COUNTRY_SQL} AS country
          FROM d`);
     await client.query('CREATE INDEX ON demo_platform (delivery_id)');
     await client.query('ANALYZE demo_platform');
     await client.query(
-      `UPDATE ad_events e SET os = split_part(p.osbr, '|', 1), browser = split_part(p.osbr, '|', 2), source = p.src, visitor_hash = p.vis
+      `UPDATE ad_events e SET os = split_part(p.osbr, '|', 1), browser = split_part(p.osbr, '|', 2), source = p.src, visitor_hash = p.vis, country = p.country
        FROM demo_platform p WHERE e.delivery_id = p.delivery_id AND e.client_event_id LIKE 'demo-sample:%'`);
     await client.query('ANALYZE ad_events');
     // Time in view for each valid sample impression.

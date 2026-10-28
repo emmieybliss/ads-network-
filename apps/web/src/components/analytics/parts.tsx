@@ -17,24 +17,32 @@ export const DIMENSION_LABELS: Record<string, Record<string, string>> = {
   source: { search: 'Search', social: 'Social', direct: 'Direct', referral: 'Referral', internal: 'Internal navigation', unknown: 'Not recorded' },
   display: { inline: 'In-page', anchor: 'Anchor', rail_left: 'Side rail (left)', rail_right: 'Side rail (right)', interstitial: 'Interstitial' },
   format: { image: 'Display (image)', text: 'Text', native: 'Native' },
-  country: { ZZ: 'Unknown' },
 };
+
+const REGION_NAMES = typeof Intl !== 'undefined' && 'DisplayNames' in Intl ? new Intl.DisplayNames(['en'], { type: 'region' }) : null;
+/** English name for an ISO 3166 alpha-2 code; "ZZ" is traffic whose country could not be told. */
+export function countryName(code: string | null | undefined): string {
+  if (!code) return '—';
+  if (code === 'ZZ') return 'Unknown';
+  try { return REGION_NAMES?.of(code) ?? code; } catch { return code; }
+}
 
 export function dimLabel(dim: string, key: string | null | undefined, fallback?: string | null): string {
   if (key === null || key === undefined) return fallback ?? '—';
+  if (dim === 'country') return countryName(key);
   return DIMENSION_LABELS[dim]?.[key] ?? fallback ?? key;
 }
 
 /** Percentage change against the previous period, with direction. `invert` marks metrics where lower is better. */
-export function Delta({ now, before, invert }: { now: number | null | undefined; before: number | null | undefined; invert?: boolean }) {
-  if (now === null || now === undefined || before === null || before === undefined) return <span className="text-xs text-muted">no comparison</span>;
-  if (before === 0) return <span className="text-xs text-muted">{now === 0 ? 'no change' : 'new this period'}</span>;
+export function Delta({ now, before, invert, compact }: { now: number | null | undefined; before: number | null | undefined; invert?: boolean; compact?: boolean }) {
+  if (now === null || now === undefined || before === null || before === undefined) return <span className="text-xs text-muted">{compact ? '—' : 'no comparison'}</span>;
+  if (before === 0) return <span className="whitespace-nowrap text-xs text-muted">{now === 0 ? (compact ? '—' : 'no change') : compact ? 'New' : 'new this period'}</span>;
   const pct = ((now - before) / Math.abs(before)) * 100;
   const flat = Math.abs(pct) < 0.5;
   const good = flat ? null : (pct > 0) !== !!invert;
   const Icon = flat ? Minus : pct > 0 ? ArrowUpRight : ArrowDownRight;
   return (
-    <span className={cn('inline-flex items-center gap-0.5 text-xs font-medium', good === null ? 'text-muted' : good ? 'text-success' : 'text-danger')}>
+    <span className={cn('inline-flex items-center gap-0.5 whitespace-nowrap text-xs font-medium', good === null ? 'text-muted' : good ? 'text-success' : 'text-danger')}>
       <Icon className="size-3.5" aria-hidden />
       {flat ? 'no change' : `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%`}
       <span className="sr-only">{good === null ? '' : good ? '(better)' : '(worse)'}</span>
@@ -174,7 +182,7 @@ export function ShareBars({ rows, format }: { rows: Array<{ key: string; label: 
 
 /** The last 30 minutes, refreshed every 15 seconds while the tab is visible. */
 export function RealtimePanel({ path, currency, topLabel }: { path: string; currency: string; topLabel: string }) {
-  const res = useApi<{ data: { at: string; money: string; totals: Record<string, any>; activePages: number; minutes: Array<Record<string, any>>; top: Array<Record<string, any>> } }>(path);
+  const res = useApi<{ data: { at: string; money: string; totals: Record<string, any>; activePages: number; minutes: Array<Record<string, any>>; top: Array<Record<string, any>>; countries?: Array<Record<string, any>> } }>(path);
   const [paused, setPaused] = useState(false);
   useEffect(() => {
     const t = setInterval(() => { if (document.visibilityState === 'visible' && !paused) res.reload(); }, 15_000);
@@ -222,6 +230,16 @@ export function RealtimePanel({ path, currency, topLabel }: { path: string; curr
                   <li key={r.label} className="flex justify-between gap-3"><span className="truncate text-fg-2" title={r.label}>{r.label}</span><span className="tabular text-fg">{formatNumber(r.validImpressions)}</span></li>
                 ))}
               </ul>
+            )}
+            {d.countries && d.countries.length > 0 && (
+              <>
+                <div className="mb-2 mt-4 text-xs font-medium uppercase tracking-wide text-muted">Countries now</div>
+                <ul className="space-y-1.5 text-sm">
+                  {d.countries.slice(0, 5).map((r) => (
+                    <li key={r.country} className="flex justify-between gap-3"><span className="truncate text-fg-2">{countryName(r.country)}</span><span className="tabular text-fg">{formatNumber(r.validImpressions)}</span></li>
+                  ))}
+                </ul>
+              </>
             )}
             {d.totals.invalidEvents > 0 && <div className="mt-3"><Badge tone="warning">{formatNumber(d.totals.invalidEvents)} invalid events filtered</Badge></div>}
           </div>

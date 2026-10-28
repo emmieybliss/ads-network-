@@ -5,7 +5,8 @@ import { Async, Card, CardHeader, EmptyState, Field, Input, Select, Table, Tabs,
 import { useApi } from '@/lib/hooks';
 import { qs } from '@/lib/api';
 import { formatMicros, formatNumber, formatPercent, isoDay } from '@/lib/format';
-import { Delta, Funnel, Heatmap, KpiTile, PeriodChart, RealtimePanel, ShareBars, dimLabel } from './parts';
+import { Delta, Funnel, Heatmap, KpiTile, PeriodChart, RealtimePanel, ShareBars, countryName, dimLabel } from './parts';
+import { CountryMap } from './CountryMap';
 
 type Audience = 'advertiser' | 'publisher' | 'admin';
 type Row = Record<string, any> & { key: string; label: string };
@@ -20,6 +21,7 @@ interface Analytics {
   trend: Row[];
   breakdowns: Record<string, Row[]>;
   placements: Row[];
+  countries: { rows: Row[]; count: number };
   heatmap: { timezone: string; money: string; cells: Array<Record<string, any>> };
   funnel: Array<{ key: string; label: string; value: number }>;
   requests: Record<string, number | null> | null;
@@ -174,6 +176,8 @@ function Body({ a, currency, audience, live }: { a: Analytics; currency: string;
         <PeriodChart days={a.trend.map((r) => r.key)} current={a.trend.map(m.get)} previous={prevSeries} label={m.label} format={m.fmt} />
       </Card>
 
+      <CountriesCard a={a} currency={currency} audience={audience} />
+
       <div className="grid gap-5 xl:grid-cols-2">
         <Card className="min-w-0">
           <CardHeader title="Delivery funnel" description="Each step with its share of the step before." />
@@ -251,6 +255,142 @@ function Breakdowns({ a, currency, audience }: { a: Analytics; currency: string;
         <ShareBars rows={rows.slice(0, 8).map((r) => ({ key: r.key, label: r.label, value: r.validImpressions ?? 0 }))} />
         <Table columns={columns} rows={rows} rowKey={(r) => r.key} empty={<EmptyState title="Nothing recorded in this period" />} />
       </div>
+    </Card>
+  );
+}
+
+type CountryMetric = { id: string; label: string; get: (r: Row) => number | null; fmt: (v: number) => string };
+
+/**
+ * The country report: a world map shaded by the chosen metric, the selected
+ * or leading countries beside it, and every country in a sortable table with
+ * the change in valid impressions from the previous period.
+ */
+function CountriesCard({ a, currency, audience }: { a: Analytics; currency: string; audience: Audience }) {
+  const pub = audience === 'publisher';
+  const moneyFmt = (v: number) => formatMicros(Math.round(v), currency);
+  const micros = (k: string) => (r: Row) => (r[k] === null || r[k] === undefined ? null : Number(r[k]));
+  const metrics: CountryMetric[] = useMemo(() => {
+    const list: CountryMetric[] = [
+      { id: 'imps', label: 'Valid impressions', get: (r) => r.validImpressions ?? 0, fmt: (v) => formatNumber(v) },
+      { id: 'clicks', label: 'Valid clicks', get: (r) => r.validClicks ?? 0, fmt: (v) => formatNumber(v) },
+      { id: 'ctr', label: 'CTR', get: (r) => r.ctr ?? null, fmt: (v) => formatPercent(v) },
+      { id: 'view', label: 'Viewability', get: (r) => r.viewabilityRate ?? null, fmt: (v) => formatPercent(v, 1) },
+    ];
+    if (audience !== 'advertiser') {
+      list.unshift({ id: 'pv', label: 'Page views', get: (r) => r.pageviews ?? 0, fmt: (v) => formatNumber(v) });
+      list.splice(1, 0, { id: 'earn', label: pub ? 'Estimated earnings' : 'Publisher earnings', get: micros('earningsMicros'), fmt: moneyFmt },
+        { id: 'prpm', label: 'Page RPM', get: micros('pageRpmMicros'), fmt: moneyFmt },
+        { id: 'rpm', label: 'Impression RPM', get: micros('rpmMicros'), fmt: moneyFmt });
+    }
+    if (audience !== 'publisher') {
+      list.splice(audience === 'admin' ? 4 : 0, 0, { id: 'spend', label: 'Spend', get: micros('spendMicros'), fmt: moneyFmt },
+        { id: 'ecpm', label: 'eCPM', get: micros('ecpmMicros'), fmt: moneyFmt });
+      list.push({ id: 'conv', label: 'Conversions', get: (r) => r.conversions ?? 0, fmt: (v) => formatNumber(v) },
+        { id: 'cpa', label: 'CPA', get: micros('cpaMicros'), fmt: moneyFmt });
+    }
+    return list;
+  }, [audience, pub, currency]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [metricId, setMetricId] = useState(metrics[0]!.id);
+  const metric = metrics.find((m) => m.id === metricId) ?? metrics[0]!;
+  const [sort, setSort] = useState<{ id: string; desc: boolean }>({ id: metrics[0]!.id, desc: true });
+  const [selected, setSelected] = useState<string | null>(null);
+  const [all, setAll] = useState(false);
+
+  const rows: Row[] = a.countries.rows.map((r) => ({ ...r, label: countryName(r.key) }));
+  const values = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of rows) { const v = metric.get(r); if (r.key !== 'ZZ' && v !== null && v > 0) m.set(r.key, v); }
+    return m;
+  }, [rows, metric]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sortBy = sort.id === 'country' ? null : metrics.find((m) => m.id === sort.id) ?? (sort.id === 'change' ? null : metric);
+  const change = (r: Row) => (r.previousValidImpressions ? ((r.validImpressions - r.previousValidImpressions) / r.previousValidImpressions) * 100 : null);
+  const sorted = [...rows].sort((x, y) => {
+    if (sort.id === 'country') return (sort.desc ? -1 : 1) * x.label.localeCompare(y.label);
+    const vx = sort.id === 'change' ? change(x) : sortBy!.get(x);
+    const vy = sort.id === 'change' ? change(y) : sortBy!.get(y);
+    if (vx === null && vy === null) return 0;
+    if (vx === null) return 1;
+    if (vy === null) return -1;
+    return sort.desc ? vy - vx : vx - vy;
+  });
+  const shown = all ? sorted : sorted.slice(0, 15);
+  const header = (id: string, label: string) => (
+    <button className={cn('inline-flex items-center gap-1 uppercase hover:text-fg', sort.id === id && 'text-fg')} onClick={() => setSort({ id, desc: sort.id === id ? !sort.desc : id !== 'country' })}>
+      {label}{sort.id === id && <span aria-hidden>{sort.desc ? '↓' : '↑'}</span>}
+    </button>
+  );
+  const col = (id: string, label: string): Column<Row> => {
+    const m = metrics.find((x) => x.id === id)!;
+    return { key: id, header: header(id, label), align: 'right', cell: (r) => { const v = m.get(r); return v === null ? '—' : m.fmt(v); } };
+  };
+  const columns: Column<Row>[] = [
+    { key: 'country', header: header('country', 'Country'), cell: (r) => (
+      <button className={cn('inline-flex items-center gap-2 whitespace-nowrap text-left font-medium text-fg hover:underline', selected === r.key && 'text-primary')} onClick={() => setSelected(selected === r.key ? null : r.key)}>
+        <span className="inline-flex h-5 w-7 shrink-0 items-center justify-center rounded bg-surface-2 text-[10px] font-semibold text-muted">{r.key === 'ZZ' ? '??' : r.key}</span>{r.label}
+      </button>
+    ) },
+    ...(audience !== 'advertiser' ? [col('pv', 'Page views'), { key: 'sess', header: 'Sessions', align: 'right' as const, cell: (r: Row) => formatNumber(r.sessions) }] : []),
+    col('imps', 'Valid impr.'),
+    { key: 'share', header: 'Share', align: 'right', cell: (r) => formatPercent(r.share, 1) },
+    col('clicks', 'Clicks'),
+    col('ctr', 'CTR'),
+    col('view', 'Viewability'),
+    ...(audience !== 'publisher' ? [col('spend', 'Spend'), col('ecpm', 'eCPM'), col('conv', 'Conv.'), col('cpa', 'CPA')] : []),
+    ...(audience !== 'advertiser' ? [col('earn', pub ? 'Est. earnings' : 'Pub. earnings'), col('prpm', 'Page RPM'), col('rpm', 'Impr. RPM')] : []),
+    { key: 'change', header: header('change', 'vs prev.'), align: 'right', cell: (r) => <Delta now={r.validImpressions} before={r.previousValidImpressions} compact /> },
+  ];
+
+  const focus = selected ? rows.find((r) => r.key === selected) : null;
+  const leaders = [...rows].filter((r) => r.key !== 'ZZ').sort((x, y) => (metric.get(y) ?? -1) - (metric.get(x) ?? -1)).slice(0, 8);
+  return (
+    <Card>
+      <CardHeader title="Countries" description={`Where your ${audience === 'advertiser' ? 'ads were seen' : 'visitors and ad revenue came from'}: ${formatNumber(a.countries.count)} countries in this period, from the visitor's IP at the time of the event (the IP itself is not stored).`} actions={
+        <Select aria-label="Map metric" value={metricId} onChange={(e) => setMetricId(e.target.value)}>{metrics.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</Select>
+      } />
+      {rows.length === 0 ? <EmptyState title="Nothing recorded in this period" /> : (
+        <>
+          <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
+            <div className="min-w-0"><CountryMap values={values} format={metric.fmt} label={metric.label} selected={selected} onSelect={setSelected} /></div>
+            <div>
+              {focus ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between"><div className="text-sm font-semibold text-fg">{focus.label}</div><button className="text-xs font-medium text-primary hover:underline" onClick={() => setSelected(null)}>Clear</button></div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {metrics.map((m) => { const v = m.get(focus); return <Fact key={m.id} label={m.label} value={v === null ? '—' : m.fmt(v)} />; })}
+                    <Fact label="Share of impressions" value={formatPercent(focus.share, 1)} />
+                    <Fact label="vs previous period" value={<Delta now={focus.validImpressions} before={focus.previousValidImpressions} />} />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">Top countries by {metric.label.toLowerCase()}</div>
+                  <ul className="space-y-1.5 text-sm">
+                    {leaders.map((r, i) => {
+                      const v = metric.get(r);
+                      return (
+                        <li key={r.key}>
+                          <button className="flex w-full justify-between gap-3 text-left hover:text-fg" onClick={() => setSelected(r.key)}>
+                            <span className="truncate text-fg-2"><span className="tabular mr-2 text-muted">{i + 1}</span>{r.label}</span>
+                            <span className="tabular text-fg">{v === null ? '—' : metric.fmt(v)}</span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <p className="mt-3 text-[11px] text-muted">Select a country on the map or in the table for its full numbers.</p>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="mt-5">
+            <Table columns={columns} rows={shown} rowKey={(r) => r.key} />
+            {sorted.length > 15 && (
+              <button className="mt-3 text-sm font-medium text-primary hover:underline" onClick={() => setAll(!all)}>{all ? 'Show top 15' : `Show all ${sorted.length} countries`}</button>
+            )}
+          </div>
+        </>
+      )}
     </Card>
   );
 }

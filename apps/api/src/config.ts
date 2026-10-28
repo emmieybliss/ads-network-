@@ -23,6 +23,8 @@ const envSchema = z.object({
   TRUST_PROXY: bool(false),
   /** Header set by a trusted CDN/proxy carrying the visitor's ISO country code, e.g. cf-ipcountry. Empty = country unknown. */
   GEO_COUNTRY_HEADER: z.string().default(''),
+  /** A country database in MaxMind .mmdb format (DB-IP Lite or GeoLite2), used when the header is absent. Empty = none. */
+  GEOIP_DB_PATH: z.string().default(''),
   COOKIE_SECURE: bool(true),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 90).default(24 * 14),
   /** HMAC secret for pseudonymous identifiers (IP/visitor hashes) and email tokens. */

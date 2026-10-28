@@ -203,7 +203,14 @@ validated events as reports, plus a few more fields. Migration 0014.
   conversions and reach and frequency (advertisers; only visitors who allowed
   personalization carry an id, so reach counts those), and a few insights made
   by fixed rules. `/analytics/realtime` returns the last 30 minutes minute by
-  minute straight from `ad_events`.
+  minute straight from `ad_events`, with the leading countries.
+- **Countries.** The analytics response carries every country in the period
+  (`countries.rows`): the delivery metrics, its share of valid impressions,
+  the previous period's impressions and, for publishers, page views, sessions
+  and page RPM. The page draws it as a world map (Natural Earth 1:110m
+  outlines, pre-projected into `world-110m.json` and loaded in their own
+  chunk) above a sortable table. The country itself comes from the CDN header
+  or the GeoIP database (see Limits).
 - **Existing demos.** The local runner adds the new sample fields to demo data
   seeded before this version, once, touching only `demo-sample:` events
   (`apps/api/src/scripts/demo-analytics.ts`).
@@ -287,5 +294,7 @@ as money, suspensions and settings, require a reason and recent re-authenticatio
 - **Formats are image, text and native.** Images only for uploaded creatives (PNG, JPEG, GIF, WEBP, checked by magic
   bytes). SVG and HTML creatives are not accepted, so no advertiser markup or
   script runs on publisher pages.
-- **Country** comes from a trusted CDN header (`GEO_COUNTRY_HEADER`). No GeoIP
-  database is bundled.
+- **Country** comes from a trusted CDN header (`GEO_COUNTRY_HEADER`) or, without
+  one, a local `.mmdb` country database (`GEOIP_DB_PATH`, e.g. the free DB-IP
+  Lite file). Only the country code is kept; no database is bundled. Visits to
+  the local demo come from 127.0.0.1, so they show as unknown.

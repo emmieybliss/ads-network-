@@ -69,6 +69,7 @@ async function collect(db: Pool, scope: ReportScope, f: ReportFilters, audience:
   const lists = await Promise.all(groups.map((g) => runReport(db, scope, f, g, audience, 12)));
   const breakdowns = Object.fromEntries(groups.map((g, i) => [g, lists[i]!.rows]));
   const placements = (await runReport(db, scope, f, 'unit', audience, 50)).rows;
+  const countries = await countryReport(db, scope, f, prev, audience);
 
   const [heatmap, ivt, funnelRequests, traffic, reach, conversionEvents] = await Promise.all([
     hourlyHeatmap(db, scope, f, audience),
@@ -100,6 +101,7 @@ async function collect(db: Pool, scope: ReportScope, f: ReportFilters, audience:
     trend: trend.rows,
     breakdowns,
     placements,
+    countries,
     heatmap,
     funnel,
     requests: funnelRequests,
@@ -168,6 +170,59 @@ async function sessionTraffic(db: Pool, scope: ReportScope, f: ReportFilters, by
   };
 }
 
+/**
+ * Every country in the period, like the AdSense country report: the delivery
+ * metrics from daily_stats, the share of valid impressions, the change from the
+ * previous period and, for publishers, page views, sessions and page RPM.
+ * "ZZ" is traffic whose country could not be told.
+ */
+async function countryReport(db: Pool, scope: ReportScope, f: ReportFilters, prev: { from: string; to: string }, audience: Audience) {
+  const traffic = async (from: string, to: string) => {
+    if (audience === 'advertiser') return new Map<string, { pageviews: number; sessions: number }>();
+    const rows = (await db.query(
+      `SELECT t.country, sum(t.pageviews)::bigint AS pageviews, sum(t.sessions)::bigint AS sessions
+       FROM site_traffic_daily t JOIN sites s ON s.id = t.site_id
+       WHERE t.day BETWEEN $1::date AND $2::date AND ($3::uuid IS NULL OR s.org_id = $3) AND ($4::uuid IS NULL OR t.site_id = $4)
+       GROUP BY 1`, [from, to, scope.publisherOrgId ?? null, f.siteId ?? null])).rows;
+    return new Map(rows.map((r) => [r.country as string, { pageviews: Number(r.pageviews), sessions: Number(r.sessions) }]));
+  };
+  const [cur, before, views, viewsBefore] = await Promise.all([
+    runReport(db, scope, f, 'country', audience, 300),
+    runReport(db, scope, { ...f, from: prev.from, to: prev.to }, 'country', audience, 300),
+    traffic(f.from, f.to),
+    traffic(prev.from, prev.to),
+  ]);
+  const money = audience === 'advertiser' ? 'spendMicros' : 'earningsMicros';
+  const prior = new Map(before.rows.map((r) => [String(r.key), r]));
+  const total = Number((cur.totals as Record<string, unknown>).validImpressions ?? 0);
+  const rpm = (micros: bigint, n: number) => (n ? ((micros * 1000n) / BigInt(n)).toString() : null);
+  const rows = cur.rows.map((r) => {
+    const key = String(r.key);
+    const p = prior.get(key);
+    const v = views.get(key);
+    const out: Record<string, unknown> = {
+      ...r,
+      share: total ? (Number(r.validImpressions) / total) * 100 : null,
+      previousValidImpressions: Number(p?.validImpressions ?? 0),
+      [`previous${money[0]!.toUpperCase()}${money.slice(1)}`]: String(p?.[money] ?? '0'),
+    };
+    if (audience !== 'advertiser') {
+      out.pageviews = v?.pageviews ?? 0;
+      out.sessions = v?.sessions ?? 0;
+      out.previousPageviews = viewsBefore.get(key)?.pageviews ?? 0;
+      out.pageRpmMicros = rpm(BigInt(String(r.earningsMicros ?? '0')), v?.pageviews ?? 0);
+    }
+    return out;
+  });
+  // Countries with page views but no ad shown there yet.
+  for (const [key, v] of views) {
+    if (cur.rows.some((r) => String(r.key) === key)) continue;
+    rows.push({ key, label: key === 'ZZ' ? 'Unknown' : key, validImpressions: 0, validClicks: 0, earningsMicros: '0', share: 0, previousValidImpressions: Number(prior.get(key)?.validImpressions ?? 0),
+      previousEarningsMicros: String(prior.get(key)?.earningsMicros ?? '0'), pageviews: v.pageviews, sessions: v.sessions, previousPageviews: viewsBefore.get(key)?.pageviews ?? 0, pageRpmMicros: '0' });
+  }
+  return { rows, count: rows.filter((r) => r.key !== 'ZZ').length };
+}
+
 const REACH_MAX_DAYS = 92;
 
 /** Unique consenting visitors reached and how often they saw the ads. Raw events, so limited to 92 days. */
@@ -202,6 +257,11 @@ const SOURCE_LABEL: Record<string, string> = { search: 'search', social: 'social
 const WEEKDAY = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 type Overview = Awaited<ReturnType<typeof collect>>;
+
+const COUNTRY_NAMES = new Intl.DisplayNames(['en'], { type: 'region' });
+function countryName(code: string): string {
+  try { return COUNTRY_NAMES.of(code) ?? code; } catch { return code; }
+}
 
 /** A few fixed, explainable observations. Each names the numbers it is based on. */
 export function insights(a: Overview, audience: Audience): Array<{ tone: 'good' | 'warn' | 'info'; title: string; detail: string }> {
@@ -239,6 +299,10 @@ export function insights(a: Overview, audience: Audience): Array<{ tone: 'good' 
   if (audience !== 'publisher' && t.roas !== null && t.roas !== undefined && t.conversions > 0) {
     out.push({ tone: t.roas >= 1 ? 'good' : 'warn', title: `Return on ad spend: ${t.roas.toFixed(2)}x`, detail: 'Reported conversion value divided by spend in this period.' });
   }
+  const known = a.countries.rows.filter((r) => r.key !== 'ZZ' && Number(r.validImpressions) > 0) as Array<Record<string, any>>;
+  if (known.length >= 2 && known[0]!.share !== null) {
+    out.push({ tone: 'info', title: `${countryName(known[0]!.key)} brings ${known[0]!.share.toFixed(1)}% of valid impressions`, detail: `Valid impressions came from ${a.countries.count} countries in this period.` });
+  }
   const devices = (a.breakdowns.device ?? []) as Array<Record<string, any>>;
   const mobile = devices.find((d) => d.key === 'mobile');
   const desktop = devices.find((d) => d.key === 'desktop');
@@ -264,13 +328,14 @@ export async function realtime(db: Pool, scope: ReportScope, audience: Audience,
   const sums = `count(*) FILTER (WHERE e.type = 'served')::int AS served, count(*) FILTER (WHERE e.type = 'render' AND e.status = 'valid')::int AS imps,
     count(*) FILTER (WHERE e.type = 'viewable' AND e.status = 'valid')::int AS viewable, count(*) FILTER (WHERE e.type = 'click' AND e.status = 'valid')::int AS clicks,
     count(*) FILTER (WHERE e.status = 'invalid')::int AS invalid, COALESCE(sum(e.${moneyCol}) FILTER (WHERE e.billable), 0)::text AS micros`;
-  const [perMinute, totals, active, top] = await Promise.all([
+  const [perMinute, totals, active, top, countries] = await Promise.all([
     db.query(`SELECT to_char(date_trunc('minute', e.occurred_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI') AS minute, ${sums} FROM ad_events e WHERE ${where} GROUP BY 1 ORDER BY 1`, params),
     db.query(`SELECT ${sums} FROM ad_events e WHERE ${where}`, params),
     db.query(`SELECT count(DISTINCT (e.site_id, e.page_path))::int AS pages FROM ad_events e WHERE ${where} AND e.occurred_at > now() - interval '5 minutes' AND e.type = 'served'`, params),
     audience === 'advertiser'
       ? db.query(`SELECT c.name AS label, ${sums} FROM ad_events e JOIN campaigns c ON c.id = e.campaign_id WHERE ${where} GROUP BY 1 ORDER BY imps DESC LIMIT 8`, params)
       : db.query(`SELECT s.domain || COALESCE(e.page_path, '') AS label, ${sums} FROM ad_events e JOIN sites s ON s.id = e.site_id WHERE ${where} GROUP BY 1 ORDER BY imps DESC LIMIT 8`, params),
+    db.query(`SELECT e.country AS label, ${sums} FROM ad_events e WHERE ${where} GROUP BY 1 ORDER BY imps DESC, served DESC LIMIT 8`, params),
   ]);
   const shapeRow = (r: Record<string, any>) => ({ served: r.served, validImpressions: r.imps, viewableImpressions: r.viewable, validClicks: r.clicks, invalidEvents: r.invalid, micros: r.micros });
   const byMinute = new Map(perMinute.rows.map((r) => [r.minute as string, r]));
@@ -281,5 +346,6 @@ export async function realtime(db: Pool, scope: ReportScope, audience: Audience,
     const r = byMinute.get(m);
     minutes.push({ key: m, label: m.slice(11), ...shapeRow(r ?? { served: 0, imps: 0, viewable: 0, clicks: 0, invalid: 0, micros: '0' }) });
   }
-  return { at: new Date(now).toISOString(), money: audience === 'publisher' ? 'earnings' : 'spend', totals: shapeRow(totals.rows[0]), activePages: active.rows[0].pages as number, minutes, top: top.rows.map((r) => ({ label: r.label as string, ...shapeRow(r) })) };
+  return { at: new Date(now).toISOString(), money: audience === 'publisher' ? 'earnings' : 'spend', totals: shapeRow(totals.rows[0]), activePages: active.rows[0].pages as number, minutes, top: top.rows.map((r) => ({ label: r.label as string, ...shapeRow(r) })),
+    countries: countries.rows.map((r) => ({ country: r.label as string, ...shapeRow(r) })) };
 }

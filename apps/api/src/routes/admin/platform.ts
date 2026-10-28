@@ -93,6 +93,7 @@ export async function adminPlatformRoutes(app: FastifyInstance) {
         email: { provider: ctx.mailer.name, configured: ctx.mailer.configured, last7Days: email },
         payments: ctx.payments.list().map((p) => p.status()),
         geoHeader: config.GEO_COUNTRY_HEADER || null,
+        geoDatabase: ctx.geo?.description ?? null,
         publicUrls: { site: config.PUBLIC_SITE_URL, api: config.PUBLIC_API_URL },
       },
     };

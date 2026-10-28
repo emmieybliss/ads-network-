@@ -20,7 +20,7 @@ export default function System() {
                   ['Database', <Badge key="d" tone={d.health.database === 'ok' ? 'success' : 'danger'}>{d.health.database}</Badge>],
                   ['Redis', <Badge key="r" tone={d.health.redis === 'ok' ? 'success' : 'danger'}>{d.health.redis}</Badge>],
                   ['Worker', d.health.worker.lastHeartbeat ? `Last heartbeat ${timeAgo(d.health.worker.lastHeartbeat)}` : d.eventProcessing === 'inline' ? 'Inline processing (no worker needed)' : 'No heartbeat'],
-                  ['Event processing', humanize(d.eventProcessing)], ['Public site URL', d.publicUrls.site], ['Public API URL', d.publicUrls.api], ['Country header', d.geoHeader ?? 'Not configured'],
+                  ['Event processing', humanize(d.eventProcessing)], ['Public site URL', d.publicUrls.site], ['Public API URL', d.publicUrls.api], ['Country header', d.geoHeader ?? 'Not configured'], ['GeoIP database', d.geoDatabase ?? 'Not configured'],
                   ['Email', `${d.email.provider}${d.email.configured ? '' : ' (not configured)'}`],
                 ]} />
               </Card>

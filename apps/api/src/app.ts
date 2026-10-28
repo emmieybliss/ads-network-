@@ -18,6 +18,7 @@ import { SettingsService } from './lib/settings';
 import { createMailer } from './lib/mailer';
 import { LocalStorage } from './lib/storage';
 import { createQueues } from './lib/queue';
+import { openGeoDb } from './lib/geo';
 import { hit } from './lib/ratelimit';
 import { authPlugin } from './plugins/auth';
 import { PaymentProviderRegistry } from './services/payments/registry';
@@ -67,6 +68,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     tokens: parseKeyring(config.TRACKING_TOKEN_KEYS),
     payments: new PaymentProviderRegistry(config),
     verifier: opts.overrides?.verifier ?? {},
+    geo: openGeoDb(config.GEOIP_DB_PATH, (m) => app.log.warn(m)),
     log: app.log,
   };
   app.decorate('ctx', ctx);

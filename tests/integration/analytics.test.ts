@@ -40,9 +40,9 @@ async function setup(domain = 'pub.example.org') {
 
 type Setup = Awaited<ReturnType<typeof setup>>;
 
-async function serve(s: Setup, opts: { path?: string; referrer?: string; ua?: string } = {}) {
+async function serve(s: Setup, opts: { path?: string; referrer?: string; ua?: string; ip?: string } = {}) {
   const r = await h.app.inject({
-    method: 'POST', url: '/api/v1/serve', headers: { 'user-agent': opts.ua ?? BROWSER_UA, origin: `http://${s.domain}` },
+    method: 'POST', url: '/api/v1/serve', ...(opts.ip ? { remoteAddress: opts.ip } : {}), headers: { 'user-agent': opts.ua ?? BROWSER_UA, origin: `http://${s.domain}` },
     payload: { siteKey: s.site.publicKey, units: [{ slot: s.unit.key }], page: { url: `http://${s.domain}${opts.path ?? '/a'}`, referrer: opts.referrer }, pv: uniq('pv0000000000') },
   });
   return JSON.parse(r.body).ads[0].ad as { token: string; clickUrl: string };
@@ -295,5 +295,65 @@ describe('analytics views', () => {
     expect(text).toContain('Viewability %');
     expect(text).toContain('ROAS');
     expect(text).toContain('chrome');
+  });
+});
+
+describe('country report', () => {
+  it('reads the country from the GeoIP database and reports every country with its share, page views and live counts', async () => {
+    const { openGeoDb } = await import('@blissnova/api/lib/geo');
+    const geo = openGeoDb(new URL('../fixtures/GeoIP2-Country-Test.mmdb', import.meta.url).pathname, () => undefined);
+    expect(geo?.country('81.2.69.160')).toBe('GB');
+    expect(geo?.country('127.0.0.1')).toBeNull();
+    const saved = h.app.ctx.geo;
+    h.app.ctx.geo = geo;
+    try {
+      const s = await setup();
+      // Test-database addresses: 81.2.69.160 is GB, 216.160.83.56 is US; loopback is not in it.
+      for (const ip of ['81.2.69.160', '81.2.69.160', '216.160.83.56', '127.0.0.1']) {
+        const ad = await serve(s, { ip, referrer: 'https://www.google.com/' });
+        await events(s, [{ type: 'render', t: ad.token }]);
+      }
+      await aggregate();
+      const recorded = (await h.db.query(`SELECT country, count(*)::int AS n FROM ad_events WHERE type = 'render' AND status = 'valid' AND publisher_org_id = $1 GROUP BY 1`, [s.pub])).rows;
+      const n = (c: string) => recorded.find((r) => r.country === c)?.n ?? 0;
+      expect(n('GB') + n('US') + n('ZZ')).toBeGreaterThanOrEqual(3);
+
+      const d = (await s.pubCl.get(`/api/v1/orgs/${s.pub}/analytics`)).body.data;
+      const gb = d.countries.rows.find((r: any) => r.key === 'GB');
+      expect(gb).toMatchObject({ validImpressions: n('GB'), previousValidImpressions: 0 });
+      expect(gb.pageviews).toBeGreaterThanOrEqual(1);
+      expect(gb.share).toBeCloseTo((n('GB') / d.totals.validImpressions) * 100, 5);
+      expect(d.countries.count).toBe(d.countries.rows.filter((r: any) => r.key !== 'ZZ').length);
+      expect(d.countries.rows.reduce((a: number, r: any) => a + r.validImpressions, 0)).toBe(d.totals.validImpressions);
+
+      const live = (await s.pubCl.get(`/api/v1/orgs/${s.pub}/analytics/realtime`)).body.data;
+      expect(live.countries.find((r: any) => r.country === 'GB')?.validImpressions).toBe(n('GB'));
+
+      // A CDN header, when configured, wins over the database.
+      const header = h.app.ctx.config.GEO_COUNTRY_HEADER;
+      (h.app.ctx.config as any).GEO_COUNTRY_HEADER = 'cf-ipcountry';
+      try {
+        const r = await h.app.inject({
+          method: 'POST', url: '/api/v1/serve', remoteAddress: '81.2.69.160', headers: { 'user-agent': BROWSER_UA, origin: `http://${s.domain}`, 'cf-ipcountry': 'DE' },
+          payload: { siteKey: s.site.publicKey, units: [{ slot: s.unit.key }], page: { url: `http://${s.domain}/c` }, pv: uniq('pv0000000000') },
+        });
+        expect(r.statusCode).toBe(200);
+        const served = (await h.db.query(`SELECT country FROM ad_events WHERE type = 'served' AND page_path = '/c' AND site_id = $1`, [s.site.id])).rows;
+        expect(served.map((x) => x.country)).toEqual(['DE']);
+      } finally {
+        (h.app.ctx.config as any).GEO_COUNTRY_HEADER = header;
+      }
+    } finally {
+      h.app.ctx.geo = saved;
+    }
+  });
+
+  it('ignores a GeoIP path that is missing or not a database', async () => {
+    const { openGeoDb } = await import('@blissnova/api/lib/geo');
+    const warnings: string[] = [];
+    expect(openGeoDb('', (m) => warnings.push(m))).toBeNull();
+    expect(openGeoDb('/nonexistent/country.mmdb', (m) => warnings.push(m))).toBeNull();
+    expect(openGeoDb(new URL('../../package.json', import.meta.url).pathname, (m) => warnings.push(m))).toBeNull();
+    expect(warnings).toHaveLength(2);
   });
 });

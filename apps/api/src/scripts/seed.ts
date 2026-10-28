@@ -29,6 +29,7 @@ import { aggregateDay } from '../services/events';
 import { LocalStorage } from '../lib/storage';
 import { createHash } from 'node:crypto';
 import { demoBannerPng } from './demo-banner';
+import { DEMO_COUNTRY_SQL } from './demo-analytics';
 
 const DEMO_TAG = '[demo]';
 const CURRENCY = 'USD';
@@ -88,13 +89,13 @@ async function sampleHistory(c: PoolClient, specs: SampleSpec[], ctx: { siteId: 
       const costPerImp = s.pricing === 'cpm' ? s.rateMicros / 1000n : 0n;
       const costPerClick = s.pricing === 'cpc' ? s.rateMicros : 0n;
       // One row per event; deliveries are synthetic ids. Roughly 3% of renders are marked invalid as the filters would.
-      // Traffic follows a daily curve (busier 08:00-22:00 UTC); device, OS, browser and source are drawn from fixed sample mixes.
+      // Traffic follows a daily curve (busier 08:00-22:00 UTC); country, device, OS, browser and source are drawn from fixed sample mixes.
       await c.query(
         `WITH d0 AS (
            SELECT gen_random_uuid() AS delivery,
                   $1::date + make_interval(hours => (ARRAY[0,1,2,3,4,5,6,6,7,7,8,8,8,9,9,9,10,10,10,11,11,11,12,12,12,12,13,13,13,14,14,14,15,15,15,16,16,16,17,17,17,18,18,18,18,19,19,19,19,20,20,20,20,21,21,21,22,22,23])[1 + floor(random() * 59)::int],
                                            secs => floor(random() * 3599)::int) AS at,
-                  (ARRAY['US','US','US','GB','CA','DE','IN','ZZ'])[1 + floor(random() * 8)::int] AS country,
+                  ${DEMO_COUNTRY_SQL} AS country,
                   (ARRAY['desktop|windows|chrome','desktop|windows|chrome','desktop|windows|edge','desktop|macos|chrome','desktop|macos|safari','desktop|linux|firefox',
                          'mobile|ios|safari','mobile|ios|safari','mobile|ios|chrome','mobile|android|chrome','mobile|android|chrome','mobile|android|samsung','mobile|android|in_app',
                          'tablet|ios|safari','tablet|android|chrome'])[1 + floor(random() * 15)::int] AS platform,
