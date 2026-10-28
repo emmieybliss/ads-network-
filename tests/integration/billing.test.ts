@@ -92,6 +92,30 @@ describe('funding an advertiser account', () => {
   });
 });
 
+describe('minimum deposit', () => {
+  const pay = (cl: Client, org: string, amount: string) => cl.req('POST', `/api/v1/orgs/${org}/billing/payments`, { body: { provider: 'dev_simulated', amount }, headers: { 'idempotency-key': uniq('idem') } });
+
+  it('refuses less than $20 by default and accepts exactly $20', async () => {
+    const s = await signedIn();
+    const org = await makeOrg(h.db, { type: 'advertiser', ownerId: s.user.id });
+    const low = await pay(s.cl, org, '19.99');
+    expect(low.status).toBe(400);
+    expect(JSON.stringify(low.body)).toContain('The minimum deposit is $20.00');
+    expect((await pay(s.cl, org, '20.00')).status).toBe(201);
+    expect((await s.cl.get(`/api/v1/orgs/${org}/billing`)).body.data.minDepositMicros).toBe('20000000');
+  });
+
+  it('follows the minimum an admin sets', async () => {
+    const s = await signedIn();
+    const org = await makeOrg(h.db, { type: 'advertiser', ownerId: s.user.id });
+    await setSettings(h.db, 'pricing', { minDepositMicros: '50000000' });
+    h.app.ctx.settings.invalidate();
+    expect((await pay(s.cl, org, '20.00')).status).toBe(400);
+    expect((await pay(s.cl, org, '50.00')).status).toBe(201);
+    expect((await h.app.inject({ method: 'GET', url: '/api/v1/public/config' })).json().data.pricing.minDepositMicros).toBe('50000000');
+  });
+});
+
 describe('payment webhooks', () => {
   async function pendingPayment(orgId: string, amount = '100.00') {
     const id = (

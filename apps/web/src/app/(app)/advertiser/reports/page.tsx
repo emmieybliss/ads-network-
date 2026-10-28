@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { Field, PageHeader, Select } from '@/components/ui';
 import { ReportExplorer } from '@/components/ReportExplorer';
+import { SourceReport } from '@/components/partners/PartnerPanels';
 import { useApi } from '@/lib/hooks';
 import { useOrg } from '@/lib/session';
 
@@ -19,6 +20,7 @@ export default function AdvertiserReports() {
           </Select>
         </Field>
       } />
+      <div className="mb-5"><SourceReport path={`/orgs/${org.id}/reports/sources${campaignId ? `?campaignId=${campaignId}` : ''}`} currency={org.currency} /></div>
       <ReportExplorer orgId={org.id} audience="advertiser" currency={org.currency} filters={{ campaignId: campaignId || undefined }} />
     </>
   );

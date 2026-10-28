@@ -22,6 +22,7 @@ import { openGeoDb } from './lib/geo';
 import { hit } from './lib/ratelimit';
 import { authPlugin } from './plugins/auth';
 import { PaymentProviderRegistry } from './services/payments/registry';
+import { PartnerRegistry } from './services/partners';
 import { registerRoutes } from './routes';
 
 declare module 'fastify' {
@@ -38,7 +39,7 @@ declare module 'fastify' {
 export interface BuildOptions {
   config?: AppConfig;
   /** Override pieces of the context in tests. */
-  overrides?: Partial<Pick<AppContext, 'db' | 'redis' | 'mailer' | 'verifier'>>;
+  overrides?: Partial<Pick<AppContext, 'db' | 'redis' | 'mailer' | 'verifier' | 'partners'>>;
   logger?: boolean;
 }
 
@@ -67,6 +68,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     storage: new LocalStorage(config.STORAGE_DIR, config.PUBLIC_API_URL),
     tokens: parseKeyring(config.TRACKING_TOKEN_KEYS),
     payments: new PaymentProviderRegistry(config),
+    partners: opts.overrides?.partners ?? new PartnerRegistry(config, redis),
     verifier: opts.overrides?.verifier ?? {},
     geo: openGeoDb(config.GEOIP_DB_PATH, (m) => app.log.warn(m)),
     log: app.log,

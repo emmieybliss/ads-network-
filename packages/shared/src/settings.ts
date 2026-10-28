@@ -33,7 +33,7 @@ export const settingsSchema = z.object({
     defaultMaxPerPage: z.number().int().min(0).max(20).default(1),
   }).prefault({}),
   creatives: z.object({
-    allowedFormats: z.array(z.enum(['image', 'text', 'native'])).default(['image', 'text', 'native']),
+    allowedFormats: z.array(z.enum(['image', 'text', 'native', 'pop'])).default(['image', 'text', 'native', 'pop']),
     maxUploadBytes: z.number().int().min(10_000).max(5_000_000).default(300_000),
     allowedImageTypes: z.array(z.enum(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])).default(['image/png', 'image/jpeg', 'image/gif', 'image/webp']),
     allowedDestinationProtocols: z.array(z.enum(['https:', 'http:'])).default(['https:']),
@@ -86,12 +86,29 @@ export const settingsSchema = z.object({
     minCpmMicros: z.string().regex(/^\d+$/).default('500000'),
     minCpcMicros: z.string().regex(/^\d+$/).default('50000'),
     minCampaignBudgetMicros: z.string().regex(/^\d+$/).default('50000000'),
+    /** Smallest amount an advertiser may add to their balance in one payment. */
+    minDepositMicros: z.string().regex(/^\d+$/).default('20000000'),
     advertiserFeeBps: z.number().int().min(0).max(5000).default(0),
     defaultCurrency: z.string().length(3).default('USD'),
     enabledCurrencies: z.array(z.string().length(3)).default(['USD']),
     billingPeriod: z.enum(['monthly', 'weekly']).default('monthly'),
     invoicePrefix: z.string().min(1).max(10).default('BN'),
     refundWindowDays: z.number().int().min(0).max(365).default(90),
+  }).prefault({}),
+  /**
+   * Pop-up and pop-under placements. Publishers opt in per placement; these are
+   * the network's limits on top of the publisher's own, and the switch that
+   * turns the formats off everywhere. Browsers block pops that are not opened
+   * by a visitor's click, and some ad policies penalize them, so they stay
+   * capped hard.
+   */
+  popAds: z.object({
+    enabled: z.boolean().default(true),
+    popunderEnabled: z.boolean().default(true),
+    /** Most pops one visitor (by hashed IP address) sees per site per day, whatever the placement allows. */
+    maxPerVisitorPerDay: z.number().int().min(1).max(20).default(3),
+    /** Least time between two pops for one visitor on one site. */
+    minMinutesBetween: z.number().int().min(1).max(1440).default(15),
   }).prefault({}),
   api: z.object({
     authRateLimitPerMinute: z.number().int().min(1).max(1000).default(10),
@@ -121,7 +138,7 @@ export const settingsSchema = z.object({
 });
 
 export type PlatformSettings = z.infer<typeof settingsSchema>;
-export const SETTINGS_GROUPS = ['tracking', 'ivt', 'frequency', 'creatives', 'publishers', 'verification', 'eligibility', 'pricing', 'api', 'platform', 'branding', 'email'] as const;
+export const SETTINGS_GROUPS = ['tracking', 'ivt', 'frequency', 'creatives', 'publishers', 'verification', 'eligibility', 'pricing', 'popAds', 'api', 'platform', 'branding', 'email'] as const;
 export type SettingsGroup = (typeof SETTINGS_GROUPS)[number];
 
 export function defaultSettings(): PlatformSettings {
@@ -133,9 +150,10 @@ export function publicSettings(s: PlatformSettings) {
   return {
     branding: s.branding,
     platform: { maintenanceMode: s.platform.maintenanceMode, maintenanceMessage: s.platform.maintenanceMessage, registrationOpen: s.platform.registrationOpen },
-    pricing: { cpmEnabled: s.pricing.cpmEnabled, cpcEnabled: s.pricing.cpcEnabled, flatEnabled: s.pricing.flatEnabled, defaultCurrency: s.pricing.defaultCurrency, enabledCurrencies: s.pricing.enabledCurrencies, minCampaignBudgetMicros: s.pricing.minCampaignBudgetMicros, minCpmMicros: s.pricing.minCpmMicros, minCpcMicros: s.pricing.minCpcMicros },
+    pricing: { cpmEnabled: s.pricing.cpmEnabled, cpcEnabled: s.pricing.cpcEnabled, flatEnabled: s.pricing.flatEnabled, defaultCurrency: s.pricing.defaultCurrency, enabledCurrencies: s.pricing.enabledCurrencies, minCampaignBudgetMicros: s.pricing.minCampaignBudgetMicros, minDepositMicros: s.pricing.minDepositMicros, minCpmMicros: s.pricing.minCpmMicros, minCpcMicros: s.pricing.minCpcMicros },
     creatives: s.creatives,
     eligibility: s.eligibility,
+    popAds: s.popAds,
     verification: { allowedMethods: s.verification.allowedMethods, challengeTtlHours: s.verification.challengeTtlHours },
   };
 }

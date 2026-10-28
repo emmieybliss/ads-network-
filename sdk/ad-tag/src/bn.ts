@@ -32,6 +32,15 @@
  *   clear; an interstitial shows full screen when the visitor follows a link to
  *   another page of the site, at most once per 10 minutes per tab, and never
  *   where GDPR applies without consent to store that timestamp.
+ * - Pop-up and pop-under placements (data-bn-display="popup" / "popunder")
+ *   open the advertiser's landing page in a new tab on the visitor's first
+ *   click on the page, never on page load (browsers block that) and never
+ *   from a click on an ad, a form field or an editable area. At most one pop
+ *   per page view; the server enforces the per-visitor daily cap and the
+ *   minimum gap, and serves nothing when the network has pops turned off.
+ *   A pop-under then hands focus back to the page where the browser allows
+ *   it; most current browsers keep the new tab in front, so it can behave
+ *   like a pop-up. A pop is counted only when the browser actually opened it.
  * - Automatic in-article placement: when a tag script has data-auto, the tag
  *   reads the site's settings and adds slots between article paragraphs
  *   (after the first N paragraphs, then every M, up to a maximum), never
@@ -42,7 +51,7 @@
  *   first hidden. Neither needs cookies or device storage.
  */
 
-type Format = 'image' | 'text' | 'native';
+type Format = 'image' | 'text' | 'native' | 'pop';
 
 interface AdPayload {
   format: Format;
@@ -53,8 +62,9 @@ interface AdPayload {
   image?: { url: string; alt: string };
   text?: { headline: string; body: string; cta: string; displayUrl: string };
   native?: { imageUrl: string; alt: string; headline: string; body: string; cta: string; displayUrl: string; sponsor: string };
+  pop?: { url: string };
 }
-type Display = 'inline' | 'anchor' | 'rail_left' | 'rail_right' | 'interstitial';
+type Display = 'inline' | 'anchor' | 'rail_left' | 'rail_right' | 'interstitial' | 'popup' | 'popunder';
 interface ServeResponse {
   status: 'ok' | 'inactive' | 'blocked' | 'disabled';
   ads: Array<{ slot: string; display?: Display; ad: AdPayload | null }>;
@@ -87,10 +97,12 @@ const RAIL_CONTENT_WIDTH = 1024; // rails need this much room in the middle of t
 const INTERSTITIAL_GAP_MS = 10 * 60 * 1000;
 const INTERSTITIAL_WAIT_MS = 1500;
 const IST_KEY = 'bn_ist';
+const POP_MAX_AGE_MS = 10 * 60 * 1000; // a prepared pop older than this is fetched again (its token may have expired)
+const POP_SKIP = 'input, textarea, select, option, label, [contenteditable=""], [contenteditable="true"], [data-bn-slot]';
 
 function displayOf(el: Element): Display {
   const d = el.getAttribute('data-bn-display');
-  return d === 'anchor' || d === 'rail_left' || d === 'rail_right' || d === 'interstitial' ? d : 'inline';
+  return d === 'anchor' || d === 'rail_left' || d === 'rail_right' || d === 'interstitial' || d === 'popup' || d === 'popunder' ? d : 'inline';
 }
 
 function railFits(width: number | null): boolean {
@@ -317,6 +329,10 @@ class Tag {
   private interstitial: Element | null = null;
   private interstitialShown = false;
   private autoDone = false;
+  private popSlot: Element | null = null;
+  private popAd: { ad: AdPayload; display: Display; at: number } | null = null;
+  private popDone = false;
+  private readonly popListener = (e: MouseEvent) => this.onPopClick(e);
 
   constructor(api: string, siteKey: string) {
     this.api = api.replace(/\/+$/, '');
@@ -434,6 +450,13 @@ class Tag {
           this.interstitial = el;
           document.addEventListener('click', (e) => this.onNavigate(e), true);
         }
+        continue;
+      }
+      if (display === 'popup' || display === 'popunder') {
+        collapse(el); // a pop takes no room on the page
+        if (this.popSlot) continue; // one pop placement per page
+        this.popSlot = el;
+        void this.preparePop();
         continue;
       }
       if (display === 'anchor') {
@@ -598,6 +621,54 @@ class Tag {
     } catch {
       go();
     }
+  }
+
+  /* ------------------------------------------------------------------- pops */
+
+  /** Fetch the pop ahead of time: window.open has to run inside the click itself, with no network wait. */
+  private async preparePop(): Promise<void> {
+    const el = this.popSlot;
+    if (!el || this.popDone) return;
+    const slot = el.getAttribute('data-bn-slot') ?? '';
+    if (!SLOT_RE.test(slot)) return;
+    const res = await this.fetchAds([slot]);
+    const entry = res?.ads?.find((a) => a.slot === slot);
+    if (!entry?.ad?.pop?.url || !/^https?:\/\//.test(entry.ad.pop.url)) return; // no fill, capped, or pops are off
+    this.popAd = { ad: entry.ad, display: entry.display ?? displayOf(el), at: Date.now() };
+    document.addEventListener('click', this.popListener, true);
+  }
+
+  private onPopClick(e: MouseEvent): void {
+    if (this.popDone || !this.popAd || !e.isTrusted || e.button !== 0) return;
+    const target = e.target as Element | null;
+    try {
+      if (target?.closest?.(POP_SKIP)) return;
+    } catch {
+      return;
+    }
+    if (Date.now() - this.popAd.at > POP_MAX_AGE_MS) {
+      this.popAd = null;
+      document.removeEventListener('click', this.popListener, true);
+      void this.preparePop();
+      return;
+    }
+    const { ad, display } = this.popAd;
+    this.popDone = true;
+    this.popAd = null;
+    document.removeEventListener('click', this.popListener, true);
+    let w: Window | null = null;
+    try {
+      w = window.open(ad.pop!.url, '_blank');
+    } catch {
+      w = null;
+    }
+    if (!w) return; // blocked by the browser: nothing was shown, so nothing is counted
+    try { w.opener = null; } catch { /* the landing page must not script the publisher's page */ }
+    if (display === 'popunder') {
+      try { w.blur(); window.focus(); } catch { /* the browser decides which tab stays in front */ }
+    }
+    this.report('render', ad.token);
+    this.report('viewable', ad.token);
   }
 
   private render(el: Element, ad: AdPayload, display: Display = 'inline', onContinue?: () => void): void {

@@ -10,17 +10,22 @@ import { formatDate, formatMicros, humanize } from '@/lib/format';
 
 interface Provider { id: string; label: string; supportsCheckout: boolean; detail?: string }
 
-function AddFunds({ orgId, providers, onDone }: { orgId: string; providers: Provider[]; onDone: (msg: string) => void }) {
+function AddFunds({ orgId, currency, minDepositMicros, providers, onDone }: { orgId: string; currency: string; minDepositMicros: string; providers: Provider[]; onDone: (msg: string) => void }) {
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState('');
   const [provider, setProvider] = useState(providers[0]?.id ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [key] = useState(idempotencyKey);
+  const minimum = formatMicros(minDepositMicros, currency);
   async function submit(e: FormEvent) {
     e.preventDefault();
-    setBusy(true);
     setError(null);
+    if (Number(amount) * 1_000_000 < Number(minDepositMicros)) {
+      setError(`The minimum deposit is ${minimum}.`);
+      return;
+    }
+    setBusy(true);
     try {
       const r = await post<{ data: { checkout_url: string | null; instructions: string | null } }>(`/orgs/${orgId}/billing/payments`, { amount, provider }, { 'Idempotency-Key': key });
       if (r.data.checkout_url) {
@@ -42,7 +47,8 @@ function AddFunds({ orgId, providers, onDone }: { orgId: string; providers: Prov
       <Modal open={open} onClose={() => setOpen(false)} title="Add funds" footer={<><Button variant="secondary" onClick={() => setOpen(false)}>Cancel</Button><Button type="submit" form="fund" loading={busy}>Continue</Button></>}>
         <form id="fund" onSubmit={submit} className="space-y-4">
           {error && <Alert tone="danger">{error}</Alert>}
-          <Field label="Amount" htmlFor="amt" required><Input id="amt" inputMode="decimal" required pattern="^\d+(\.\d{1,2})?$" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="100.00" /></Field>
+          <Field label="Amount" htmlFor="amt" required hint={`Minimum deposit: ${minimum}`}><Input id="amt" inputMode="decimal" required pattern="^\d+(\.\d{1,2})?$" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="100.00" /></Field>
+          <div className="flex flex-wrap gap-2">{[1, 2.5, 5, 25].map((m) => Math.round(Number(minDepositMicros) * m / 1_000_000)).filter((v, i, a) => v > 0 && a.indexOf(v) === i).map((v) => <Button key={v} type="button" size="sm" variant="secondary" onClick={() => setAmount(v.toFixed(2))}>{formatMicros(String(v * 1_000_000), currency)}</Button>)}</div>
           <Field label="Payment method" htmlFor="prov">
             <Select id="prov" value={provider} onChange={(e) => setProvider(e.target.value)}>
               {providers.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
@@ -100,7 +106,7 @@ function Billing() {
 
   return (
     <>
-      <PageHeader title="Billing" description="Prepaid balance. Campaign budgets are reserved when submitted and spend is recorded in a double-entry ledger." actions={can('billing:fund') && summary.data && <AddFunds orgId={org.id} providers={summary.data.data.providers} onDone={(m) => { setNotice(m); summary.reload(); payments.reload(); }} />} />
+      <PageHeader title="Billing" description="Prepaid balance. Campaign budgets are reserved when submitted and spend is recorded in a double-entry ledger." actions={can('billing:fund') && summary.data && <AddFunds orgId={org.id} currency={org.currency} minDepositMicros={summary.data.data.minDepositMicros ?? '0'} providers={summary.data.data.providers} onDone={(m) => { setNotice(m); summary.reload(); payments.reload(); }} />} />
       {returned === 'returned' && <Alert tone="info" className="mb-4">You returned from checkout. Your balance updates when the payment provider confirms the payment, which can take a moment. Refresh to check.</Alert>}
       {returned === 'cancelled' && <Alert tone="warning" className="mb-4">Checkout was cancelled. No funds were added.</Alert>}
       {notice && <Alert tone="success" className="mb-4">{notice}</Alert>}

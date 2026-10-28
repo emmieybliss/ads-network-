@@ -132,6 +132,21 @@ server's setting.
   page of the same site. The tag waits at most 1.5 s for an ad, otherwise it
   navigates straight away. It shows a clear "Continue to page" button (Escape
   and a backdrop click also continue), at most once per 10 minutes per tab.
+- **Pop-up / pop-under** (`popup`, `popunder`, migration 0012): filled only
+  by the `pop` creative format, which is a reviewed landing page and nothing
+  else, and only by CPM or flat-rate campaigns (a pop has no click to charge).
+  The tag requests the pop when the page loads, then opens it with
+  `window.open` inside the visitor's first click on the page (never on load,
+  never from a click on an ad, a form field or an editable area), at most once
+  per page view, and clears `opener` so the landing page cannot script the
+  publisher's page. A pop-under then hands focus back to the page; most
+  current browsers ignore that, so it can behave like a pop-up. A pop counts
+  as an impression only when the browser actually opened it. Per-visitor
+  limits are enforced on the server in Redis, keyed by site and hashed IP
+  address (so they need nothing stored on the device): the placement's
+  `pop_max_per_day` and `pop_minutes_between`, tightened by the network's
+  `popAds` settings. Admins can turn pops, or only pop-unders, off
+  network-wide; existing pop placements then get no ads.
 
 ## Automatic in-article placement
 
@@ -262,6 +277,53 @@ scheme. The card always starts with a "Sponsored · {sponsor}" line above the
 headline, so it cannot be mistaken for editorial content. Publishers opt in per
 site and per placement through the `native` format.
 
+## Partner networks
+
+An advertiser can let part of a cost-per-click campaign run on outside native
+networks (MGID, Revcontent, Taboola, Outbrain/Teads) as well as on the
+BlissNova network. BlissNova acts as the agency: it holds its own funded
+account on each partner, buys there, and bills the advertiser what the partner
+charged plus a markup set per network by staff (Admin, Partner networks). The
+markup is fixed on each partner campaign when the advertiser opts in.
+
+Each network is an adapter (`apps/api/src/services/partners.ts`): create a
+campaign, send ads, set budget caps, pause/resume/stop, read ad review results,
+read daily delivery and cost. The worker's minutely job syncs every partner
+campaign that is not stopped:
+
+1. When the BlissNova campaign is live, create it on the partner with the
+   campaign's BlissNova-approved native ads (image, headline, sponsor name).
+2. Pull the partner's cumulative cost per day and charge the increase:
+   `partner_charge` moves money from the campaign reserve to `partner_payable`
+   (cost) and `platform_revenue` (markup). The charge never takes campaign
+   spend past its lifetime budget or reserve; anything over is recorded as
+   absorbed (BlissNova's loss) rather than billed.
+3. Send newly approved ads and read the partner's own review of each.
+4. Push caps in the partner's terms: CPC = advertiser CPC ÷ (1 + markup), so
+   an advertiser never pays more than their CPC per click; total cap = what
+   the partner already spent plus what the campaign can still pay for (its
+   remaining budget and this partner's share of the lifetime budget); daily
+   cap = the partner's share of the daily budget. Pause when the campaign
+   pauses, the share is used up, staff hold it or the network is switched off;
+   stop when the campaign ends or the advertiser removes the partner.
+
+Partner spend counts toward the campaign's lifetime and daily budget, so the
+BlissNova network and partners share one budget; the share is a ceiling for
+the partner, not a reservation. Because partners report spend with a delay,
+a partner can overspend slightly between syncs; that is absorbed, never
+charged to the advertiser. Only CPC campaigns qualify, because the partners
+sell clicks. Delivery appears in "By source" reports; partner cost and margin
+are shown to staff only. Reconciliation checks 2, 3 and 10 include partner
+charges.
+
+Only the **simulated partner** (`ENABLE_DEV_PARTNER_SIMULATOR`) is connected.
+It approves ads after a minute (and rejects headlines with exaggerated claims),
+and accrues clicks and cost over time within the caps it is given. Real
+adapters need a signed partner account and API access, and will read their
+credentials from environment variables. The API refuses to start in production
+with the simulator on, and the registry never loads it in production
+(`tests/integration/partners.test.ts`).
+
 ## Sites and verification
 
 A site moves through `draft → verification_pending → verified → submitted →
@@ -273,9 +335,10 @@ never approves a site. An admin reviews it against the eligibility checklist,
 which is configurable in admin settings. No minimum traffic threshold is
 hardcoded.
 
-The **verification simulator** (`ENABLE_DEV_VERIFICATION_SIMULATOR`) and the
-**simulated payment provider** (`ENABLE_DEV_PAYMENTS`) exist for local work and
-the demo. The API refuses to start with either enabled when
+The **verification simulator** (`ENABLE_DEV_VERIFICATION_SIMULATOR`), the
+**simulated payment provider** (`ENABLE_DEV_PAYMENTS`) and the **simulated
+partner network** (`ENABLE_DEV_PARTNER_SIMULATOR`) exist for local work and
+the demo. The API refuses to start with any of them enabled when
 `NODE_ENV=production`. `tests/security/verification.test.ts` covers this: it checks
 the startup refusal, and also checks that the simulator endpoints do not exist
 and simulated sites never serve ads, even when a production app is forced to

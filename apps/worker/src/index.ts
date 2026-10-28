@@ -10,7 +10,9 @@ import { processAdmittedEvent, RetryLaterError, type AdmittedEvent } from '@blis
 import { writeServeLog, type ServeLog } from '@blissnova/api/services/serving';
 import { deliverOutbox, queueEmail } from '@blissnova/api/services/notifications';
 import { EMAIL_TEMPLATES } from '@blissnova/api/lib/mailer';
-import { budgetAlerts, campaignLifecycle, dailyMaintenance, detectAnomalies, lowBalanceAlerts, refreshAggregates, reportEmails, settleAll, syncSpendCounters, type JobCtx } from './jobs';
+import { LocalStorage } from '@blissnova/api/lib/storage';
+import { PartnerRegistry } from '@blissnova/api/services/partners';
+import { budgetAlerts, campaignLifecycle, dailyMaintenance, detectAnomalies, lowBalanceAlerts, refreshAggregates, reportEmails, settleAll, syncPartners, syncSpendCounters, type JobCtx } from './jobs';
 
 /**
  * Background worker: event processing, serve logs, email delivery and
@@ -41,7 +43,8 @@ const maintenanceQueue = new Queue(QUEUE_NAMES.maintenance, { connection });
 const email: JobCtx['email'] = async (to, template, vars) => {
   await queueEmail({ config, db, redis: connection, settings, mailer, queues: { email: emailQueue } } as never, to, template, vars);
 };
-const jobCtx: JobCtx = { db, redis: connection, settings: () => settings.get(), log, notify, email, siteUrl: config.PUBLIC_SITE_URL };
+const storage = new LocalStorage(config.STORAGE_DIR, config.PUBLIC_API_URL);
+const jobCtx: JobCtx = { db, redis: connection, settings: () => settings.get(), log, notify, email, siteUrl: config.PUBLIC_SITE_URL, partners: new PartnerRegistry(config, connection), publicUrl: (k) => storage.publicUrl(k) };
 
 const workers = [
   new Worker(QUEUE_NAMES.events, async (job: Job<AdmittedEvent>) => {
@@ -64,8 +67,9 @@ const workers = [
         await refreshAggregates(jobCtx);
         const lifecycle = await campaignLifecycle(jobCtx);
         const settled = await settleAll(jobCtx);
+        const partners = await syncPartners(jobCtx);
         await syncSpendCounters(jobCtx);
-        return { lifecycle, settled };
+        return { lifecycle, settled, partners };
       }
       case 'five-minutely':
         await budgetAlerts(jobCtx);

@@ -8,6 +8,7 @@ import { Alert, Async, Badge, Button, Card, CardHeader, DefinitionList, EmptySta
 import { CampaignForm } from '@/components/advertiser/CampaignForm';
 import { CreativeEditor, CreativePreview, type Creative } from '@/components/advertiser/CreativeEditor';
 import { ReportExplorer } from '@/components/ReportExplorer';
+import { PartnerDistribution, SourceReport } from '@/components/partners/PartnerPanels';
 import { useApi } from '@/lib/hooks';
 import { useOrg } from '@/lib/session';
 import { ApiError, errorMessage, patch, post } from '@/lib/api';
@@ -73,7 +74,7 @@ function CampaignDetail() {
             {c.status === 'suspended' && <Alert tone="danger" title="Suspended by the network" className="mb-4">{c.statusReason ?? 'Contact support for details.'}</Alert>}
             {c.status === 'pending_approval' && <Alert tone="info" className="mb-4">This campaign is waiting for review. Its budget is reserved from your balance and it will not serve until approved.</Alert>}
             {c.status === 'draft' && <Alert tone="info" className="mb-4">Drafts never serve. Add at least one creative, then submit for review.</Alert>}
-            <Tabs active={tab} onChange={setTab} tabs={[{ id: 'overview', label: 'Overview' }, { id: 'creatives', label: `Creatives${creatives.data ? ` (${creatives.data.data.filter((x) => x.status !== 'archived').length})` : ''}` }, { id: 'report', label: 'Report' }, { id: 'settings', label: 'Settings' }, { id: 'history', label: 'History' }]} />
+            <Tabs active={tab} onChange={setTab} tabs={[{ id: 'overview', label: 'Overview' }, { id: 'creatives', label: `Creatives${creatives.data ? ` (${creatives.data.data.filter((x) => x.status !== 'archived').length})` : ''}` }, { id: 'report', label: 'Report' }, { id: 'partners', label: 'Partner networks' }, { id: 'settings', label: 'Settings' }, { id: 'history', label: 'History' }]} />
             <div className="mt-5">
               {tab === 'overview' && (
                 <div className="space-y-5">
@@ -117,7 +118,7 @@ function CampaignDetail() {
                             <div className="mb-3 flex items-start justify-between gap-2">
                               <div className="min-w-0">
                                 <p className="truncate font-medium">{cr.name}</p>
-                                <p className="text-xs text-muted">{cr.format === 'image' ? `Image ${cr.width}×${cr.height}` : cr.format === 'native' ? 'Native' : 'Text'} · version {cr.version}{cr.approvedVersion && cr.approvedVersion !== cr.version ? ` (version ${cr.approvedVersion} serving)` : ''}</p>
+                                <p className="text-xs text-muted">{cr.format === 'image' ? `Image ${cr.width}×${cr.height}` : cr.format === 'native' ? 'Native' : cr.format === 'pop' ? 'Pop traffic' : 'Text'} · version {cr.version}{cr.approvedVersion && cr.approvedVersion !== cr.version ? ` (version ${cr.approvedVersion} serving)` : ''}</p>
                               </div>
                               <StatusBadge status={cr.status} />
                             </div>
@@ -135,10 +136,16 @@ function CampaignDetail() {
                       </div>
                     )}
                   </Async>
-                  {editor && <CreativeEditor key={editor.creative?.id ?? 'new'} open onClose={() => setEditor(null)} orgId={org.id} campaignId={id} creative={editor.creative} onSaved={() => { creatives.reload(); res.reload(); }} />}
+                  {editor && <CreativeEditor key={editor.creative?.id ?? 'new'} open onClose={() => setEditor(null)} orgId={org.id} campaignId={id} creative={editor.creative} pricingModel={res.data?.data.pricingModel} onSaved={() => { creatives.reload(); res.reload(); }} />}
                 </Card>
               )}
-              {tab === 'report' && <ReportExplorer orgId={org.id} audience="advertiser" currency={org.currency} filters={{ campaignId: id }} />}
+              {tab === 'report' && (
+                <div className="space-y-5">
+                  <SourceReport path={`/orgs/${org.id}/reports/sources?campaignId=${id}`} currency={org.currency} />
+                  <ReportExplorer orgId={org.id} audience="advertiser" currency={org.currency} filters={{ campaignId: id }} />
+                </div>
+              )}
+              {tab === 'partners' && <PartnerDistribution orgId={org.id} campaignId={id} currency={org.currency} editable={!['completed', 'archived', 'suspended'].includes(c.status)} />}
               {tab === 'settings' && (editable ? (
                 <>
                   {['active', 'scheduled', 'paused'].includes(c.status) && <Alert tone="warning" className="mb-4">Changing targeting on an approved campaign sends it back for review. The rate of an approved campaign cannot change; duplicate it instead.</Alert>}

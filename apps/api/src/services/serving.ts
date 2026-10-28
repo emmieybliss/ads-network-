@@ -14,8 +14,8 @@ import { decideConsent, type ConsentReason, type ConsentSignals } from './consen
  * Postgres transaction, when an impression or click becomes billable.
  */
 export interface SiteSnap { id: string; orgId: string; domain: string; allowedDomains: string[]; includeSubdomains: boolean; category: string; allowedFormats: string[]; revenueShareBps: number; blockedCategories: string[]; floorCpmMicros: bigint | null; floorCpcMicros: bigint | null; premiumOnly: boolean }
-export interface UnitSnap { id: string; siteId: string; key: string; formats: string[]; width: number | null; height: number | null; responsive: boolean; display: UnitDisplay }
-export type UnitDisplay = 'inline' | 'anchor' | 'rail_left' | 'rail_right' | 'interstitial';
+export interface UnitSnap { id: string; siteId: string; key: string; formats: string[]; width: number | null; height: number | null; responsive: boolean; display: UnitDisplay; popMaxPerDay: number; popMinutesBetween: number }
+export type UnitDisplay = 'inline' | 'anchor' | 'rail_left' | 'rail_right' | 'interstitial' | 'popup' | 'popunder';
 export interface CreativeSnap extends CreativeCandidate { snapshot: { headline?: string; body?: string; cta?: string; storageKey?: string | null; altText?: string; displayUrl?: string; sponsorName?: string; destinationUrl: string } }
 export interface CampaignSnap extends CampaignCandidate { caps: Array<{ scope: 'visitor' | 'page'; max: number; window: number }>; orgCaps: Array<{ max: number; window: number }>; creatives: CreativeSnap[] }
 
@@ -49,7 +49,7 @@ async function loadSnapshot(ctx: AppContext): Promise<Snapshot> {
   }
   const units = new Map<string, UnitSnap>();
   const unitRows = (await ctx.db.query(`SELECT u.* FROM ad_units u JOIN sites s ON s.id = u.site_id WHERE u.status = 'active' AND NOT u.admin_blocked AND s.status = 'approved'`)).rows;
-  for (const u of unitRows) units.set(`${u.site_id}:${u.key}`, { id: u.id, siteId: u.site_id, key: u.key, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, display: u.display ?? 'inline' });
+  for (const u of unitRows) units.set(`${u.site_id}:${u.key}`, { id: u.id, siteId: u.site_id, key: u.key, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, display: u.display ?? 'inline', popMaxPerDay: u.pop_max_per_day ?? 1, popMinutesBetween: u.pop_minutes_between ?? 60 });
 
   const camps = (await ctx.db.query(
     `SELECT c.*, o.tier AS org_tier, t.countries, t.devices, t.site_categories, t.keywords, t.include_site_ids, t.exclude_site_ids, t.include_unit_ids, t.exclude_unit_ids, t.require_personalized
@@ -138,7 +138,7 @@ export interface ServedAd {
   slot: string;
   /** How the tag shows this placement; absent when the slot is unknown. */
   display?: UnitDisplay;
-  ad: null | { format: 'image' | 'text' | 'native'; token: string; clickUrl: string; width: number | null; height: number | null; image?: { url: string; alt: string }; text?: { headline: string; body: string; cta: string; displayUrl: string }; native?: { imageUrl: string; alt: string; headline: string; body: string; cta: string; displayUrl: string; sponsor: string } };
+  ad: null | { format: 'image' | 'text' | 'native' | 'pop'; token: string; clickUrl: string; width: number | null; height: number | null; pop?: { url: string }; image?: { url: string; alt: string }; text?: { headline: string; body: string; cta: string; displayUrl: string }; native?: { imageUrl: string; alt: string; headline: string; body: string; cta: string; displayUrl: string; sponsor: string } };
 }
 export interface ServeLog { pageView?: { siteId: string; path: string; source: string; device: string; country: string; entrance: boolean }; deliveries: Array<{ claims: DeliveryClaims; ipHash: string; uaHash: string | null }>; counters: Array<{ unitId: string; field: 'requests' | 'filled' | 'no_fill' | 'cap_rejects' | 'budget_rejects' | 'blocked' }>; day: string }
 
@@ -190,8 +190,15 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
   for (const { slot, unit } of units) {
     if (!unit) { ads.push({ slot, ad: null }); continue; }
     log.counters.push({ unitId: unit.id, field: 'requests' });
+    const pop = unit.display === 'popup' || unit.display === 'popunder';
+    if (pop && !popAllowed(settings, unit.display)) {
+      log.counters.push({ unitId: unit.id, field: 'blocked' });
+      ads.push({ slot, display: unit.display, ad: null });
+      continue;
+    }
     const spentCache = new Map<string, bigint>();
-    const candidates = snap.campaigns;
+    // A pop opens the landing page itself, so there is no click to charge: CPC campaigns never fill pops.
+    const candidates = pop ? snap.campaigns.filter((c) => c.pricingModel !== 'cpc') : snap.campaigns;
     // Pre-load today's spend estimates for the candidates in one round trip.
     const keys = candidates.map((c) => `spend:${c.id}:${dayInZone(now, c.timezone)}`);
     const vals = keys.length ? await ctx.redis.mget(...keys) : [];
@@ -212,6 +219,14 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
       // Page-level cap: campaign-specific or the network default.
       const pageCap = c.caps.find((x) => x.scope === 'page') ?? (settings.frequency.defaultMaxPerPage > 0 ? { scope: 'page' as const, max: settings.frequency.defaultMaxPerPage, window: 1800 } : null);
       if (pageCap) { capKeys.push(`fc:p:${req.pv.slice(0, 40)}:${c.id}`); limits.push({ max: pageCap.max, window: pageCap.window }); }
+      if (pop) {
+        // Pops are capped per visitor whether or not the visitor allowed an id: by hashed IP address, per site.
+        // The tighter of the placement's limits and the network's wins.
+        const perDay = Math.min(unit.popMaxPerDay, settings.popAds.maxPerVisitorPerDay);
+        const gap = Math.max(unit.popMinutesBetween, settings.popAds.minMinutesBetween) * 60;
+        capKeys.push(`pop:d:${site.id}:${meta.ipHash}`, `pop:g:${site.id}:${meta.ipHash}`);
+        limits.push({ max: perDay, window: 86400 }, { max: 1, window: gap });
+      }
       if (vHash) {
         for (const cap of c.caps.filter((x) => x.scope === 'visitor')) { capKeys.push(`fc:v:${vHash}:${c.id}:${cap.window}`); limits.push({ max: cap.max, window: cap.window }); }
         for (const cap of c.orgCaps) { capKeys.push(`fc:a:${vHash}:${c.orgId}:${cap.window}`); limits.push({ max: cap.max, window: cap.window }); }
@@ -242,6 +257,10 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     log.deliveries.push({ claims, ipHash: meta.ipHash, uaHash: null });
     log.counters.push({ unitId: unit.id, field: 'filled' });
     const snapC = cr.snapshot;
+    if (pop) {
+      ads.push({ slot, display: unit.display, ad: { format: 'pop', token, clickUrl: `${ctx.config.PUBLIC_API_URL}/api/v1/click?t=${encodeURIComponent(token)}`, width: null, height: null, pop: { url: snapC.destinationUrl } } });
+      continue;
+    }
     ads.push({
       slot,
       display: unit.display,
@@ -254,6 +273,12 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     });
   }
   return { status: 'ok', ads, log, privacy };
+}
+
+/** Whether the network currently serves this pop placement type. */
+export function popAllowed(settings: PlatformSettings, display: UnitDisplay): boolean {
+  if (!settings.popAds.enabled) return false;
+  return display !== 'popunder' || settings.popAds.popunderEnabled;
 }
 
 function hostOf(url: string) {

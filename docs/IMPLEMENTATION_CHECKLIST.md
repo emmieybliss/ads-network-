@@ -60,6 +60,17 @@ deployment.
 - [x] Sticky anchor, side rail and interstitial placements; inline slots reserve their space and can keep it on no fill
 - [x] Automatic in-article placement (per-site settings, tag inserts slots between paragraphs)
 - [x] Page RPM and per-page earnings reports (page views per page view id, page path on events, Pages tab, CSV export)
+- [x] Pop-up and pop-under placements: publisher opt-in per placement, pop creative format (CPM or flat only), server-side per-visitor caps, network kill switch in Settings → Pop ads, demo page /pop-test
+- [x] Minimum advertiser deposit ($20 by default, Settings → Pricing → Minimum deposit)
+
+## Partner networks
+- [x] Advertisers let part of a CPC campaign's budget run on partner native networks, with a share per network
+- [x] Admin Partner networks page: connection state, on/off, markup, partner minimum CPC, connection test, 30-day totals, partner campaign list
+- [x] Worker sync through adapters: create on go-live, send approved native ads, read partner ad review, pull delivery and cost, push caps, pause and stop
+- [x] `partner_charge` ledger postings at cost plus markup, never past the campaign budget; reconciliation check 10
+- [x] Staff hold and release per partner campaign; "By source" reports for advertisers and staff
+- [x] Development simulated partner, refused in production
+- [ ] Real adapters for MGID, Revcontent, Taboola and Outbrain (Teads): need signed partner accounts and API access
 
 ## Verified
 Runs on 27 Oct 2026, in the build container with local PostgreSQL 16 and Redis 7,

@@ -65,7 +65,7 @@ variables: those are visible in the browser.
 
 With `NODE_ENV=production`, the API **refuses to start** and lists every problem if:
 
-- `ENABLE_DEV_PAYMENTS` or `ENABLE_DEV_VERIFICATION_SIMULATOR` is on;
+- `ENABLE_DEV_PAYMENTS`, `ENABLE_DEV_VERIFICATION_SIMULATOR` or `ENABLE_DEV_PARTNER_SIMULATOR` is on;
 - `VERIFICATION_ALLOW_HTTP` or `VERIFICATION_PRIVATE_HOST_ALLOWLIST` is set;
 - `SEED_DEMO_DATA` is on;
 - `COOKIE_SECURE` is false;

@@ -477,3 +477,67 @@ export async function manualAdjustment(client: PoolClient, a: { orgId: string; k
     ],
   });
 }
+
+// ---------------------------------------------------------------- partner networks
+
+export interface PartnerDay { partnerCampaignId: string; day: string; impressions: number; clicks: number; conversions: number; costMicros: bigint }
+
+/**
+ * Charge an advertiser for one day of partner-network delivery. `costMicros`
+ * is the partner's cumulative cost for that day as it reports it; only the
+ * increase since the last call is charged, at cost plus the markup fixed on
+ * the partner campaign. The charge moves money from the campaign reserve to
+ * what BlissNova owes the partner (cost) and to platform revenue (markup).
+ *
+ * The charge never takes the campaign past its lifetime budget or reserve:
+ * cost the budget cannot cover is recorded as absorbed (BlissNova's loss),
+ * not billed. Idempotent for a given day and reported cost.
+ */
+export async function chargePartnerDay(client: PoolClient, d: PartnerDay) {
+  const pc = (await client.query('SELECT * FROM partner_campaigns WHERE id = $1 FOR UPDATE', [d.partnerCampaignId])).rows[0];
+  if (!pc) throw new BillingError('Partner campaign not found', 'not_found');
+  const prev = (await client.query('SELECT cost_micros FROM partner_daily_stats WHERE partner_campaign_id = $1 AND day = $2', [pc.id, d.day])).rows[0];
+  const costDelta = d.costMicros - big(prev?.cost_micros);
+  let charged = 0n;
+  let absorbed = 0n;
+  if (costDelta > 0n) {
+    const c = (await client.query('SELECT id, org_id, currency, lifetime_budget_micros, reserved_micros, spent_micros FROM campaigns WHERE id = $1 FOR UPDATE', [pc.campaign_id])).rows[0];
+    const want = costDelta + applyBps(costDelta, pc.markup_bps);
+    const ceiling = big(c.lifetime_budget_micros) < big(c.reserved_micros) ? big(c.lifetime_budget_micros) : big(c.reserved_micros);
+    const room = ceiling - big(c.spent_micros);
+    charged = room <= 0n ? 0n : want < room ? want : room;
+    const costPart = charged === want ? costDelta : (charged * 10_000n) / BigInt(10_000 + pc.markup_bps);
+    const markupPart = charged - costPart;
+    absorbed = costDelta - costPart;
+    if (charged > 0n) {
+      await post(client, {
+        type: 'partner_charge', currency: c.currency, idempotencyKey: `partner:${pc.id}:${d.day}:${d.costMicros}`, reference: { type: 'partner_campaign', id: pc.id },
+        actor: { type: 'system' }, reason: `Partner network delivery (${pc.network_id}) on ${d.day}`,
+        entries: [
+          { account: { kind: 'campaign_reserve', orgId: c.org_id, campaignId: c.id }, amount: charged },
+          ...(costPart > 0n ? [{ account: { kind: 'partner_payable' as const }, amount: -costPart }] : []),
+          ...(markupPart > 0n ? [{ account: { kind: 'platform_revenue' as const }, amount: -markupPart }] : []),
+        ],
+      });
+      await client.query('UPDATE campaigns SET spent_micros = spent_micros + $2, updated_at = now() WHERE id = $1', [c.id, charged.toString()]);
+      await client.query(
+        `INSERT INTO campaign_daily_spend (campaign_id, day, spent_micros, impressions, clicks) VALUES ($1, $2, $3, 0, 0)
+         ON CONFLICT (campaign_id, day) DO UPDATE SET spent_micros = campaign_daily_spend.spent_micros + EXCLUDED.spent_micros`,
+        [c.id, d.day, charged.toString()]);
+    }
+  }
+  const prevStats = (await client.query('SELECT impressions, clicks FROM partner_daily_stats WHERE partner_campaign_id = $1 AND day = $2', [pc.id, d.day])).rows[0];
+  await client.query(
+    `INSERT INTO partner_daily_stats (partner_campaign_id, day, impressions, clicks, conversions, cost_micros, charged_micros) VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (partner_campaign_id, day) DO UPDATE SET impressions = GREATEST(partner_daily_stats.impressions, EXCLUDED.impressions), clicks = GREATEST(partner_daily_stats.clicks, EXCLUDED.clicks),
+       conversions = GREATEST(partner_daily_stats.conversions, EXCLUDED.conversions), cost_micros = GREATEST(partner_daily_stats.cost_micros, EXCLUDED.cost_micros),
+       charged_micros = partner_daily_stats.charged_micros + EXCLUDED.charged_micros, updated_at = now()`,
+    [pc.id, d.day, d.impressions, d.clicks, d.conversions, d.costMicros > big(prev?.cost_micros) ? d.costMicros.toString() : big(prev?.cost_micros).toString(), charged.toString()]);
+  const impDelta = Math.max(0, d.impressions - Number(prevStats?.impressions ?? 0));
+  const clickDelta = Math.max(0, d.clicks - Number(prevStats?.clicks ?? 0));
+  await client.query(
+    `UPDATE partner_campaigns SET cost_micros = cost_micros + $2, charged_micros = charged_micros + $3, absorbed_micros = absorbed_micros + $4,
+       impressions = impressions + $5, clicks = clicks + $6, updated_at = now() WHERE id = $1`,
+    [pc.id, (costDelta > 0n ? costDelta : 0n).toString(), charged.toString(), absorbed.toString(), impDelta, clickDelta]);
+  return { charged, absorbed };
+}

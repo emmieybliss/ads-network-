@@ -15,16 +15,28 @@ const GROUP_HELP: Record<string, string> = {
   publishers: 'Revenue share, earnings hold and payout minimum.',
   verification: 'Domain verification methods and limits.',
   eligibility: 'Publisher requirements shown publicly and used in review. Thresholds are optional and configurable, never fixed.',
-  pricing: 'Enabled pricing models, minimum rates and currencies.',
+  pricing: 'Enabled pricing models, minimum rates, the minimum advertiser deposit and currencies.',
+  popAds: 'Pop-up and pop-under placements: turn them off network-wide, or cap how often one visitor can see them. Publishers opt in per placement and can only be stricter than these limits.',
   api: 'Rate limits.',
   platform: 'Maintenance mode, registration and staff sign-in rules.',
   branding: 'Names, support contact and legal links shown across the site.',
   email: 'Sender details and message templates.',
 };
 
+const GROUP_NAMES: Record<string, string> = { ivt: 'Invalid traffic', popAds: 'Pop ads', api: 'API' };
+const groupName = (g: string) => GROUP_NAMES[g] ?? humanize(g);
+
 type Draft = Record<string, unknown>;
 
+const LABELS: Record<string, string> = {
+  minDepositMicros: 'Minimum deposit',
+  popunderEnabled: 'Pop-unders allowed',
+  maxPerVisitorPerDay: 'Most pops per visitor per day',
+  minMinutesBetween: 'Least minutes between pops',
+};
+
 function label(key: string) {
+  if (LABELS[key]) return LABELS[key];
   return humanize(key.replace(/Micros$/, '').replace(/Bps$/, ' (%)').replace(/([a-z])([A-Z])/g, '$1 $2'));
 }
 
@@ -61,11 +73,11 @@ function Settings() {
           return (
             <div className="grid gap-5 lg:grid-cols-[220px_1fr]">
               <nav className="flex gap-1 overflow-x-auto lg:flex-col" aria-label="Settings groups">
-                {data.groups.map((g) => <button key={g} onClick={() => { setGroup(g); setDraft(null); setMsg(null); }} className={cn('whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm', g === group ? 'bg-primary-soft font-medium text-primary' : 'text-fg-2 hover:bg-surface-2')}>{humanize(g)}</button>)}
+                {data.groups.map((g) => <button key={g} onClick={() => { setGroup(g); setDraft(null); setMsg(null); }} className={cn('whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm', g === group ? 'bg-primary-soft font-medium text-primary' : 'text-fg-2 hover:bg-surface-2')}>{groupName(g)}</button>)}
               </nav>
               <div className="space-y-5">
                 <Card>
-                  <CardHeader title={humanize(group)} description={<>{GROUP_HELP[group]}{updated && <span className="block text-xs">Last changed {timeAgo(updated.updated_at)}{updated.updated_by ? ` by ${updated.updated_by}` : ''}.</span>}</>} />
+                  <CardHeader title={groupName(group)} description={<>{GROUP_HELP[group]}{updated && <span className="block text-xs">Last changed {timeAgo(updated.updated_at)}{updated.updated_by ? ` by ${updated.updated_by}` : ''}.</span>}</>} />
                   {msg && <Alert tone="success" className="mb-4">{msg}</Alert>}
                   <div key={`${group}:${resets}`} className="grid gap-4 sm:grid-cols-2">
                     {Object.entries(values).map(([k, v]) => <div key={k} className={typeof v === 'boolean' ? '' : Array.isArray(v) || (typeof v === 'object' && v !== null) ? 'sm:col-span-2' : ''}><SettingInput k={k} value={v} disabled={!manage} onChange={(nv) => setDraft({ ...values, [k]: nv })} /></div>)}
@@ -77,7 +89,7 @@ function Settings() {
                   <div className="flex flex-wrap gap-2">{Object.entries(data.secrets).map(([k, v]) => <Badge key={k} tone={v ? 'success' : 'neutral'}>{humanize(k.replace(/Configured$/, ''))}: {v ? 'configured' : 'not configured'}</Badge>)}</div>
                 </Card>
               </div>
-              <ReasonDialog open={confirm} onClose={() => setConfirm(false)} title={`Save ${humanize(group)} settings`} confirmLabel="Save"
+              <ReasonDialog open={confirm} onClose={() => setConfirm(false)} title={`Save ${groupName(group)} settings`} confirmLabel="Save"
                 onConfirm={async (reason) => { await patch(`/admin/settings/${group}`, { values: draft, reason }); setConfirm(false); setDraft(null); setResets((n) => n + 1); setMsg('Saved.'); res.reload(); }} />
             </div>
           );

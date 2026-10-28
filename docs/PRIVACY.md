@@ -32,6 +32,9 @@
   each ad request, so reports can tell search, social and direct visits apart,
   and reports once per ad how long it was in view. Neither uses cookies or
   device storage.
+- Pop-up and pop-under placements store nothing on the device. Their
+  per-visitor limits are counted on the server against the same hashed IP
+  address used for invalid-traffic checks, per site, and expire within a day.
 - Without consent, ads are contextual: they are chosen from the page, placement
   and site category only.
 - It does not try to bypass consent decisions, browser privacy protections or ad

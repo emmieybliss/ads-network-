@@ -9,16 +9,16 @@ import type { PoolClient } from 'pg';
  */
 export type AccountKind =
   | 'cash_clearing' | 'advertiser_wallet' | 'campaign_reserve' | 'publisher_pending' | 'publisher_available'
-  | 'publisher_payout_processing' | 'platform_revenue' | 'platform_fees' | 'adjustments' | 'guarantee_expense';
+  | 'publisher_payout_processing' | 'platform_revenue' | 'platform_fees' | 'adjustments' | 'guarantee_expense' | 'partner_payable';
 
 export type TxnType =
   | 'payment' | 'campaign_reserve' | 'campaign_release' | 'ad_charge' | 'charge_reversal' | 'earnings_finalize'
-  | 'payout_approve' | 'payout_paid' | 'payout_failed' | 'refund' | 'adjustment' | 'guarantee_topup';
+  | 'payout_approve' | 'payout_paid' | 'payout_failed' | 'refund' | 'adjustment' | 'guarantee_topup' | 'partner_charge';
 
 export interface AccountRef { kind: AccountKind; orgId?: string | null; campaignId?: string | null }
 
 /** Accounts whose natural balance is a credit (liabilities, revenue, equity). Their displayed balance is the negated sum. */
-const CREDIT_NORMAL = new Set<AccountKind>(['advertiser_wallet', 'campaign_reserve', 'publisher_pending', 'publisher_available', 'publisher_payout_processing', 'platform_revenue', 'platform_fees', 'adjustments']);
+const CREDIT_NORMAL = new Set<AccountKind>(['advertiser_wallet', 'campaign_reserve', 'publisher_pending', 'publisher_available', 'publisher_payout_processing', 'platform_revenue', 'platform_fees', 'adjustments', 'partner_payable']);
 
 export interface Posting {
   type: TxnType;

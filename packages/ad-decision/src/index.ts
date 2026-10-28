@@ -18,7 +18,7 @@ export interface Targeting {
   requirePersonalized: boolean;
 }
 
-export interface CreativeCandidate { id: string; format: 'image' | 'text' | 'native'; width: number | null; height: number | null }
+export interface CreativeCandidate { id: string; format: 'image' | 'text' | 'native' | 'pop'; width: number | null; height: number | null }
 
 export interface CampaignCandidate {
   id: string;
@@ -140,8 +140,8 @@ export function meetsFloor(c: Pick<CampaignCandidate, 'pricingModel' | 'rateMicr
 
 function creativeFits(cr: CreativeCandidate, ctx: RequestContext): boolean {
   if (!ctx.unitFormats.includes(cr.format) || !ctx.siteAllowedFormats.includes(cr.format)) return false;
-  // Text and native ads lay themselves out in the slot; only image banners need matching dimensions.
-  if (cr.format === 'text' || cr.format === 'native') return true;
+  // Text and native ads lay themselves out in the slot, and a pop is a whole page; only image banners need matching dimensions.
+  if (cr.format === 'text' || cr.format === 'native' || cr.format === 'pop') return true;
   if (!cr.width || !cr.height) return false;
   if (ctx.unitWidth && ctx.unitHeight) {
     if (cr.width === ctx.unitWidth && cr.height === ctx.unitHeight) return true;

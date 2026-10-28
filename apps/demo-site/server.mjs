@@ -3,7 +3,8 @@
  *
  * Serves one fictional article page with BlissNova placements, using the
  * same snippet a real publisher pastes, and /consent-test, which shows how
- * the tag reacts to consent signals from a stand-in consent tool. It has no dependencies and must not
+ * the tag reacts to consent signals from a stand-in consent tool, and /pop-test, which
+ * shows a pop-under placement. It has no dependencies and must not
  * be deployed publicly: it exists only to show ad delivery end to end on
  * your own machine.
  *
@@ -96,6 +97,7 @@ ${LONG.map((t) => `    <p>${esc(t)}</p>`).join('\n')}
     ${n === 2 ? `<script async src="${esc(apiUrl)}/sdk/ads.js" data-site-key="${esc(siteKey)}" data-auto="1"></script>` : ''}
 `}
     <p>Other placement types: a <strong>sticky anchor</strong> at the bottom of the screen (close it with ×), a <strong>side rail</strong> on the right on wide screens, and an <strong>interstitial</strong> that appears when you follow the link below to the next article. The interstitial shows at most once every 10 minutes in a tab.</p>
+    <p>Pop-ups and pop-unders are on their own page, so they do not get in the way here: <a href="/pop-test">see the pop-under demo</a>.</p>
     <p><a href="${ARTICLES[ARTICLES[n].next].path}" id="next-article">Read the next article: ${esc(ARTICLES[ARTICLES[n].next].title)}</a></p>
     <p><a href="${esc(webUrl)}/publisher">Open the publisher dashboard</a> · <a href="${esc(webUrl)}/advertiser">Open the advertiser dashboard</a></p>
   </article>
@@ -234,6 +236,49 @@ ${kind !== 'none' ? `<script>\n${cmpScript(kind)}\n</script>` : ''}
 </body>
 </html>`;
 
+const popPage = () => `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pop-under test (local demo publisher)</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fbfaf7; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #b45309; --card: #fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --accent: #f59e0b; --card: #292524; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, sans-serif; }
+  .banner { background: #fef3c7; color: #78350f; font-size: 13px; padding: 8px 16px; text-align: center; }
+  main { max-width: 760px; margin: 24px auto; padding: 0 16px; }
+  h1 { font: 600 26px/1.2 Georgia, serif; margin: 0 0 6px; }
+  .muted { color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 16px 0; }
+  .card ul { margin: 6px 0 0; padding-left: 20px; }
+  button { font: 600 15px system-ui, sans-serif; padding: 10px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--fg); color: var(--bg); cursor: pointer; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="banner">Local demo publisher website. Fictional content for testing ad delivery. Not a real publication.</div>
+<main>
+  <h1>Pop-under test</h1>
+  <p class="muted">This page has a pop-under placement. Nothing opens when the page loads. Click anywhere on the page (the button is just a convenient target) and the demo advertiser's landing page opens in a new tab, once.</p>
+  <p><button type="button" id="pop-target">Click anywhere, for example here</button></p>
+  <div class="card">
+    <strong>What to expect</strong>
+    <ul>
+      <li>At most one pop per page view, and only from a real click. Clicks on ads and form fields never open one.</li>
+      <li>The demo placement allows 3 pops per visitor per day, at least 15 minutes apart. Reload within 15 minutes and nothing opens.</li>
+      <li>Most current browsers keep the new tab in front, so a pop-under often looks like a pop-up.</li>
+      <li>If your browser blocks the new tab, nothing is counted. Only pops that actually opened show up in the reports.</li>
+      <li>An admin can turn pops off for the whole network in Settings, then this page opens nothing.</li>
+    </ul>
+  </div>
+  <p class="muted"><a href="/">Back to the demo article</a></p>
+</main>
+${slot('demo-popunder', '', ' data-bn-display="popunder"')}
+</body>
+</html>`;
+
 createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   if (url.pathname === '/healthz') {
@@ -246,7 +291,8 @@ createServer((req, res) => {
     return;
   }
   const article = ARTICLE_BY_PATH[url.pathname];
-  if (!article && !consentKind) {
+  const pop = url.pathname === '/pop-test';
+  if (!article && !consentKind && !pop) {
     res.writeHead(404, { 'content-type': 'text/plain' }).end('Not found');
     return;
   }
@@ -255,5 +301,5 @@ createServer((req, res) => {
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'strict-origin-when-cross-origin',
-  }).end(consentKind ? consentPage(consentKind) : page(article));
+  }).end(pop ? popPage() : consentKind ? consentPage(consentKind) : page(article));
 }).listen(port, () => console.log(`Demo publisher site on http://localhost:${port} (also http://demo-publisher.localhost:${port})`));
