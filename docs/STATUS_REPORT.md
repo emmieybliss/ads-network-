@@ -127,6 +127,7 @@ The tests cover:
 - **No GeoIP database.** Country targeting needs a CDN header.
 - **Reports refresh every minute**, not instantly.
 - **Organization approval is separate from site approval.** A new publisher's organization shows "Organization pending" until an admin approves it. Site serving does not wait for this; confirm that this is the policy you want.
+- **Partner networks run on a simulator only.** Real MGID, Revcontent, Taboola and Outbrain (Teads) adapters are not built yet; each needs a signed partner account and API access first.
 - **No third-party security review** has been done.
 - **Placeholder content.** Legal pages and FAQ in Admin, Content are placeholders, and need your real company details.
 
@@ -135,6 +136,7 @@ The tests cover:
 - A domain name and TLS certificate, for example from Let's Encrypt.
 - A server or hosting for PostgreSQL 16, Redis 7 and the containers, plus backups.
 - An SMTP provider, for verification and reset emails.
+- For partner networks: an agency or advertiser account and API access with each partner you want (MGID, Revcontent, Taboola, Outbrain/Teads). Until then only the development simulator is connected.
 - A payment provider account if you want card payments (Stripe is supported): `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`. Without one, funding is by bank transfer confirmed by finance staff.
 - Optionally, a CDN that supplies a country header.
 - Your real company details, legal pages, support email and payout process.

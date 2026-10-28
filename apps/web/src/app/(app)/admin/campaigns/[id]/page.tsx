@@ -6,6 +6,7 @@ import { ADMIN_CAMPAIGN_TRANSITIONS } from '@blissnova/shared';
 import { Alert, Async, Badge, Card, CardHeader, DefinitionList, Field, Input, PageHeader, StatusBadge } from '@/components/ui';
 import { NotesPanel, ReasonAction, SimpleTable } from '@/components/admin/kit';
 import { CreativePreview } from '@/components/advertiser/CreativeEditor';
+import { PartnerStatusList, type PartnerCampaign } from '@/components/partners/PartnerPanels';
 import { useApi } from '@/lib/hooks';
 import { useSession } from '@/lib/session';
 import { patch } from '@/lib/api';
@@ -15,6 +16,7 @@ export default function AdminCampaign() {
   const { id } = useParams<{ id: string }>();
   const { canAdmin } = useSession();
   const res = useApi<{ data: any }>(`/admin/campaigns/${id}`);
+  const partners = useApi<{ data: PartnerCampaign[] }>(`/admin/campaigns/${id}/partners`);
   const [limits, setLimits] = useState<{ lifetimeBudget: string; dailyBudget: string; priorityBoost: string } | null>(null);
   return (
     <Async res={res}>
@@ -81,6 +83,14 @@ export default function AdminCampaign() {
                   { key: 'i', header: 'Invalid', align: 'right', cell: (r: any) => formatNumber(r.invalidImpressions) }, { key: 'c', header: 'CTR', align: 'right', cell: (r: any) => formatPercent(r.ctr) },
                 ]} />
               </Card>
+              {partners.data && partners.data.data.length > 0 && (
+                <Card className="lg:col-span-2">
+                  <CardHeader title="Partner networks" description="Where this campaign also runs, what the partner charged and what BlissNova billed." />
+                  <PartnerStatusList partners={partners.data.data} currency={c.currency} actions={(p) => override && p.status !== 'stopped' && (p.adminHold
+                    ? <ReasonAction label="Release" title={`Release on ${p.networkName}`} path={`/admin/partner-campaigns/${p.id}/release`} onDone={partners.reload} />
+                    : <ReasonAction label="Hold" title={`Hold on ${p.networkName}`} path={`/admin/partner-campaigns/${p.id}/hold`} onDone={partners.reload} description="Pauses delivery on this partner until released, whatever the advertiser chooses." />)} />
+                </Card>
+              )}
               <Card>
                 <CardHeader title="History" />
                 <SimpleTable rows={c.history} rowKey={(r: any) => r.created_at + r.action} columns={[

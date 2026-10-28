@@ -4,7 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   BarChart3, Bell, Building2, ChevronsUpDown, CreditCard, FileText, Gauge, Globe2, KeyRound, LayoutDashboard, LifeBuoy, LogOut, Megaphone, Menu,
-  ScrollText, Settings, Shield, ShieldAlert, SlidersHorizontal, Ticket, Users, Wallet, X, Image as ImageIcon, Landmark, Activity, Search,
+  ScrollText, Settings, Shield, ShieldAlert, SlidersHorizontal, Ticket, Users, Wallet, X, Image as ImageIcon, Landmark, Activity, Search, Network,
 } from 'lucide-react';
 import { Badge, Loading, Logo, cn } from './ui';
 import { useSession, type OrgSummary } from '@/lib/session';
@@ -43,6 +43,7 @@ const NAV: Record<Exclude<Portal, 'account'>, Array<{ section?: string; items: N
       { href: '/admin/domains', label: 'Domains', icon: Search, perm: 'admin:orgs:read' },
       { href: '/admin/campaigns', label: 'Campaigns', icon: Megaphone, perm: 'admin:campaigns:read' },
       { href: '/admin/creatives', label: 'Creative review', icon: ImageIcon, perm: 'admin:creatives:review' },
+      { href: '/admin/partners', label: 'Partner networks', icon: Network, perm: 'admin:campaigns:read' },
     ] },
     { section: 'Money', items: [
       { href: '/admin/finance', label: 'Finance', icon: Landmark, perm: 'admin:finance:read' },

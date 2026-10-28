@@ -61,6 +61,15 @@ deployment.
 - [x] Automatic in-article placement (per-site settings, tag inserts slots between paragraphs)
 - [x] Page RPM and per-page earnings reports (page views per page view id, page path on events, Pages tab, CSV export)
 
+## Partner networks
+- [x] Advertisers let part of a CPC campaign's budget run on partner native networks, with a share per network
+- [x] Admin Partner networks page: connection state, on/off, markup, partner minimum CPC, connection test, 30-day totals, partner campaign list
+- [x] Worker sync through adapters: create on go-live, send approved native ads, read partner ad review, pull delivery and cost, push caps, pause and stop
+- [x] `partner_charge` ledger postings at cost plus markup, never past the campaign budget; reconciliation check 10
+- [x] Staff hold and release per partner campaign; "By source" reports for advertisers and staff
+- [x] Development simulated partner, refused in production
+- [ ] Real adapters for MGID, Revcontent, Taboola and Outbrain (Teads): need signed partner accounts and API access
+
 ## Verified
 Runs on 27 Oct 2026, in the build container with local PostgreSQL 16 and Redis 7,
 not on the owner's PC:

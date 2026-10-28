@@ -310,6 +310,7 @@ async function main() {
       { name: `In-article native campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '3.00', lifetime: '150', daily: '15', unit: 'demo-auto', format: 'native' as const },
       { name: `In-article text campaign ${DEMO_TAG}`, model: 'cpc' as const, rate: '0.15', lifetime: '150', daily: '15', unit: 'demo-auto', format: 'text' as const },
       { name: `Interstitial campaign ${DEMO_TAG}`, model: 'cpm' as const, rate: '5.00', lifetime: '150', daily: '15', unit: 'demo-interstitial', format: 'native' as const },
+      { name: `Native CPC campaign ${DEMO_TAG}`, model: 'cpc' as const, rate: '0.40', lifetime: '250', daily: '40', unit: 'demo-native', format: 'native' as const },
     ] as Array<{ name: string; model: 'cpm' | 'cpc'; rate: string; lifetime: string; daily: string; unit: string; format: 'image' | 'text' | 'native'; rail?: boolean }>;
     for (const s of specs) {
       const camp = (await c.query<{ id: string }>(
@@ -339,6 +340,15 @@ async function main() {
       )).rows[0]!.id;
       await c.query(`INSERT INTO creative_versions (creative_id, version, snapshot, created_by) VALUES ($1, 1, $2, $3)`, [cr, JSON.stringify(snapshot), advUser]);
       campaigns.push({ id: camp, name: s.name, creativeId: cr, unit: s.unit, pricing: s.model, rate: toMicros(s.rate) });
+    }
+
+    // --- partner networks ------------------------------------------------------
+    // With the development partner simulator on, the native CPC campaign also runs
+    // on the simulated partner; the scheduled sync starts it within a minute.
+    if (/^(true|1)$/.test(process.env.ENABLE_DEV_PARTNER_SIMULATOR ?? '') && process.env.NODE_ENV !== 'production') {
+      await c.query(`UPDATE partner_networks SET enabled = true, updated_at = now() WHERE id = 'simulated'`);
+      const nativeCpc = campaigns.find((x) => x.name.startsWith('Native CPC campaign'))!;
+      await c.query(`INSERT INTO partner_campaigns (campaign_id, network_id, budget_share_bps, markup_bps, status_reason) SELECT $1, 'simulated', 4000, markup_bps, 'Starts on the partner network once the campaign is live.' FROM partner_networks WHERE id = 'simulated'`, [nativeCpc.id]);
     }
 
     // --- generated sample statistics ------------------------------------------
