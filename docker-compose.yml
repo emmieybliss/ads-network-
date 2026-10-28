@@ -28,6 +28,7 @@ x-app-env: &app-env
   EVENT_PROCESSING: queue
   ENABLE_DEV_PAYMENTS: "true"
   ENABLE_DEV_VERIFICATION_SIMULATOR: "true"
+  ENABLE_DEV_PARTNER_SIMULATOR: "true"
   LOG_LEVEL: info
 
 services:

@@ -43,6 +43,12 @@ const envSchema = z.object({
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   /** Enables the development-only simulated payment provider. Never enable in production. */
   ENABLE_DEV_PAYMENTS: bool(false),
+  /**
+   * Development-only simulated partner network. It pretends to be an outside
+   * network (like MGID or Taboola) so partner distribution can be tried end to
+   * end without a signed partner account. Startup refuses it in production.
+   */
+  ENABLE_DEV_PARTNER_SIMULATOR: bool(false),
   /** inline: process tracking events in the request (tests/small installs); queue: hand off to the worker. */
   EVENT_PROCESSING: z.enum(['inline', 'queue']).default('queue'),
   /** Allow http:// (not just https://) when fetching verification files. Development only. */
@@ -89,6 +95,7 @@ const LOCAL_URL = /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\])/i;
 export function productionProblems(c: z.infer<typeof envSchema>, corsOrigins: string[]): string[] {
   const p: string[] = [];
   if (c.ENABLE_DEV_PAYMENTS) p.push('ENABLE_DEV_PAYMENTS must be false: the simulated payment provider is for local development only');
+  if (c.ENABLE_DEV_PARTNER_SIMULATOR) p.push('ENABLE_DEV_PARTNER_SIMULATOR must be false: the simulated partner network is for local development only');
   if (c.ENABLE_DEV_VERIFICATION_SIMULATOR) p.push('ENABLE_DEV_VERIFICATION_SIMULATOR must be false: simulated domain verification is for local development only');
   if (c.VERIFICATION_ALLOW_HTTP || c.VERIFICATION_PRIVATE_HOST_ALLOWLIST) p.push('VERIFICATION_ALLOW_HTTP and VERIFICATION_PRIVATE_HOST_ALLOWLIST are development overrides and must be unset');
   if (c.SEED_DEMO_DATA) p.push('SEED_DEMO_DATA must be false');

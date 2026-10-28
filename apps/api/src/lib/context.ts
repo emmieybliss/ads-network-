@@ -8,6 +8,7 @@ import type { Mailer } from './mailer';
 import type { Storage } from './storage';
 import type { Queues } from './queue';
 import type { PaymentProviderRegistry } from '../services/payments/registry';
+import type { PartnerRegistry } from '../services/partners';
 import type { CheckDeps } from '../services/verification';
 
 export interface AppContext {
@@ -20,6 +21,7 @@ export interface AppContext {
   queues: Queues;
   tokens: TokenKeyring;
   payments: PaymentProviderRegistry;
+  partners: PartnerRegistry;
   /** DNS resolver and HTTP fetcher used by domain verification. Empty means the real ones; tests substitute fakes. */
   verifier: CheckDeps;
   log: FastifyBaseLogger;

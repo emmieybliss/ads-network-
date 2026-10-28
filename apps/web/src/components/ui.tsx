@@ -99,6 +99,7 @@ const STATUS_TONES: Record<string, Tone> = {
   active: 'success', approved: 'success', verified: 'success', paid: 'success', succeeded: 'success', resolved: 'success', valid: 'success', completed: 'neutral', filled: 'success',
   pending: 'warning', pending_approval: 'warning', pending_review: 'warning', submitted: 'warning', under_review: 'info', verification_pending: 'warning', requested: 'warning', processing: 'info',
   scheduled: 'info', open: 'info', waiting_on_staff: 'warning', waiting_on_customer: 'info', investigating: 'info', appealed: 'warning', draft: 'neutral', paused: 'neutral', archived: 'neutral', closed: 'neutral', cancelled: 'neutral', superseded: 'neutral',
+  in_review: 'info', error: 'danger', stopped: 'neutral', removed: 'neutral',
   rejected: 'danger', suspended: 'danger', failed: 'danger', invalid: 'danger', confirmed: 'danger', refunded: 'neutral', expired: 'neutral', revoked: 'danger', void: 'neutral',
 };
 

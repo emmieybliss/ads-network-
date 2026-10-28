@@ -5,8 +5,9 @@ import { withTransaction } from '@blissnova/database';
 import { formatMoney, type PlatformSettings } from '@blissnova/shared';
 import { aggregateDay, allocateFlatRate } from '@blissnova/api/services/events';
 import { dayInZone, invalidateServingCache } from '@blissnova/api/services/serving';
+import { syncPartnerCampaigns, type PartnerRegistry } from '@blissnova/api/services/partners';
 
-export interface JobCtx { db: Pool; redis: Redis; settings: () => Promise<PlatformSettings>; log: { info: (o: object, m?: string) => void; warn: (o: object, m?: string) => void; error: (o: object, m?: string) => void }; notify: (orgId: string, n: { type: string; title: string; body?: string; link?: string; template?: string; vars?: Record<string, string | number | undefined>; roles?: string[] }) => Promise<void> }
+export interface JobCtx { db: Pool; redis: Redis; settings: () => Promise<PlatformSettings>; partners: PartnerRegistry; publicUrl: (storageKey: string) => string; log: { info: (o: object, m?: string) => void; warn: (o: object, m?: string) => void; error: (o: object, m?: string) => void }; notify: (orgId: string, n: { type: string; title: string; body?: string; link?: string; template?: string; vars?: Record<string, string | number | undefined>; roles?: string[] }) => Promise<void> }
 
 interface StatementAccum { currency: string; lines: Array<{ description: string; amountMicros: string }>; total: bigint }
 
@@ -47,6 +48,11 @@ export async function settleAll(ctx: JobCtx) {
   for (const c of camps) n += (await withTransaction(ctx.db, (cl) => settleCampaign(cl, c.campaign_id, s.publishers.earningsHoldDays))).length;
   const finalized = await withTransaction(ctx.db, (cl) => finalizeEarnings(cl));
   return { settlements: n, finalized };
+}
+
+/** Push live campaigns to partner networks and bring their delivery and cost back. */
+export async function syncPartners(ctx: JobCtx) {
+  return syncPartnerCampaigns({ db: ctx.db, partners: ctx.partners, publicUrl: ctx.publicUrl, log: ctx.log });
 }
 
 /** Keep the serve-time spend estimates aligned with actual billed spend. */
