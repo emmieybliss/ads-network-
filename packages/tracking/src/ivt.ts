@@ -17,6 +17,9 @@ export interface IvtSignals {
   siteInactive?: boolean;
   sequenceViolation?: boolean;   // e.g. viewable/click without a render
   trackingDisabled?: boolean;
+  datacenter?: boolean;          // request came from a cloud or hosting network
+  automation?: boolean;          // definite automation (webdriver, automation globals, synthetic click)
+  roboticClicks?: boolean;       // clicks from one visitor on a machine-regular cadence
   // soft signals
   ipRequestsPerMinute?: number;
   maxRequestsPerMinute?: number;
@@ -26,6 +29,13 @@ export interface IvtSignals {
   maxClicksPerVisitorPerHour?: number;
   missingReferrer?: boolean;
   tokenAgeMs?: number;            // time since token issued
+  ipClicksLastHour?: number;
+  maxClicksPerIpPerHour?: number;
+  /** Weak automation evidence from the page and the request headers (0-100). */
+  automationScore?: number;
+  automationSignals?: string[];
+  /** A click on an ad that never reported being viewable. */
+  clickWithoutViewable?: boolean;
 }
 
 export interface IvtResult { valid: boolean; reason: InvalidReason | null; score: number; signals: string[] }
@@ -39,6 +49,9 @@ const HARD: Array<[keyof IvtSignals, InvalidReason]> = [
   ['siteInactive', 'site_inactive'],
   ['domainMismatch', 'domain_mismatch'],
   ['crawler', 'crawler'],
+  ['datacenter', 'datacenter'],
+  ['automation', 'automation'],
+  ['roboticClicks', 'click_pattern'],
   ['sequenceViolation', 'sequence'],
 ];
 
@@ -67,6 +80,20 @@ export function assessEvent(s: IvtSignals, threshold: number): IvtResult {
     score += 50;
     signals.push(`click_burst:${s.visitorClicksLastHour}/h`);
     dominant = 'click_burst';
+  }
+  if (s.ipClicksLastHour !== undefined && s.maxClicksPerIpPerHour && s.ipClicksLastHour > s.maxClicksPerIpPerHour) {
+    score += 50;
+    signals.push(`ip_click_burst:${s.ipClicksLastHour}/h`);
+    dominant = 'click_burst';
+  }
+  if (s.automationScore) {
+    score += s.automationScore;
+    signals.push(...(s.automationSignals ?? []));
+    if (s.automationScore >= 30) dominant = 'automation';
+  }
+  if (s.clickWithoutViewable) {
+    score += 15;
+    signals.push('click_not_viewable');
   }
   if (s.missingReferrer) {
     score += 10;

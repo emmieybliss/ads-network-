@@ -1,0 +1,11 @@
+DROP INDEX event_exclusions_pub_idx;
+ALTER TABLE event_exclusions DROP CONSTRAINT event_exclusions_actor_check;
+DELETE FROM event_exclusions WHERE actor_id IS NULL;
+ALTER TABLE event_exclusions DROP COLUMN automatic, DROP COLUMN publisher_org_id, DROP COLUMN publisher_micros;
+ALTER TABLE event_exclusions ALTER COLUMN actor_id SET NOT NULL;
+DROP INDEX fraud_cases_pub_idx;
+ALTER TABLE fraud_cases DROP COLUMN source, DROP COLUMN kind, DROP COLUMN publisher_org_id, DROP COLUMN criteria, DROP COLUMN estimated_micros, DROP COLUMN dedup_key;
+DROP INDEX ad_events_pub_time_idx;
+DROP INDEX ad_events_ip_time_idx;
+DROP INDEX ad_events_visitor_time_idx;
+ALTER TABLE ad_events DROP COLUMN client_flags, DROP COLUMN ivt_signals;

@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import { recordCharge } from '@blissnova/billing';
 import { applyBps, type PlatformSettings } from '@blissnova/shared';
-import { assessEvent, hostAuthorized, isKnownCrawler, normalizeHost, verifyDeliveryToken, type DeliveryClaims } from '@blissnova/tracking';
+import { assessAutomation, assessEvent, classifyIp, hostAuthorized, isKnownCrawler, normalizeHost, roboticCadence, verifyDeliveryToken, type DeliveryClaims, type IpNetwork } from '@blissnova/tracking';
 import type { AppContext } from '../lib/context';
 import { withTransaction } from '@blissnova/database';
 import { dayInZone } from './serving';
@@ -28,6 +28,14 @@ export interface AdmittedEvent {
   renderAt: number | null;
   /** inview only: milliseconds the creative was in view. */
   inViewMs?: number;
+  /** Cloud/hosting network check of the raw IP, done at admission (the IP itself is never stored). */
+  network?: IpNetwork;
+  /** The ad tag's browser checks (CLIENT_FLAG bitmask), when it sent them. */
+  clientFlags?: number | null;
+  /** Request headers a real browser sends. */
+  headers?: { acceptLanguage: boolean; secFetchSite: boolean };
+  /** click only: the ad reported being viewable before the click. */
+  viewed?: boolean;
 }
 export type AdmitResult = { accepted: true; event: AdmittedEvent } | { accepted: false; reason: 'token_invalid' | 'disabled' | 'retry' };
 
@@ -37,7 +45,9 @@ const CLICK_GRACE_MS = 24 * 3600 * 1000;
 // Time in view is reported when the visitor leaves, which can be long after the token expired.
 const INVIEW_GRACE_MS = 4 * 3600 * 1000;
 
-export async function admitEvent(ctx: AppContext, input: { clientEventId: string; type: TrackedType; token: string; inViewMs?: number }, meta: { ipHash: string; ua: string; origin: string | null; referrer: string | null }, s: PlatformSettings): Promise<AdmitResult> {
+export interface EventMeta { ipHash: string; ua: string; origin: string | null; referrer: string | null; ip?: string; acceptLanguage?: string | null; secFetchSite?: string | null }
+
+export async function admitEvent(ctx: AppContext, input: { clientEventId: string; type: TrackedType; token: string; inViewMs?: number; flags?: number }, meta: EventMeta, s: PlatformSettings): Promise<AdmitResult> {
   if (!s.tracking.enabled) return { accepted: false, reason: 'disabled' };
   if (input.type === 'render' && !s.tracking.impressions) return { accepted: false, reason: 'disabled' };
   if (input.type === 'click' && !s.tracking.clicks) return { accepted: false, reason: 'disabled' };
@@ -56,10 +66,14 @@ export async function admitEvent(ctx: AppContext, input: { clientEventId: string
   const now = Date.now();
   let renderAt: number | null = null;
   if (input.type === 'render' && first === 'OK') await ctx.redis.set(`evr:${claims.d}`, String(now), 'EX', window);
+  if (input.type === 'viewable' && first === 'OK') await ctx.redis.set(`evv:${claims.d}`, '1', 'EX', window);
+  let viewed: boolean | undefined;
   if (input.type !== 'render') {
     const r = await ctx.redis.get(`evr:${claims.d}`);
     renderAt = r ? Number(r) : null;
+    if (input.type === 'click') viewed = (await ctx.redis.get(`evv:${claims.d}`)) === '1';
   }
+  const network = meta.ip ? classifyIp(meta.ip, { extra: s.ivt.extraDatacenterRanges, trusted: s.ivt.trustedRanges }) : 'other';
   const host = (h: string | null) => {
     if (!h) return null;
     try { return normalizeHost(new URL(h).hostname); } catch { return ''; }
@@ -72,6 +86,10 @@ export async function admitEvent(ctx: AppContext, input: { clientEventId: string
       flags: { tokenExpired: !v.ok && v.reason === 'token_expired', duplicate: first !== 'OK', noRenderReceipt: input.type !== 'render' && renderAt === null },
       renderAt,
       ...(input.type === 'inview' ? { inViewMs: Math.max(0, Math.min(3_600_000, Math.round(input.inViewMs ?? 0))) } : {}),
+      network,
+      clientFlags: input.flags ?? null,
+      headers: { acceptLanguage: !!meta.acceptLanguage, secFetchSite: !!meta.secFetchSite },
+      ...(viewed !== undefined ? { viewed } : {}),
     },
   };
 }
@@ -93,12 +111,22 @@ export async function processAdmittedEvent(ctx: Pick<AppContext, 'db' | 'redis'>
     renderStatus = r?.status ?? null;
   }
   let clicksLastHour: number | undefined;
+  let ipClicksLastHour: number | undefined;
+  let robotic = false;
   if (e.type === 'click') {
     const hour = Math.floor(e.receivedAt / 3_600_000);
     const k = `clk:${c.v ?? e.ipHash}:${hour}`;
-    const res = await ctx.redis.multi().incr(k).expire(k, 3700).exec();
+    const ki = `clkip:${e.ipHash}:${hour}`;
+    // Recent click times per visitor, for the cadence check.
+    const kt = `clkt:${c.v ?? e.ipHash}`;
+    const res = await ctx.redis.multi().incr(k).expire(k, 3700).incr(ki).expire(ki, 3700).lpush(kt, String(e.receivedAt)).ltrim(kt, 0, 7).expire(kt, 3600).lrange(kt, 0, 7).exec();
     clicksLastHour = Number(res?.[0]?.[1] ?? 0);
+    ipClicksLastHour = Number(res?.[2]?.[1] ?? 0);
+    const times = ((res?.[7]?.[1] as string[] | undefined) ?? []).map(Number).filter((n) => n > e.receivedAt - 3_600_000);
+    robotic = roboticCadence(times).robotic;
   }
+  // Events from older tags carry no browser checks; they are judged on headers alone.
+  const automation = s.ivt.automationSignals ? assessAutomation(e.clientFlags, e.headers ? { ua: e.ua, acceptLanguage: e.headers.acceptLanguage ? 'y' : null, secFetchSite: e.headers.secFetchSite ? 'y' : null } : null) : null;
   const hostOk = (h: string) => hostAuthorized(h, site.domain, site.allowed_domains, site.verification_scope === 'zone');
   const domainMismatch = (e.originHost !== null && e.originHost !== '' && !hostOk(e.originHost)) || (e.type === 'click' && e.referrerHost !== null && e.referrerHost !== '' && !hostOk(e.referrerHost)) || !hostOk(c.ph);
   const result = assessEvent({
@@ -107,6 +135,9 @@ export async function processAdmittedEvent(ctx: Pick<AppContext, 'db' | 'redis'>
     siteInactive: site.status !== 'approved' || site.org_status !== 'approved',
     domainMismatch,
     crawler: isKnownCrawler(e.ua),
+    datacenter: s.ivt.filterDatacenterTraffic && e.network === 'datacenter',
+    automation: automation?.definite ?? false,
+    roboticClicks: robotic,
     sequenceViolation: e.type !== 'render' && renderStatus !== 'valid',
     ipRequestsPerMinute: ipPerMinute,
     maxRequestsPerMinute: s.ivt.maxRequestsPerMinutePerIp,
@@ -116,15 +147,22 @@ export async function processAdmittedEvent(ctx: Pick<AppContext, 'db' | 'redis'>
     maxClicksPerVisitorPerHour: s.ivt.maxClicksPerVisitorPerHour,
     missingReferrer: e.type === 'click' && !e.referrerHost,
     tokenAgeMs: e.type === 'render' ? e.receivedAt - c.iat : undefined,
+    ipClicksLastHour,
+    maxClicksPerIpPerHour: s.ivt.maxClicksPerIpPerHour,
+    automationScore: automation && !automation.definite ? automation.score : 0,
+    automationSignals: automation && !automation.definite ? automation.signals : [],
+    clickWithoutViewable: e.type === 'click' && e.viewed === false,
   }, s.ivt.scoreThreshold);
+  // Keep the full picture for investigation, including definite signals that short-circuit scoring.
+  const signals = [...new Set([...result.signals, ...(automation?.definite ? automation.signals : []), ...(e.network === 'datacenter' ? ['datacenter_ip'] : [])])].slice(0, 12);
 
   const billableType = (c.pm === 'cpm' && e.type === 'render') || (c.pm === 'cpc' && e.type === 'click');
   return withTransaction(ctx.db as never, async (client: PoolClient) => {
     const base = [c.d, e.type, result.valid ? 'valid' : 'invalid', result.reason, result.score, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, e.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, e.receivedAt, e.clientEventId, c.pp ?? null,
-      c.os ?? 'other', c.br ?? 'other', c.src ?? 'unknown', e.type === 'inview' ? (e.inViewMs ?? 0) : null];
+      c.os ?? 'other', c.br ?? 'other', c.src ?? 'unknown', e.type === 'inview' ? (e.inViewMs ?? 0) : null, signals.length ? signals : null, e.clientFlags ?? null];
     const ins = await client.query<{ id: string }>(
-      `INSERT INTO ad_events (event_key, delivery_id, type, status, invalid_reason, ivt_score, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, client_event_id, page_path, os, browser, source, in_view_ms)
-       VALUES ($26, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, to_timestamp($19 / 1000.0), $20, $21, $22, $23, $24, $25)
+      `INSERT INTO ad_events (event_key, delivery_id, type, status, invalid_reason, ivt_score, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, client_event_id, page_path, os, browser, source, in_view_ms, ivt_signals, client_flags)
+       VALUES ($28, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, to_timestamp($19 / 1000.0), $20, $21, $22, $23, $24, $25, $26, $27)
        ON CONFLICT DO NOTHING RETURNING id`,
       [...base, e.flags.duplicate ? null : `${c.d}:${e.type}`]);
     if (!ins.rows[0]) {
@@ -134,8 +172,8 @@ export async function processAdmittedEvent(ctx: Pick<AppContext, 'db' | 'redis'>
       base[2] = 'invalid';
       base[3] = 'duplicate';
       await client.query(
-        `INSERT INTO ad_events (delivery_id, type, status, invalid_reason, ivt_score, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, client_event_id, page_path, os, browser, source, in_view_ms)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, to_timestamp($19 / 1000.0), $20, $21, $22, $23, $24, $25) ON CONFLICT DO NOTHING`, base);
+        `INSERT INTO ad_events (delivery_id, type, status, invalid_reason, ivt_score, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, client_event_id, page_path, os, browser, source, in_view_ms, ivt_signals, client_flags)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, to_timestamp($19 / 1000.0), $20, $21, $22, $23, $24, $25, $26, $27) ON CONFLICT DO NOTHING`, base);
       return { status: 'invalid' as const, reason: 'duplicate' };
     }
     let billable = false;

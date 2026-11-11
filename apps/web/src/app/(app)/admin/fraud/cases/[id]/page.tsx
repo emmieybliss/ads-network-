@@ -9,7 +9,7 @@ import { errorMessage, patch, post } from '@/lib/api';
 import { formatDate, formatMicros, humanize, timeAgo } from '@/lib/format';
 
 function Exclusion({ c, onDone }: { c: any; onDone: () => void }) {
-  const key = c.subject_type === 'site' ? 'siteId' : c.subject_type === 'campaign' ? 'campaignId' : c.subject_type === 'unit' ? 'unitId' : null;
+  const key = c.subject_type === 'site' ? 'siteId' : c.subject_type === 'campaign' ? 'campaignId' : c.subject_type === 'unit' ? 'unitId' : c.subject_type === 'organization' ? 'publisherOrgId' : null;
   const [f, setF] = useState({ from: '', to: '', types: ['render', 'viewable', 'click'] as string[] });
   const [preview, setPreview] = useState<{ matched: number; billable: number; billableMicros: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +50,7 @@ export default function FraudCase() {
             <div className="space-y-5">
               <Card>
                 <CardHeader title="Case" />
-                <DefinitionList items={[['Severity', <Badge key="s" tone={c.severity === 'high' ? 'danger' : 'warning'}>{c.severity}</Badge>], ['Opened', formatDate(c.created_at, true)], ['Outcome', c.outcome ?? '—'], ['Resolved', c.resolved_at ? formatDate(c.resolved_at) : '—']]} />
+                <DefinitionList items={[['Severity', <Badge key="s" tone={c.severity === 'high' ? 'danger' : 'warning'}>{c.severity}</Badge>], ['Opened', `${formatDate(c.created_at, true)}${c.source === 'auto' ? ' by the automatic check' : ''}`], ['Outcome', c.outcome ?? '—'], ['Resolved', c.resolved_at ? formatDate(c.resolved_at) : '—']]} />
                 {Object.keys(c.signals ?? {}).length > 0 && <pre className="mt-3 overflow-x-auto rounded-lg bg-surface-2 p-3 text-xs">{JSON.stringify(c.signals, null, 2)}</pre>}
                 {manage && !['confirmed', 'dismissed'].includes(c.status) && (
                   <div className="mt-4 space-y-3">
@@ -73,6 +73,13 @@ export default function FraudCase() {
                       <ReasonAction label="Reject appeal" title="Reject the appeal" path="" danger onDone={res.reload} run={(o) => post(`/admin/fraud/cases/${id}/appeal-decision`, { decision: 'rejected', outcome: o })} />
                     </div>
                   )}
+                </Card>
+              )}
+              {manage && c.criteria && ['open', 'investigating'].includes(c.status) && (
+                <Card>
+                  <CardHeader title="Proposed clawback" description="What the automatic check suggests removing from billing for this case." />
+                  <p className="text-sm text-fg-2">About <b>{formatMicros(c.estimated_micros)}</b> of publisher earnings{c.criteria.minScore ? `: events that passed but scored ${c.criteria.minScore} or more` : c.criteria.eventIds ? `: ${c.criteria.eventIds.length} events` : ''}.</p>
+                  <div className="mt-3"><ReasonAction label="Claw back and confirm" title="Claw back and confirm" path="" variant="danger" danger onDone={res.reload} run={(o) => post(`/admin/fraud/cases/${id}/clawback`, { reason: o })} description="At least 10 characters. Shown to the publisher, who can appeal once." /></div>
                 </Card>
               )}
               {manage && <Exclusion c={c} onDone={res.reload} />}

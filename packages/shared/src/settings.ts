@@ -7,6 +7,9 @@ import { DEFAULT_BRAND } from './brand';
  * public projection (see PUBLIC_SETTING_KEYS). Secrets (SMTP passwords,
  * provider keys) are NEVER stored here: they come from environment variables.
  */
+/** IPv4 or IPv6 CIDR range. Checked loosely here; the tracking package parses it exactly. */
+const CIDR_RE = /^(?:\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}|[0-9a-fA-F:]+:[0-9a-fA-F:]*\/\d{1,3})$/;
+
 export const settingsSchema = z.object({
   tracking: z.object({
     enabled: z.boolean().default(true),
@@ -27,6 +30,19 @@ export const settingsSchema = z.object({
     minRenderToClickMs: z.number().int().min(0).max(10000).default(300),
     ctrAlertPercent: z.number().min(0.1).max(100).default(5),
     ctrAlertMinImpressions: z.number().int().min(100).default(1000),
+    maxClicksPerIpPerHour: z.number().int().min(1).max(10000).default(30),
+    /** Mark traffic from cloud and hosting networks invalid (bundled provider list plus extra ranges). */
+    filterDatacenterTraffic: z.boolean().default(true),
+    extraDatacenterRanges: z.array(z.string().trim().regex(CIDR_RE, 'Use CIDR notation, like 203.0.113.0/24')).max(1000).default([]),
+    /** Ranges never treated as data-center traffic, such as a known office VPN. */
+    trustedRanges: z.array(z.string().trim().regex(CIDR_RE, 'Use CIDR notation, like 203.0.113.0/24')).max(200).default([]),
+    /** Use the ad tag's browser automation checks and request header checks. */
+    automationSignals: z.boolean().default(true),
+    /** Reverse earnings still on hold automatically when the sweep (every five minutes) proves traffic invalid. */
+    autoClawback: z.boolean().default(true),
+    clawbackClicksPerVisitorPerDay: z.number().int().min(3).max(1000).default(20),
+    publisherReviewIvtPercent: z.number().min(1).max(100).default(25),
+    publisherReviewMinImpressions: z.number().int().min(50).default(500),
   }).prefault({}),
   frequency: z.object({
     defaultMaxPerVisitorPerDay: z.number().int().min(0).max(1000).default(0),

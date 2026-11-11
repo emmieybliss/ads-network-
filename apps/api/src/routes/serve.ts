@@ -26,7 +26,7 @@ const serveBody = z.object({
   pv: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
 });
 const eventsBody = z.object({
-  events: z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/), type: z.enum(['render', 'viewable', 'inview']), t: z.string().min(20).max(4096), ms: z.number().int().min(0).max(3_600_000).optional() })).min(1).max(50),
+  events: z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/), type: z.enum(['render', 'viewable', 'inview']), t: z.string().min(20).max(4096), ms: z.number().int().min(0).max(3_600_000).optional(), f: z.number().int().min(0).max(255).optional() })).min(1).max(50),
 });
 
 // The built ad tag: SDK_PATH if set, a copy next to a bundled build, or the
@@ -71,11 +71,11 @@ export async function serveRoutes(app: FastifyInstance) {
   app.post('/events', { config: { rateLimit: { bucket: 'events' }, allowDuringMaintenance: true }, schema: { tags: ['ad serving'], body: eventsBody, description: 'Report rendered and viewable impressions, and time in view (inview, with ms). Accepts application/json or text/plain (sendBeacon).' } }, async (req, reply) => {
     const b = bodyOf(req, eventsBody);
     const s = await ctx.settings.get();
-    const meta = { ipHash: req.ipHash, ua: req.headers['user-agent'] ?? '', origin: typeof req.headers.origin === 'string' ? req.headers.origin : null, referrer: typeof req.headers.referer === 'string' ? req.headers.referer : null };
+    const meta = { ...requestFacts(req), origin: typeof req.headers.origin === 'string' ? req.headers.origin : null, referrer: typeof req.headers.referer === 'string' ? req.headers.referer : null };
     let accepted = 0;
     const results: unknown[] = [];
     for (const e of b.events) {
-      const a = await admitEvent(ctx, { clientEventId: e.id, type: e.type, token: e.t, inViewMs: e.ms }, meta, s);
+      const a = await admitEvent(ctx, { clientEventId: e.id, type: e.type, token: e.t, inViewMs: e.ms, flags: e.f }, meta, s);
       if (!a.accepted) continue;
       accepted++;
       const r = await dispatch(a.event);
@@ -85,8 +85,8 @@ export async function serveRoutes(app: FastifyInstance) {
     return ctx.config.NODE_ENV === 'test' ? { accepted, results } : { accepted };
   });
 
-  app.get('/click', { config: { rateLimit: { bucket: 'events' }, allowDuringMaintenance: true }, schema: { tags: ['ad serving'], querystring: z.object({ t: z.string().min(20).max(4096) }), description: 'Click-tracking redirect. Redirects only to the destination stored for the creative; the URL cannot be supplied by the caller.' } }, async (req, reply) => {
-    const { t } = req.query as { t: string };
+  app.get('/click', { config: { rateLimit: { bucket: 'events' }, allowDuringMaintenance: true }, schema: { tags: ['ad serving'], querystring: z.object({ t: z.string().min(20).max(4096), f: z.coerce.number().int().min(0).max(255).optional() }), description: 'Click-tracking redirect. f carries the ad tag\'s browser checks. Redirects only to the destination stored for the creative; the URL cannot be supplied by the caller.' } }, async (req, reply) => {
+    const { t, f } = req.query as { t: string; f?: number | string };
     reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer');
     const v = verifyDeliveryToken(ctx.tokens, t, Date.now(), 24 * 3600 * 1000);
     const claims = v.ok ? v.claims : v.claims;
@@ -95,8 +95,9 @@ export async function serveRoutes(app: FastifyInstance) {
       `SELECT COALESCE(v.snapshot->>'destinationUrl', c.destination_url) AS url, COALESCE(k.conversion_tracking, false) AS conversion_tracking
        FROM creatives c LEFT JOIN creative_versions v ON v.creative_id = c.id AND v.version = c.approved_version LEFT JOIN campaigns k ON k.id = c.campaign_id WHERE c.id = $1`, [claims.cr])).rows[0];
     const s = await ctx.settings.get();
-    const a = await admitEvent(ctx, { clientEventId: `clk-${claims.d}-${req.ipHash.slice(0, 10)}-${Math.floor(Date.now() / 1000)}`, type: 'click', token: t },
-      { ipHash: req.ipHash, ua: req.headers['user-agent'] ?? '', origin: null, referrer: typeof req.headers.referer === 'string' ? req.headers.referer : null }, s);
+    const flags = f === undefined || f === '' ? undefined : Number(f);
+    const a = await admitEvent(ctx, { clientEventId: `clk-${claims.d}-${req.ipHash.slice(0, 10)}-${Math.floor(Date.now() / 1000)}`, type: 'click', token: t, flags: Number.isInteger(flags) && flags! >= 0 && flags! <= 255 ? flags : undefined },
+      { ...requestFacts(req), origin: null, referrer: typeof req.headers.referer === 'string' ? req.headers.referer : null }, s);
     if (a.accepted) await dispatch(a.event).catch((err) => req.log.error({ err }, 'click processing failed'));
     if (!dest?.url) return reply.status(404).type('text/html').send(`<!doctype html><meta charset="utf-8"><title>Not found</title><p>This advertisement is no longer available.</p>`);
     return reply.redirect(dest.conversion_tracking ? withClickId(dest.url, claims.d) : dest.url, 302);
@@ -115,6 +116,12 @@ export async function serveRoutes(app: FastifyInstance) {
     if (!site) return { active: false, placements: [] };
     return { active: true, placements: [...snap.units.values()].filter((u) => u.siteId === site.id).map((u) => ({ slot: u.key, width: u.width, height: u.height, formats: u.formats })) };
   });
+}
+
+/** What event checks read from the request: the raw IP (checked, never stored) and headers browsers send. */
+function requestFacts(req: FastifyRequest) {
+  const h = (k: string) => (typeof req.headers[k] === 'string' ? (req.headers[k] as string) : null);
+  return { ip: req.ip, ipHash: req.ipHash, ua: req.headers['user-agent'] ?? '', acceptLanguage: h('accept-language'), secFetchSite: h('sec-fetch-site') };
 }
 
 /** With conversion tracking on, the landing page gets the click id to report conversions with. */
