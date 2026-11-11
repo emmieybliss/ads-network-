@@ -288,6 +288,8 @@ async function main() {
         [site, u.key, u.name, u.formats, u.w, u.h, u.responsive ?? u.w === null, u.pos, u.display ?? 'inline'],
       )).rows[0]!.id;
     }
+    // Viewable auto-refresh on the sidebar and the side rail: a new ad after 30 seconds in view, up to 4 times per page.
+    await c.query(`UPDATE ad_units SET refresh_enabled = true, refresh_seconds = 30, refresh_max = 4 WHERE id = ANY($1)`, [[units['demo-sidebar'], units['demo-rail']]]);
     // Automatic in-article ads on the demo site (the second demo article uses them).
     await c.query(`UPDATE sites SET auto_ads_enabled = true, auto_ads_unit_id = $2, auto_ads_max = 3, auto_ads_spacing = 3, auto_ads_first_after = 2 WHERE id = $1`, [site, units['demo-auto']]);
     // A fictional PayPal payout address on a reserved domain, encrypted like real details.

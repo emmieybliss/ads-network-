@@ -101,6 +101,7 @@ function CampaignDetail() {
                       ['Site categories', c.targeting?.siteCategories?.length ? c.targeting.siteCategories.join(', ') : 'All'],
                       ['Keywords', c.targeting?.keywords?.length ? c.targeting.keywords.join(', ') : 'None'],
                       ['Personalized only', c.targeting?.requirePersonalized ? 'Yes' : 'No'],
+                      ['Refreshed ad slots', c.acceptRefresh === false ? 'Not shown' : 'Shown'],
                       ['Frequency caps', c.caps.length ? c.caps.map((x: any) => `${x.maxImpressions} per ${x.scope} per ${Math.round(x.windowSeconds / 3600)}h`).join('; ') : 'None'],
                     ]} />
                   </Card>

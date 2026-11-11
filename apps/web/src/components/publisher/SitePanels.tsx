@@ -194,11 +194,14 @@ const DISPLAYS: Record<string, { label: string; hint: string }> = {
   popunder: { label: 'Pop-under (new tab behind)', hint: 'Like a pop-up, but your page keeps focus where the browser allows it. Most current browsers keep the new tab in front, so it may behave like a pop-up.' },
 };
 const isPop = (d: string) => d === 'popup' || d === 'popunder';
+const canRefresh = (d: string) => d === 'inline' || d === 'anchor' || d === 'rail_left' || d === 'rail_right';
 
 export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: string }) {
   const res = useApi<{ data: any[] }>(`/orgs/${orgId}/sites/${siteId}/units`);
   const pops = useConfig().data?.data.popAds;
   const popOff = (d: string) => !!pops && (!pops.enabled || (d === 'popunder' && !pops.popunderEnabled));
+  const refreshCfg = useConfig().data?.data.adRefresh;
+  const refreshOff = !!refreshCfg && !refreshCfg.enabled;
   const [edit, setEdit] = useState<Record<string, any> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -211,7 +214,8 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
     const pop = isPop(edit.display);
     const formats = pop ? ['pop'] : edit.formats.filter((f: string) => f !== 'pop');
     const body = { name: edit.name, formats: formats.length ? formats : ['image', 'text'], responsive: edit.responsive, width: pop ? null : Number(edit.width) || null, height: pop ? null : Number(edit.height) || null, position: edit.position, display: edit.display, noFill: edit.noFill,
-      ...(pop ? { popMaxPerDay: Number(edit.popMaxPerDay) || 1, popMinutesBetween: Number(edit.popMinutesBetween) || 60 } : {}) };
+      ...(pop ? { popMaxPerDay: Number(edit.popMaxPerDay) || 1, popMinutesBetween: Number(edit.popMinutesBetween) || 60 } : {}),
+      ...(canRefresh(edit.display) ? { refreshEnabled: !!edit.refreshEnabled, refreshSeconds: Math.max(30, Number(edit.refreshSeconds) || 30), refreshMax: Math.max(1, Number(edit.refreshMax) || 4) } : {}) };
     try {
       if (edit.id) await patch(`/orgs/${orgId}/units/${edit.id}`, body);
       else await post(`/orgs/${orgId}/sites/${siteId}/units`, { ...body, key: edit.key });
@@ -226,7 +230,7 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
 
   return (
     <Card>
-      <CardHeader title="Placements" description="Each placement is a slot on your pages where an ad can appear." actions={<Button size="sm" onClick={() => setEdit({ key: '', name: '', formats: ['image', 'text'], responsive: true, width: '', height: '', position: 'in_content', display: 'inline', noFill: 'collapse', popMaxPerDay: 1, popMinutesBetween: 60 })}><Plus className="size-4" /> Add placement</Button>} />
+      <CardHeader title="Placements" description="Each placement is a slot on your pages where an ad can appear." actions={<Button size="sm" onClick={() => setEdit({ key: '', name: '', formats: ['image', 'text'], responsive: true, width: '', height: '', position: 'in_content', display: 'inline', noFill: 'collapse', popMaxPerDay: 1, popMinutesBetween: 60, refreshEnabled: false, refreshSeconds: 30, refreshMax: 4 })}><Plus className="size-4" /> Add placement</Button>} />
       <Async res={res}>
         {({ data }) => <Table rows={data} rowKey={(r) => r.id} empty="No placements yet. Add one to get an ad tag." columns={[
           { key: 'n', header: 'Name', cell: (r) => <span className="font-medium">{r.name}</span> },
@@ -234,6 +238,7 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
           { key: 'f', header: 'Formats', cell: (r) => r.formats.map(humanize).join(', ') },
           { key: 's', header: 'Size', cell: (r) => (isPop(r.display) ? `Up to ${r.popMaxPerDay}/day, ${r.popMinutesBetween} min apart` : r.responsive ? (r.width ? `Responsive, ${r.width}×${r.height}` : 'Responsive') : `${r.width}×${r.height}`) },
           { key: 'd', header: 'Type', cell: (r) => <span className="flex flex-wrap items-center gap-1">{DISPLAYS[r.display]?.label ?? humanize(r.display)}{isPop(r.display) && popOff(r.display) && <Badge tone="warning">Off on this network</Badge>}</span> },
+          { key: 'r', header: 'Auto-refresh', cell: (r) => (!canRefresh(r.display) ? <span className="text-muted">—</span> : r.refreshEnabled ? <span className="flex flex-wrap items-center gap-1"><Badge tone="info">Every {Math.max(r.refreshSeconds, refreshCfg?.minSeconds ?? 30)} s in view</Badge>{refreshOff && <Badge tone="warning">Off on this network</Badge>}</span> : <span className="text-muted">Off</span>) },
           { key: 'p', header: 'Position', cell: (r) => humanize(r.position) },
           { key: 'st', header: 'Status', cell: (r) => <span className="flex gap-1"><StatusBadge status={r.status} />{r.adminBlocked && <Badge tone="danger">Blocked by network</Badge>}</span> },
           { key: 'a', header: '', cell: (r) => r.status !== 'archived' && (
@@ -267,6 +272,19 @@ export function PlacementsPanel({ orgId, siteId }: { orgId: string; siteId: stri
             <div className="grid grid-cols-2 gap-3"><Field label={edit.responsive ? 'Typical width (px)' : 'Width (px)'} htmlFor="uw"><Input id="uw" type="number" min={1} value={edit.width} onChange={(e) => setEdit({ ...edit, width: e.target.value })} /></Field><Field label={edit.responsive ? 'Typical height (px)' : 'Height (px)'} htmlFor="uh" hint={edit.responsive ? 'Optional. Reserves this height so the page does not jump when the ad loads.' : undefined}><Input id="uh" type="number" min={1} value={edit.height} onChange={(e) => setEdit({ ...edit, height: e.target.value })} /></Field></div>
             </>)}
             {edit.display === 'inline' && <Field label="When no ad is available" htmlFor="unf" hint={edit.noFill === 'keep_space' ? 'The reserved space stays empty, so nothing on the page moves.' : 'The slot disappears. Content below it may move up.'}><Select id="unf" value={edit.noFill} onChange={(e) => setEdit({ ...edit, noFill: e.target.value })}><option value="collapse">Hide the slot</option><option value="keep_space">Keep the reserved space</option></Select></Field>}
+            {canRefresh(edit.display) && (
+              <fieldset className="space-y-3 rounded-lg border border-border p-3">
+                <legend className="px-1 text-sm font-medium">Viewable auto-refresh</legend>
+                <Checkbox label="Show a new ad after the current one has been in view for a while" checked={!!edit.refreshEnabled} disabled={refreshOff} onChange={(v) => setEdit({ ...edit, refreshEnabled: v })}
+                  hint={refreshOff ? 'Auto-refresh is turned off on this network.' : 'Only time when at least half the ad is on screen, the tab is open in front and the visitor was active in the last two minutes counts. Refreshed impressions are reported apart, and advertisers can opt out of them.'} />
+                {edit.refreshEnabled && !refreshOff && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Seconds in view before a new ad" htmlFor="urs" hint={refreshCfg ? `At least ${refreshCfg.minSeconds}` : 'At least 30'}><Input id="urs" type="number" min={Math.max(30, refreshCfg?.minSeconds ?? 30)} max={600} required value={edit.refreshSeconds} onChange={(e) => setEdit({ ...edit, refreshSeconds: e.target.value })} /></Field>
+                    <Field label="Most refreshes per page view" htmlFor="urm" hint={refreshCfg ? `The network allows up to ${refreshCfg.maxPerPageView}` : undefined}><Input id="urm" type="number" min={1} max={20} required value={edit.refreshMax} onChange={(e) => setEdit({ ...edit, refreshMax: e.target.value })} /></Field>
+                  </div>
+                )}
+              </fieldset>
+            )}
             {!isPop(edit.display) && <Field label="Position on the page" htmlFor="up"><Select id="up" value={edit.position} onChange={(e) => setEdit({ ...edit, position: e.target.value })}>{POSITIONS.map((p) => <option key={p} value={p}>{humanize(p)}</option>)}</Select></Field>}
           </form>
         )}

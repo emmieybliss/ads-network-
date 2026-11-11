@@ -46,15 +46,17 @@ export async function reportRoutes(app: FastifyInstance) {
     const pct = (v: unknown) => (v === null || v === undefined ? '' : (v as number).toFixed(4));
     const rows = report.rows.map((r: Record<string, unknown>) => ({ ...r, ctr: pct(r.ctr), viewability: pct(r.viewabilityRate), timeInView: r.avgTimeInViewSec === null ? '' : (r.avgTimeInViewSec as number).toFixed(2),
       spend: money(r.spendMicros), ecpm: money(r.ecpmMicros), earnings: money(r.earningsMicros), rpm: money(r.rpmMicros), cpa: money(r.cpaMicros), conversionValue: money(r.conversionValueMicros), conversionRate: pct(r.conversionRate),
+      refreshedSpend: money(r.refreshedSpendMicros), refreshedEarnings: money(r.refreshedEarningsMicros),
       roas: r.roas === null || r.roas === undefined ? '' : (r.roas as number).toFixed(4) }));
     const cols = [
       { key: 'label', label: q.groupBy }, { key: 'served', label: 'Served' }, { key: 'rendered', label: 'Rendered' }, { key: 'validImpressions', label: 'Valid impressions' },
       { key: 'invalidImpressions', label: 'Invalid impressions' }, { key: 'viewableImpressions', label: 'Viewable impressions' }, { key: 'validClicks', label: 'Valid clicks' },
       { key: 'invalidClicks', label: 'Invalid clicks' }, { key: 'ctr', label: 'CTR %' }, { key: 'viewability', label: 'Viewability %' }, { key: 'timeInView', label: 'Avg. time in view (s)' },
+      { key: 'refreshedImpressions', label: 'Refreshed impressions' },
       ...(audience === 'advertiser'
         ? [{ key: 'spend', label: `Spend (${req.org!.currency})` }, { key: 'ecpm', label: 'eCPM' }, { key: 'conversions', label: 'Conversions' }, { key: 'conversionRate', label: 'Conversion rate %' },
-            { key: 'cpa', label: 'CPA' }, { key: 'conversionValue', label: `Conversion value (${req.org!.currency})` }, { key: 'roas', label: 'ROAS' }]
-        : [{ key: 'earnings', label: `Estimated earnings (${req.org!.currency})` }, { key: 'rpm', label: 'RPM' }]),
+            { key: 'cpa', label: 'CPA' }, { key: 'conversionValue', label: `Conversion value (${req.org!.currency})` }, { key: 'roas', label: 'ROAS' }, { key: 'refreshedSpend', label: `Spend on refreshed impressions (${req.org!.currency})` }]
+        : [{ key: 'earnings', label: `Estimated earnings (${req.org!.currency})` }, { key: 'rpm', label: 'RPM' }, { key: 'refreshedEarnings', label: `Earnings from refreshed impressions (${req.org!.currency})` }]),
     ];
     await db.query('INSERT INTO data_exports (kind, requested_by, org_id, params, row_count) VALUES ($1, $2, $3, $4, $5)', [`report:${q.groupBy}`, req.auth?.user?.id ?? null, req.org!.id, JSON.stringify(q), rows.length]).catch(() => undefined);
     return reply.type('text/csv; charset=utf-8').header('content-disposition', `attachment; filename="report-${q.groupBy}-${range.from}-${range.to}.csv"`).send(toCsv(rows, cols));

@@ -98,6 +98,14 @@ export function ReportExplorer({ orgId, audience, currency, filters = {} }: { or
                   </>
                 )}
               </div>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <Stat label="Refreshed impressions" value={formatNumber(t.refreshedImpressions)} hint={t.refreshedShare !== null && t.refreshedShare !== undefined ? `${formatPercent(t.refreshedShare, 1)} of valid` : undefined} definition={data.definitions.refreshedImpressions} />
+                <Stat label="Refreshed viewability" value={t.refreshedViewabilityRate === null || t.refreshedViewabilityRate === undefined ? '—' : formatPercent(t.refreshedViewabilityRate, 1)} definition="Viewable refreshed impressions divided by refreshed impressions, multiplied by 100." />
+                <Stat label="First impressions" value={formatNumber((t.validImpressions ?? 0) - (t.refreshedImpressions ?? 0))} definition="Valid impressions that were the first ad a slot showed on a page." />
+                {adv
+                  ? <Stat label="Spend on refreshed" value={money(t.refreshedSpendMicros)} definition="Billable charges for refreshed impressions, included in spend." />
+                  : <Stat label="Earnings from refresh" value={money(t.refreshedEarningsMicros)} definition="Your estimated earnings from refreshed impressions, included in estimated earnings." />}
+              </div>
               {data.requests && (
                 <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                   <Stat label="Ad requests" value={formatNumber(data.requests.requests)} definition="Placement requests received from your pages." />
