@@ -243,6 +243,23 @@ export async function aggregateDay(db: AppContext['db'], day: string) {
          COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0)
        FROM ad_events WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1 AND page_path IS NOT NULL
        GROUP BY site_id, publisher_org_id, page_path`, [day]);
+    // Topic of the page each ad was served on, from the delivery's 'served' row (served at most a token lifetime earlier).
+    await c.query('DELETE FROM topic_daily_stats WHERE day = $1', [day]);
+    await c.query(
+      `INSERT INTO topic_daily_stats (day, campaign_id, advertiser_org_id, site_id, publisher_org_id, topic, valid_impressions, viewable_impressions, valid_clicks, spend_micros, publisher_micros)
+       SELECT $1::date, e.campaign_id, min(e.advertiser_org_id::text)::uuid, e.site_id, min(e.publisher_org_id::text)::uuid, COALESCE(s.topic, ''),
+         count(*) FILTER (WHERE e.type = 'render' AND e.status = 'valid'),
+         count(*) FILTER (WHERE e.type = 'viewable' AND e.status = 'valid'),
+         count(*) FILTER (WHERE e.type = 'click' AND e.status = 'valid'),
+         COALESCE(sum(e.cost_micros) FILTER (WHERE e.billable), 0),
+         COALESCE(sum(e.publisher_micros) FILTER (WHERE e.billable), 0)
+       FROM ad_events e
+       LEFT JOIN (
+         -- Materialized so the join is one hash join, not an index probe per event. Tokens live at most a day.
+         SELECT delivery_id, topic FROM ad_events WHERE type = 'served' AND occurred_at >= $1::date - 1 AND occurred_at < $1::date + 1 OFFSET 0
+       ) s ON s.delivery_id = e.delivery_id
+       WHERE e.occurred_at >= $1::date AND e.occurred_at < $1::date + 1 AND e.type IN ('render', 'viewable', 'click')
+       GROUP BY e.campaign_id, e.site_id, COALESCE(s.topic, '')`, [day]);
     await c.query(`DELETE FROM hourly_stats WHERE hour >= $1::date AND hour < $1::date + 1`, [day]);
     await c.query(
       `INSERT INTO hourly_stats (hour, campaign_id, advertiser_org_id, site_id, publisher_org_id, valid_impressions, viewable_impressions, valid_clicks, spend_micros, publisher_micros)

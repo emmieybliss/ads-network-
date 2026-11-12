@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { ADMIN_CAMPAIGN_TRANSITIONS } from '@blissnova/shared';
+import { topicLabel } from '@blissnova/shared';
 import { Alert, Async, Badge, Card, CardHeader, DefinitionList, Field, Input, PageHeader, StatusBadge } from '@/components/ui';
 import { NotesPanel, ReasonAction, SimpleTable } from '@/components/admin/kit';
 import { CreativePreview } from '@/components/advertiser/CreativeEditor';
@@ -49,6 +50,7 @@ export default function AdminCampaign() {
                   ['Spent', money(c.spentMicros)], ['Reserved', money(c.reservedMicros)], ['Schedule', `${formatDate(c.startAt, true)} – ${c.endAt ? formatDate(c.endAt, true) : 'open'}`],
                   ['Pacing / priority', `${humanize(c.pacing)} / ${c.priority}${c.adminPriorityBoost ? ` (boost ${c.adminPriorityBoost})` : ''}`],
                   ['Countries', c.targeting?.countries?.join(', ') || 'All'], ['Devices', c.targeting?.devices?.join(', ') || 'All'], ['Categories', c.targeting?.siteCategories?.join(', ') || 'All'],
+                  ['Page topics', c.targeting?.topics?.map((t: string) => topicLabel(t)).join(', ') || 'Any'], ['Excluded topics', c.targeting?.excludeTopics?.map((t: string) => topicLabel(t)).join(', ') || 'None'], ['Brand safety', c.targeting?.brandSafety ?? 'standard'],
                   ['Frequency caps', c.caps.length ? c.caps.map((x: any) => `${x.maxImpressions}/${x.scope}/${Math.round(x.windowSeconds / 3600)}h`).join(', ') : 'None'],
                 ]} />
               </Card>

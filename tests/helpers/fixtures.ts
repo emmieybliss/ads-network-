@@ -134,7 +134,7 @@ export async function makeCampaign(
     pacing?: 'even' | 'asap';
     startAt?: Date;
     endAt?: Date | null;
-    targeting?: { countries?: string[]; devices?: string[]; siteCategories?: string[]; keywords?: string[]; requirePersonalized?: boolean; includeSiteIds?: string[]; excludeSiteIds?: string[] };
+    targeting?: { countries?: string[]; devices?: string[]; siteCategories?: string[]; keywords?: string[]; requirePersonalized?: boolean; includeSiteIds?: string[]; excludeSiteIds?: string[]; topics?: string[]; excludeTopics?: string[]; brandSafety?: 'strict' | 'standard' | 'relaxed' };
   },
 ) {
   const r = await db.query<{ id: string }>(
@@ -159,8 +159,8 @@ export async function makeCampaign(
   const id = r.rows[0]!.id;
   const t = opts.targeting ?? {};
   await db.query(
-    `INSERT INTO campaign_targeting (campaign_id, countries, devices, site_categories, keywords, include_site_ids, exclude_site_ids, require_personalized)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    `INSERT INTO campaign_targeting (campaign_id, countries, devices, site_categories, keywords, include_site_ids, exclude_site_ids, require_personalized, topics, exclude_topics, brand_safety)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       id,
       t.countries ?? [],
@@ -170,6 +170,9 @@ export async function makeCampaign(
       t.includeSiteIds ?? [],
       t.excludeSiteIds ?? [],
       t.requirePersonalized ?? false,
+      t.topics ?? [],
+      t.excludeTopics ?? [],
+      t.brandSafety ?? 'standard',
     ],
   );
   return id;

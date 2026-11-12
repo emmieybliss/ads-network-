@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import { ctr } from '@blissnova/shared';
 import { requestStats, runReport, type GroupBy, type ReportFilters, type ReportScope } from './reports';
+import { topicReport } from './topics';
 
 /**
  * Analytics: everything the reports pages show, plus the views top networks
@@ -70,6 +71,7 @@ async function collect(db: Pool, scope: ReportScope, f: ReportFilters, audience:
   const breakdowns = Object.fromEntries(groups.map((g, i) => [g, lists[i]!.rows]));
   const placements = (await runReport(db, scope, f, 'unit', audience, 50)).rows;
   const countries = await countryReport(db, scope, f, prev, audience);
+  const topics = await topicReport(db, scope, f, audience);
 
   const [heatmap, ivt, funnelRequests, traffic, reach, conversionEvents] = await Promise.all([
     hourlyHeatmap(db, scope, f, audience),
@@ -102,6 +104,7 @@ async function collect(db: Pool, scope: ReportScope, f: ReportFilters, audience:
     breakdowns,
     placements,
     countries,
+    topics,
     heatmap,
     funnel,
     requests: funnelRequests,

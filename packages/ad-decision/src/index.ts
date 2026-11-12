@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { brandSafetyAllows, type BrandSafetyMode, type PageSafety } from '@blissnova/shared';
+export * from './contextual';
 
 /**
  * Pure, deterministic campaign selection. It has no I/O: the API supplies a
@@ -16,6 +18,12 @@ export interface Targeting {
   includeUnitIds: string[];
   excludeUnitIds: string[];
   requirePersonalized: boolean;
+  /** Page topics the campaign wants (any one matches); empty means any topic. */
+  topics?: string[];
+  /** Page topics the campaign never appears on. */
+  excludeTopics?: string[];
+  /** Which pages the campaign accepts by brand-safety risk (default standard). */
+  brandSafety?: BrandSafetyMode;
 }
 
 export interface CreativeCandidate { id: string; format: 'image' | 'text' | 'native' | 'pop'; width: number | null; height: number | null }
@@ -55,6 +63,10 @@ export interface RequestContext {
   country: string;           // ISO-3166 alpha-2 or 'ZZ' when unknown
   device: string;
   keywords: string[];
+  /** Topics of the page (detected, or assumed from the site category when the page is not classified yet). */
+  pageTopics?: string[];
+  /** Brand-safety risk of the page; "unknown" when it has not been checked. */
+  pageSafety?: PageSafety;
   personalized: boolean;
   blockedCountries: string[];
   excludeCampaignIds: string[];
@@ -77,7 +89,7 @@ export interface RequestContext {
 export type RejectReason =
   | 'status' | 'schedule' | 'budget' | 'daily_budget' | 'pacing' | 'country' | 'device' | 'site_category'
   | 'keywords' | 'site_list' | 'unit_list' | 'personalization' | 'no_creative' | 'pricing_disabled' | 'already_on_page' | 'blocked_country'
-  | 'premium_only' | 'below_floor';
+  | 'premium_only' | 'below_floor' | 'topic' | 'excluded_topic' | 'brand_safety';
 
 export interface RankedCandidate { campaign: CampaignCandidate; creative: CreativeCandidate; score: number; tiebreak: string }
 export interface DecisionResult { ranked: RankedCandidate[]; rejected: Array<{ campaignId: string; reason: RejectReason }> }
@@ -191,6 +203,10 @@ export function decide(candidates: CampaignCandidate[], ctx: RequestContext): De
       const kw = new Set(ctx.keywords.map((k) => k.toLowerCase()));
       if (!t.keywords.some((k) => kw.has(k.toLowerCase()))) { reject(c, 'keywords'); continue; }
     }
+    const pageTopics = ctx.pageTopics ?? [];
+    if (t.excludeTopics?.length && t.excludeTopics.some((x) => pageTopics.includes(x))) { reject(c, 'excluded_topic'); continue; }
+    if (t.topics?.length && !t.topics.some((x) => pageTopics.includes(x))) { reject(c, 'topic'); continue; }
+    if (!brandSafetyAllows(t.brandSafety, ctx.pageSafety ?? 'unknown')) { reject(c, 'brand_safety'); continue; }
     const pacing = pacingAllows(c, ctx.spentToday(c.id), ctx.now);
     if (!pacing.ok) { reject(c, pacing.reason ?? 'pacing'); continue; }
     const fitting = c.creatives.filter((cr) => creativeFits(cr, ctx)).sort((a, b) => a.id.localeCompare(b.id));

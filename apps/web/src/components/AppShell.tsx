@@ -4,7 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   BarChart3, Bell, Building2, ChevronsUpDown, CreditCard, FileText, Gauge, Globe2, KeyRound, LayoutDashboard, LifeBuoy, LogOut, Megaphone, Menu,
-  ScrollText, Settings, Shield, ShieldAlert, SlidersHorizontal, Ticket, Users, Wallet, X, Image as ImageIcon, Landmark, Activity, Search, Network, LineChart,
+  ScrollText, Settings, Shield, ShieldAlert, SlidersHorizontal, Ticket, Users, Wallet, X, Image as ImageIcon, Landmark, Activity, Search, Network, LineChart, Tags,
 } from 'lucide-react';
 import { Badge, Loading, Logo, cn } from './ui';
 import { useSession, type OrgSummary } from '@/lib/session';
@@ -54,6 +54,7 @@ const NAV: Record<Exclude<Portal, 'account'>, Array<{ section?: string; items: N
     ] },
     { section: 'Trust', items: [
       { href: '/admin/fraud', label: 'Invalid traffic', icon: ShieldAlert, perm: 'admin:fraud:read' },
+      { href: '/admin/page-topics', label: 'Page topics & safety', icon: Tags, perm: 'admin:orgs:read' },
       { href: '/admin/security', label: 'Security', icon: Shield, perm: 'admin:security:read' },
       { href: '/admin/audit', label: 'Audit log', icon: ScrollText, perm: 'admin:audit:read' },
       { href: '/admin/support', label: 'Support', icon: LifeBuoy, perm: 'admin:users:read' },

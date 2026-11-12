@@ -319,6 +319,54 @@ function keywords(): string[] | undefined {
   return out.length ? out : undefined;
 }
 
+/* ---------------------------------------------------------- page context */
+
+const SKIP_TEXT = /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|SVG|NAV|ASIDE|FOOTER|HEADER|FORM|INPUT|TEXTAREA|SELECT|BUTTON|IFRAME)$/;
+
+/**
+ * A short text sample of the page for automatic topics and brand safety:
+ * title, description, headings and the start of the main text (navigation,
+ * forms and ad slots left out). It goes with the page's first ad request
+ * only; the network classifies it and keeps just the result.
+ */
+function pageContext(): { title?: string; description?: string; headings?: string[]; text?: string; lang?: string } | undefined {
+  try {
+    const meta = (sel: string) => document.querySelector(sel)?.getAttribute('content')?.trim() || undefined;
+    const clean = (v: string | null | undefined, n: number) => (v ?? '').replace(/\s+/g, ' ').trim().slice(0, n) || undefined;
+    const headings: string[] = [];
+    const hs = document.querySelectorAll('h1, h2, h3');
+    for (let i = 0; i < hs.length && headings.length < 12; i++) {
+      const h = hs[i]!;
+      if (h.closest('[data-bn-slot], nav, footer, aside')) continue;
+      const t = clean(h.textContent, 160);
+      if (t && headings.indexOf(t) === -1) headings.push(t);
+    }
+    const root = document.querySelector('article, main, [role="main"]') ?? document.body;
+    let text = '';
+    if (root) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+        acceptNode: (n) => n.nodeType === 1
+          ? (SKIP_TEXT.test((n as Element).tagName.toUpperCase()) || (n as Element).hasAttribute('data-bn-slot') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP)
+          : NodeFilter.FILTER_ACCEPT,
+      });
+      for (let n = walker.nextNode(); n && text.length < 6000; n = walker.nextNode()) {
+        const t = n.nodeValue?.replace(/\s+/g, ' ').trim();
+        if (t) text += `${t} `;
+      }
+    }
+    const out = {
+      title: clean(meta('meta[property="og:title"]') ?? document.title, 300),
+      description: clean(meta('meta[name="description"]') ?? meta('meta[property="og:description"]'), 500),
+      headings: headings.length ? headings : undefined,
+      text: clean(text, 6000),
+      lang: clean(document.documentElement.getAttribute('lang'), 20),
+    };
+    return out.title || out.text || out.description || out.headings ? out : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /* ---------------------------------------------------------------- consent */
 
 function cmpFn(name: string): CmpFn | null {
@@ -410,6 +458,8 @@ class Tag {
   private popSlot: Element | null = null;
   private popAd: { ad: AdPayload; display: Display; at: number } | null = null;
   private popDone = false;
+  /** Send the page's text sample (once per page view) unless the publisher turned it off with data-page-text="off". */
+  sendContext = true;
   private readonly popListener = (e: MouseEvent) => this.onPopClick(e);
   /** Where each filled slot's creative lives, so a refresh can swap it in place. */
   private readonly mounts = new WeakMap<Element, { mount: Node & ParentNode; frame: HTMLElement }>();
@@ -743,7 +793,7 @@ class Tag {
         body: JSON.stringify({
           siteKey: this.siteKey,
           units: units.map((u) => (typeof u === 'string' ? { slot: u } : u)),
-          page: { url: pageUrl(), keywords: keywords(), referrer: referrerHost() },
+          page: { url: pageUrl(), keywords: keywords(), referrer: referrerHost(), context: this.sendContext ? pageContext() : undefined },
           consent: {
             personalized: this.consentSet ? this.consent.personalized : undefined,
             gdprApplies: c.gdprApplies ?? (this.consentSet ? this.consent.gdprApplies : undefined),
@@ -755,6 +805,8 @@ class Tag {
       });
       if (!r.ok) throw new Error(`serve ${r.status}`);
       res = (await r.json()) as ServeResponse;
+      // The page was classified: later requests on this page view need not send its text again.
+      this.sendContext = false;
     } catch {
       return null;
     }
@@ -1263,6 +1315,7 @@ function ensureSlotContainers(): void {
   const consentAttr = script?.getAttribute('data-consent');
   if (consentAttr === 'personalized') tag.setConsent({ personalized: true });
   else if (consentAttr === 'non-personalized') tag.setConsent({ personalized: false });
+  if (script?.getAttribute('data-page-text') === 'off') tag.sendContext = false;
 
   const api_: PublicApi = {
     setConsent: (c) => tag.setConsent(c),

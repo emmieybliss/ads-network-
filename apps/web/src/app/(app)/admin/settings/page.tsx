@@ -16,6 +16,7 @@ const GROUP_HELP: Record<string, string> = {
   verification: 'Domain verification methods and limits.',
   eligibility: 'Publisher requirements shown publicly and used in review. Thresholds are optional and configurable, never fixed.',
   pricing: 'Enabled pricing models, minimum rates, the minimum advertiser deposit and currencies.',
+  contextual: 'Automatic page topics and brand safety. The ad tag sends a short text sample of each page, which is classified on this server; only the result is kept. High-risk pages can be kept free of ads altogether.',
   popAds: 'Pop-up and pop-under placements: turn them off network-wide, or cap how often one visitor can see them. Publishers opt in per placement and can only be stricter than these limits.',
   adRefresh: 'Viewable auto-refresh: a placement the publisher opted in shows a new ad after the current one has been at least half in view, in a visible tab, for the interval. Publishers can only be stricter than these limits; advertisers can keep campaigns out of refreshed impressions.',
   api: 'Rate limits.',
@@ -24,7 +25,7 @@ const GROUP_HELP: Record<string, string> = {
   email: 'Sender details and message templates.',
 };
 
-const GROUP_NAMES: Record<string, string> = { ivt: 'Invalid traffic', popAds: 'Pop ads', adRefresh: 'Ad refresh', api: 'API' };
+const GROUP_NAMES: Record<string, string> = { ivt: 'Invalid traffic', popAds: 'Pop ads', adRefresh: 'Ad refresh', contextual: 'Page topics & brand safety', api: 'API' };
 const groupName = (g: string) => GROUP_NAMES[g] ?? humanize(g);
 
 type Draft = Record<string, unknown>;
@@ -45,6 +46,8 @@ const LABELS: Record<string, string> = {
   publisherReviewMinImpressions: 'Least impressions before a publisher is judged',
   minSeconds: 'Least seconds in view before a refresh',
   maxPerPageView: 'Most refreshes per slot per page view',
+  blockHighRiskPages: 'No ads on high-risk pages',
+  reclassifyMinutes: 'Minutes before a changed page is checked again',
 };
 
 function label(key: string) {

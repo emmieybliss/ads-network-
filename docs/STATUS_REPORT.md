@@ -74,7 +74,7 @@ Demo accounts (development only): `admin@example.com`, `advertiser@example.com`,
 
 ## 6. Partial
 
-- **Contextual targeting:** keyword and site-category matching; pages are not read or classified automatically.
+- **Contextual targeting:** pages are classified automatically on the server into IAB-style topics with a brand-safety risk (English dictionaries, no outside service); campaigns target or exclude topics and choose a brand-safety level; keyword and site-category matching remain. Not yet: other languages, machine-learned models.
 - **Bot detection:** user-agent patterns, cloud/hosting IP ranges (bundled from provider-published lists; only Amazon's list could be fetched when it was built, run `node scripts/update-datacenter-ranges.mjs` to add Google Cloud, Oracle, DigitalOcean and Linode), automated-browser checks in the ad tag, click timing and rate checks, a sweep every five minutes with automatic clawback of held earnings, and a staff review queue. No outside IVT vendor (MRC-accredited SIVT detection would need one).
 - **Country:** needs a CDN country header or a `.mmdb` GeoIP file, neither bundled. Demo country history is labelled sample data.
 - **Bank and crypto payouts:** staff pay outside the platform and record the reference.

@@ -127,9 +127,22 @@ export async function pageReport(db: Pool, publisherOrgId: string, f: ReportFilt
                JOIN sites s ON s.id = p.site_id
                WHERE p.day BETWEEN $1::date AND $2::date AND s.org_id = $3 AND ($4::uuid IS NULL OR s.id = $4)`;
   const sums = `sum(p.views)::bigint AS views, sum(p.imps)::bigint AS imps, sum(p.clicks)::bigint AS clicks, sum(p.micros)::bigint AS micros`;
-  const rows = (await db.query(`SELECT s.id AS site_id, s.domain, p.page_path, ${sums} FROM ${src} GROUP BY 1, 2, 3 ORDER BY micros DESC, views DESC, 3 LIMIT ${limit}`, params)).rows;
+  // Each page's current topic and brand-safety risk (a reviewer's correction wins).
+  const rows = (await db.query(
+    `SELECT r.*, COALESCE(pc.override_topics[1], pc.primary_topic) AS topic, COALESCE(pc.override_topics, ARRAY(SELECT jsonb_array_elements(pc.topics)->>'id')) AS topics,
+            COALESCE(pc.override_safety, pc.brand_safety, 'unknown') AS safety, pc.safety_flags, pc.override_at IS NOT NULL AS reviewed
+     FROM (SELECT s.id AS site_id, s.domain, p.page_path, ${sums} FROM ${src} GROUP BY 1, 2, 3 ORDER BY micros DESC, views DESC, 3 LIMIT ${limit}) r
+     LEFT JOIN page_contexts pc ON pc.site_id = r.site_id AND pc.page_path = r.page_path
+     ORDER BY r.micros DESC, r.views DESC, r.page_path`, params)).rows;
   const totals = (await db.query(`SELECT ${sums} FROM ${src}`, params)).rows[0];
-  return { totals: pageShape(totals), rows: rows.map((r) => ({ siteId: r.site_id, domain: r.domain, path: r.page_path, ...pageShape(r) })) };
+  return {
+    totals: pageShape(totals),
+    rows: rows.map((r) => ({
+      siteId: r.site_id, domain: r.domain, path: r.page_path, ...pageShape(r),
+      topic: (r.topic as string | null) ?? null, topics: (r.topics as string[] | null) ?? [], brandSafety: r.safety as string,
+      safetyFlags: ((r.safety_flags ?? []) as Array<{ category: string; risk: string }>).map((x) => ({ category: x.category, risk: x.risk })), reviewed: Boolean(r.reviewed),
+    })),
+  };
 }
 
 function pageShape(r: Record<string, string | null>) {

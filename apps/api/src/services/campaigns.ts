@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
-import { formatMicros, toMicros, type PlatformSettings } from '@blissnova/shared';
+import { BRAND_SAFETY_MODES, TOPIC_IDS, formatMicros, toMicros, type PlatformSettings } from '@blissnova/shared';
 import { badRequest } from '../lib/errors';
 import { moneyString } from '../lib/http';
 
@@ -14,6 +14,10 @@ const targetingSchema = z.object({
   includeUnitIds: z.array(z.uuid()).max(500).default([]),
   excludeUnitIds: z.array(z.uuid()).max(500).default([]),
   requirePersonalized: z.boolean().default(false),
+  /** Page topics (see TOPICS); the ad shows only on pages about one of them. */
+  topics: z.array(z.enum(TOPIC_IDS)).max(30).default([]),
+  excludeTopics: z.array(z.enum(TOPIC_IDS)).max(30).default([]),
+  brandSafety: z.enum(BRAND_SAFETY_MODES).default('standard'),
 });
 const capSchema = z.object({ scope: z.enum(['visitor', 'page']), maxImpressions: z.number().int().min(1).max(10000), windowSeconds: z.number().int().min(60).max(2_592_000) });
 
@@ -67,17 +71,20 @@ export function validateCampaignRules(input: CampaignInput, s: PlatformSettings)
   if (input.endAt && Date.parse(input.endAt) <= Date.parse(input.startAt)) throw badRequest('End date must be after the start date');
   const overlap = input.targeting.includeSiteIds.filter((id) => input.targeting.excludeSiteIds.includes(id));
   if (overlap.length) throw badRequest('A site cannot be both included and excluded');
+  if (input.targeting.topics.some((t) => input.targeting.excludeTopics.includes(t))) throw badRequest('A topic cannot be both targeted and excluded');
   return { rate, lifetime, daily };
 }
 
 export async function writeTargetingAndCaps(client: PoolClient, campaignId: string, input: Pick<CampaignInput, 'targeting' | 'caps'>) {
   const t = input.targeting;
   await client.query(
-    `INSERT INTO campaign_targeting (campaign_id, countries, devices, site_categories, keywords, include_site_ids, exclude_site_ids, include_unit_ids, exclude_unit_ids, require_personalized)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO campaign_targeting (campaign_id, countries, devices, site_categories, keywords, include_site_ids, exclude_site_ids, include_unit_ids, exclude_unit_ids, require_personalized, topics, exclude_topics, brand_safety)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      ON CONFLICT (campaign_id) DO UPDATE SET countries = EXCLUDED.countries, devices = EXCLUDED.devices, site_categories = EXCLUDED.site_categories, keywords = EXCLUDED.keywords,
-       include_site_ids = EXCLUDED.include_site_ids, exclude_site_ids = EXCLUDED.exclude_site_ids, include_unit_ids = EXCLUDED.include_unit_ids, exclude_unit_ids = EXCLUDED.exclude_unit_ids, require_personalized = EXCLUDED.require_personalized`,
-    [campaignId, t.countries, t.devices, t.siteCategories.map((c) => c.toLowerCase()), t.keywords.map((k) => k.toLowerCase()), t.includeSiteIds, t.excludeSiteIds, t.includeUnitIds, t.excludeUnitIds, t.requirePersonalized],
+       include_site_ids = EXCLUDED.include_site_ids, exclude_site_ids = EXCLUDED.exclude_site_ids, include_unit_ids = EXCLUDED.include_unit_ids, exclude_unit_ids = EXCLUDED.exclude_unit_ids, require_personalized = EXCLUDED.require_personalized,
+       topics = EXCLUDED.topics, exclude_topics = EXCLUDED.exclude_topics, brand_safety = EXCLUDED.brand_safety`,
+    [campaignId, t.countries, t.devices, t.siteCategories.map((c) => c.toLowerCase()), t.keywords.map((k) => k.toLowerCase()), t.includeSiteIds, t.excludeSiteIds, t.includeUnitIds, t.excludeUnitIds, t.requirePersonalized,
+      [...new Set(t.topics)], [...new Set(t.excludeTopics)], t.brandSafety],
   );
   await client.query('DELETE FROM campaign_caps WHERE campaign_id = $1', [campaignId]);
   for (const c of input.caps) {
@@ -104,6 +111,7 @@ export function serializeCampaign(c: Record<string, any>, t?: Record<string, any
     targeting: t ? {
       countries: t.countries, devices: t.devices, siteCategories: t.site_categories, keywords: t.keywords, includeSiteIds: t.include_site_ids,
       excludeSiteIds: t.exclude_site_ids, includeUnitIds: t.include_unit_ids, excludeUnitIds: t.exclude_unit_ids, requirePersonalized: t.require_personalized,
+      topics: t.topics ?? [], excludeTopics: t.exclude_topics ?? [], brandSafety: t.brand_safety ?? 'standard',
     } : undefined,
     caps: caps.map((x) => ({ scope: x.scope, maxImpressions: x.max_impressions, windowSeconds: x.window_seconds })),
   };

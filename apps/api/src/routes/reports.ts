@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { balance } from '@blissnova/billing';
-import { METRIC_DEFINITIONS, formatMicros } from '@blissnova/shared';
+import { METRIC_DEFINITIONS, SAFETY_LEVEL_LABELS, formatMicros, topicLabel, type PageSafety } from '@blissnova/shared';
 import { badRequest } from '../lib/errors';
 import { dateRange, orgParams, queryOf, resolveRange, toCsv } from '../lib/http';
 import { requireOrg } from '../plugins/auth';
@@ -80,9 +80,10 @@ export async function reportRoutes(app: FastifyInstance) {
     const range = resolveRange(q);
     const report = await pageReport(db, req.org!.id, { ...range, siteId: q.siteId }, 10_000);
     const money = (v: unknown) => (v === null || v === undefined ? '' : formatMicros(String(v), 4));
-    const rows = report.rows.map((r) => ({ ...r, ctr: r.ctr === null ? '' : r.ctr.toFixed(4), earnings: money(r.earningsMicros), pageRpm: money(r.pageRpmMicros) }));
+    const rows = report.rows.map((r) => ({ ...r, ctr: r.ctr === null ? '' : r.ctr.toFixed(4), earnings: money(r.earningsMicros), pageRpm: money(r.pageRpmMicros),
+      topicName: r.topics.map((t) => topicLabel(t)).join('; '), safety: SAFETY_LEVEL_LABELS[r.brandSafety as PageSafety] ?? r.brandSafety }));
     const cols = [
-      { key: 'domain', label: 'Site' }, { key: 'path', label: 'Page' }, { key: 'pageviews', label: 'Page views' }, { key: 'validImpressions', label: 'Valid impressions' },
+      { key: 'domain', label: 'Site' }, { key: 'path', label: 'Page' }, { key: 'topicName', label: 'Topics' }, { key: 'safety', label: 'Brand safety' }, { key: 'pageviews', label: 'Page views' }, { key: 'validImpressions', label: 'Valid impressions' },
       { key: 'validClicks', label: 'Valid clicks' }, { key: 'ctr', label: 'CTR %' }, { key: 'earnings', label: `Estimated earnings (${req.org!.currency})` }, { key: 'pageRpm', label: 'Page RPM' },
     ];
     await db.query('INSERT INTO data_exports (kind, requested_by, org_id, params, row_count) VALUES ($1, $2, $3, $4, $5)', ['report:pages', req.auth?.user?.id ?? null, req.org!.id, JSON.stringify(q), rows.length]).catch(() => undefined);
