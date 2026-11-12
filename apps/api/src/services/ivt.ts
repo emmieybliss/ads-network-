@@ -273,7 +273,7 @@ async function openRateReviews(ctx: SweepCtx, s: PlatformSettings, now: Date) {
     const c = await caseFor(ctx.db, {
       key: `auto:rate:${p.orgId}:${week}`, orgId: p.orgId, kind: 'publisher_ivt_rate', title: `High invalid-traffic rate: ${p.ivtRate!.toFixed(1)}% over 7 days`,
       severity: p.ivtRate! >= Math.min(100, s.ivt.publisherReviewIvtPercent * 2) ? 'high' : 'medium', status: 'open', outcome: null,
-      signals: { ivtRate: Number(p.ivtRate!.toFixed(2)), rendered: p.rendered, invalidImpressions: p.invalidImpressions, topReason: p.topReason, suspiciousEvents: preview.matched }, criteria, estimated: BigInt(preview.publisherMicros),
+      signals: { ivtRate: Number(p.ivtRate!.toFixed(1)), rendered: p.rendered, invalidImpressions: p.invalidImpressions, topReason: p.topReason, suspiciousEvents: preview.matched }, criteria, estimated: BigInt(preview.publisherMicros),
     });
     if (c.inserted) opened++;
   }

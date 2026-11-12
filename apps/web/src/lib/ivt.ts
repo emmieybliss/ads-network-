@@ -32,6 +32,11 @@ export const SIGNAL_LABELS: Record<string, string> = {
   no_accept_language: 'No Accept-Language header',
   no_fetch_metadata: 'Missing browser fetch headers',
   datacenter_ip: 'Data-center IP',
+  automation: 'Automated browser',
+  datacenter: 'Data-center IP',
+  crawler: 'Bot user agent',
+  roboticClicks: 'Machine-regular clicks',
+  sequenceViolation: 'No real impression first',
   no_referrer: 'No referrer',
   click_not_viewable: 'Clicked before the ad was viewable',
 };

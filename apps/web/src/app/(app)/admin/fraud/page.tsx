@@ -83,7 +83,7 @@ function Queue() {
                   {c.criteria && <><div className="text-xs text-muted">Earnings affected</div><div className="text-lg font-semibold">{formatMicros(c.estimated_micros)}</div></>}
                   {manage && c.status !== 'appealed' && (
                     <div className="mt-2 flex flex-wrap justify-end gap-2">
-                      {c.criteria && <Button size="sm" variant="danger" onClick={() => setClaw(c)}>Claw back</Button>}
+                      {c.criteria && Number(c.estimated_micros) > 0 && <Button size="sm" variant="danger" onClick={() => setClaw(c)}>Claw back</Button>}
                       <Button size="sm" variant="secondary" onClick={() => setDismiss(c)}>Dismiss</Button>
                     </div>
                   )}
@@ -203,7 +203,7 @@ function Events() {
       columns={[
         { key: 'w', header: 'When', cell: (r) => formatDate(r.occurred_at, true) }, { key: 't', header: 'Type', cell: (r) => r.type }, { key: 's', header: 'Status', cell: (r) => <StatusBadge status={r.status} /> },
         { key: 'r', header: 'Reason', cell: (r) => (r.invalid_reason ? reasonLabel(r.invalid_reason) : '') }, { key: 'sc', header: 'Score', align: 'right', cell: (r) => r.ivt_score },
-        { key: 'sg', header: 'Signals', cell: (r) => <span className="text-xs text-fg-2">{(r.ivt_signals ?? []).map(signalLabel).join(', ')}</span> },
+        { key: 'sg', header: 'Signals', cell: (r) => <span className="text-xs text-fg-2">{[...new Set((r.ivt_signals ?? []).map(signalLabel))].join(', ')}</span> },
         { key: 'd', header: 'Site / page host', cell: (r) => <span className="text-xs">{r.domain} / {r.page_host ?? '—'}</span> }, { key: 'i', header: 'IP hash', cell: (r) => <code className="text-xs">{r.ip_hash?.slice(0, 12)}</code> },
         { key: 'c', header: 'Cost', align: 'right', cell: (r) => (r.billable ? formatMicros(r.cost_micros) : '—') },
       ]} />

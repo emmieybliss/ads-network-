@@ -27,7 +27,7 @@ function TrafficQuality({ orgId }: { orgId: string }) {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Stat label="Invalid traffic rate" value={data.ivtRate == null ? '—' : formatPercent(data.ivtRate, 1)} hint={data.previousRate == null ? undefined : `${formatPercent(data.previousRate, 1)} the 30 days before`} definition={`Impressions filtered as invalid, out of all impressions. We review accounts at ${data.reviewAtPercent}% or more.`} />
             <Stat label="Impressions filtered" value={formatNumber(data.invalidImpressions)} hint={`of ${formatNumber(data.rendered)}`} />
-            <Stat label="Invalid clicks" value={data.invalidClickRate == null ? '—' : formatPercent(data.invalidClickRate, 1)} hint={`${formatNumber(data.invalidClicks)} clicks`} />
+            <Stat label="Invalid clicks" value={data.invalidClickRate == null ? '—' : formatPercent(data.invalidClickRate, 1)} hint={`${formatNumber(data.invalidClicks)} ${data.invalidClicks === 1 ? 'click' : 'clicks'}`} />
             <Stat label="Earnings removed" value={formatMicros(data.clawbacks.reduce((a: bigint, c: any) => a + BigInt(c.publisher_micros), 0n).toString())} hint="for invalid traffic found later" />
           </div>
           {data.daily.length > 1 && <div className="mt-5"><TrendChart height={200} data={data.daily.map((d: any) => ({ label: d.day, rate: d.rendered ? Number(((d.invalid / d.rendered) * 100).toFixed(1)) : 0 }))} series={[{ key: 'rate', label: 'Invalid %', color: 'var(--chart-4)', format: (v) => `${v}%` }]} /></div>}
@@ -94,7 +94,7 @@ export default function Policy() {
             { key: 't', header: 'Case', cell: (r) => r.title },
             { key: 'sv', header: 'Severity', cell: (r) => <Badge tone={r.severity === 'high' || r.severity === 'critical' ? 'danger' : 'warning'}>{humanize(r.severity)}</Badge> },
             { key: 's', header: 'Status', cell: (r) => <StatusBadge status={r.status} /> },
-            { key: 'o', header: 'Outcome', cell: (r) => <span className="text-sm">{r.outcome ?? ''}{r.source === 'auto' && <span className="ml-1 text-xs text-muted">(automatic)</span>}</span> },
+            { key: 'o', header: 'Outcome', cell: (r) => <span className="text-sm">{r.outcome ?? (['open', 'investigating'].includes(r.status) ? 'Under review' : '')}{r.source === 'auto' && <span className="ml-1 text-xs text-muted">(automatic)</span>}</span> },
             { key: 'd', header: 'Opened', cell: (r) => formatDate(r.created_at) },
             { key: 'a', header: '', cell: (r) => r.status === 'confirmed' && !r.appeal_text ? <Button size="sm" variant="secondary" onClick={() => setAppeal({ id: r.id, text: '' })}>Appeal</Button> : r.appeal_text ? <span className="text-xs text-muted">Appealed</span> : null },
           ]} />}
