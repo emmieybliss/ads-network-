@@ -4,7 +4,8 @@
  * Serves a few fictional article pages (each on its own topic) with BlissNova placements, using the
  * same snippet a real publisher pastes, and /consent-test, which shows how
  * the tag reacts to consent signals from a stand-in consent tool, and /pop-test, which
- * shows a pop-under placement. It has no dependencies and must not
+ * shows a pop-under placement, and /bot-test, which pretends to be an automated
+ * browser so the invalid-traffic filter can be seen at work. It has no dependencies and must not
  * be deployed publicly: it exists only to show ad delivery end to end on
  * your own machine.
  *
@@ -148,7 +149,7 @@ ${LONG.map((t) => `    <p>${esc(t)}</p>`).join('\n')}
     <script async src="${esc(apiUrl)}/sdk/ads.js" data-site-key="${esc(siteKey)}" data-auto="1"></script>
 `}
     <p>Other placement types: a <strong>sticky anchor</strong> at the bottom of the screen (close it with ×), a <strong>side rail</strong> on the right on wide screens, and an <strong>interstitial</strong> that appears when you follow the link below to the next article. The interstitial shows at most once every 10 minutes in a tab.</p>
-    <p>Pop-ups and pop-unders are on their own page, so they do not get in the way here: <a href="/pop-test">see the pop-under demo</a>.</p>
+    <p>Pop-ups and pop-unders are on their own page, so they do not get in the way here: <a href="/pop-test">see the pop-under demo</a>. The <a href="/bot-test">bot test</a> shows the invalid-traffic filter catching an automated browser.</p>
     <p><a href="${ARTICLES[a.next].path}" id="next-article">Read the next article: ${esc(ARTICLES[a.next].title)}</a></p>
     <p><a href="${esc(webUrl)}/publisher">Open the publisher dashboard</a> · <a href="${esc(webUrl)}/advertiser">Open the advertiser dashboard</a></p>
   </article>
@@ -332,6 +333,55 @@ ${slot('demo-popunder', '', ' data-bn-display="popunder"')}
 </body>
 </html>`;
 
+/*
+ * /bot-test: the same ad tag in a page that claims to be driven by WebDriver
+ * (the flag Puppeteer, Playwright and Selenium set). The tag reports it, so
+ * the impression and any click are filed as invalid ("Automated browser")
+ * and never billed. Admin, Invalid traffic, Events shows them.
+ */
+const botPage = () => `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot test (local demo publisher)</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fbfaf7; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #b45309; --card: #fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --accent: #f59e0b; --card: #292524; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, sans-serif; }
+  .banner { background: #fee2e2; color: #7f1d1d; font-size: 13px; padding: 8px 16px; text-align: center; }
+  main { max-width: 760px; margin: 24px auto; padding: 0 16px; }
+  h1 { font: 600 26px/1.2 Georgia, serif; margin: 0 0 6px; }
+  .muted { color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 16px 0; }
+  .card ul { margin: 6px 0 0; padding-left: 20px; }
+  a { color: var(--accent); }
+</style>
+<script>
+  // Pretend to be an automated browser, as Puppeteer, Playwright and Selenium do.
+  try { Object.defineProperty(Navigator.prototype, 'webdriver', { get: function () { return true; }, configurable: true }); } catch (e) {}
+</script>
+</head>
+<body>
+<div class="banner">Local demo only. This page pretends to be an automated browser to show the invalid-traffic filter.</div>
+<main>
+  <h1>Bot test</h1>
+  <p class="muted">This page tells the ad tag it is being driven by automation software. The ad below still shows, but its impression, and a click on it, are filed as invalid and never billed.</p>
+  ${slot('demo-native')}
+  <div class="card">
+    <strong>Where to see it</strong>
+    <ul>
+      <li>Sign in as the demo admin and open <a href="${esc(webUrl)}/admin/fraud#events">Invalid traffic, Events</a>: the newest events say <em>Automated browser</em> with the signal <em>WebDriver browser</em>.</li>
+      <li><a href="${esc(webUrl)}/admin/fraud">Summary</a> lists the checks that are switched on. <a href="${esc(webUrl)}/admin/fraud#publishers">Publishers</a> shows each publisher's invalid-traffic rate.</li>
+      <li>Your own reports never count these: the demo publisher's earnings do not change.</li>
+    </ul>
+  </div>
+  <p class="muted"><a href="/">Back to the demo article</a></p>
+</main>
+</body>
+</html>`;
+
 createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   if (url.pathname === '/healthz') {
@@ -345,7 +395,8 @@ createServer((req, res) => {
   }
   const article = ARTICLE_BY_PATH[url.pathname];
   const pop = url.pathname === '/pop-test';
-  if (!article && !consentKind && !pop) {
+  const bot = url.pathname === '/bot-test';
+  if (!article && !consentKind && !pop && !bot) {
     res.writeHead(404, { 'content-type': 'text/plain' }).end('Not found');
     return;
   }
@@ -354,5 +405,5 @@ createServer((req, res) => {
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'strict-origin-when-cross-origin',
-  }).end(pop ? popPage() : consentKind ? consentPage(consentKind) : page(article));
+  }).end(bot ? botPage() : pop ? popPage() : consentKind ? consentPage(consentKind) : page(article));
 }).listen(port, () => console.log(`Demo publisher site on http://localhost:${port} (also http://demo-publisher.localhost:${port})`));

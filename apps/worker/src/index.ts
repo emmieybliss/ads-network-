@@ -14,7 +14,7 @@ import { LocalStorage } from '@blissnova/api/lib/storage';
 import { PartnerRegistry } from '@blissnova/api/services/partners';
 import { PaymentProviderRegistry, paypalClientFor } from '@blissnova/api/services/payments/registry';
 import { PayoutProviderRegistry } from '@blissnova/api/services/payouts/registry';
-import { budgetAlerts, campaignLifecycle, dailyMaintenance, detectAnomalies, lowBalanceAlerts, refreshAggregates, reportEmails, settleAll, syncPartners, syncProviders, syncSpendCounters, type JobCtx } from './jobs';
+import { budgetAlerts, campaignLifecycle, dailyMaintenance, detectAnomalies, ivtSweep, lowBalanceAlerts, refreshAggregates, reportEmails, settleAll, syncPartners, syncProviders, syncSpendCounters, type JobCtx } from './jobs';
 
 /**
  * Background worker: event processing, serve logs, email delivery and
@@ -80,7 +80,7 @@ const workers = [
         await budgetAlerts(jobCtx);
         await lowBalanceAlerts(jobCtx);
         await reportEmails(jobCtx);
-        return { anomalies: await detectAnomalies(jobCtx), providers: await syncProviders(jobCtx) };
+        return { anomalies: await detectAnomalies(jobCtx), ivt: await ivtSweep(jobCtx), providers: await syncProviders(jobCtx) };
       case 'daily':
         return dailyMaintenance(jobCtx);
       default:

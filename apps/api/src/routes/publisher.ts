@@ -15,6 +15,7 @@ import { notifyOrg, notifyStaff } from '../services/notifications';
 import { decryptDestination, encryptDestination } from '../services/payouts/service';
 import { invalidateServingCache } from '../services/serving';
 import { adsTxtLine, checkAdsTxt, networkDomain } from '../services/adstxt';
+import { publisherIvtRates, qualityStatus } from '../services/ivt';
 
 const CATEGORIES = ['general', 'news', 'technology', 'business', 'finance', 'lifestyle', 'entertainment', 'sports', 'education', 'health', 'travel', 'food', 'automotive', 'gaming', 'parenting', 'real_estate', 'science', 'other'] as const;
 const language = z.string().trim().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/, 'Use a language code such as en or en-GB');
@@ -680,11 +681,32 @@ export async function publisherRoutes(app: FastifyInstance) {
   // ---------------------------------------------------------------- invalid-traffic cases & appeals
   app.get('/orgs/:orgId/fraud-cases', { preHandler: requireOrg('report:read', { allowSuspended: true }), schema: { tags: ['invalid traffic'], params: orgParams } }, async (req) => {
     const rows = (await db.query(
-      `SELECT f.id, f.title, f.status, f.severity, f.outcome, f.appeal_text, f.created_at, f.resolved_at FROM fraud_cases f
+      `SELECT f.id, f.title, f.status, f.severity, f.outcome, f.appeal_text, f.created_at, f.resolved_at, f.source FROM fraud_cases f
        WHERE (f.subject_type = 'organization' AND f.subject_id = $1) OR (f.subject_type = 'site' AND f.subject_id IN (SELECT id FROM sites WHERE org_id = $1))
           OR (f.subject_type = 'campaign' AND f.subject_id IN (SELECT id FROM campaigns WHERE org_id = $1)) OR (f.subject_type = 'unit' AND f.subject_id IN (SELECT u.id FROM ad_units u JOIN sites s ON s.id = u.site_id WHERE s.org_id = $1))
        ORDER BY f.created_at DESC`, [req.org!.id])).rows;
     return { data: rows };
+  });
+
+  app.get('/orgs/:orgId/traffic-quality', { preHandler: requireOrg('report:read', { allowSuspended: true }), schema: { tags: ['invalid traffic'], params: orgParams, querystring: z.object({ days: z.coerce.number().int().min(7).max(90).default(30) }), description: 'Your invalid-traffic rate, why traffic was not counted, and earnings removed for invalid traffic.' } }, async (req) => {
+    const { days } = req.query as { days: number };
+    const s = await app.ctx.settings.get();
+    const to = new Date().toISOString().slice(0, 10);
+    const from = new Date(Date.now() - (days - 1) * 86_400_000).toISOString().slice(0, 10);
+    const orgId = req.org!.id;
+    const [rate] = await publisherIvtRates(db, from, to, { orgId });
+    const reasons = (await db.query(`SELECT reason, type, sum(events)::bigint AS n FROM ivt_daily_stats WHERE publisher_org_id = $1 AND day BETWEEN $2 AND $3 GROUP BY 1, 2 ORDER BY 3 DESC`, [orgId, from, to])).rows;
+    const daily = (await db.query(`SELECT day::text, sum(rendered)::bigint AS rendered, sum(invalid_impressions)::bigint AS invalid FROM daily_stats WHERE publisher_org_id = $1 AND day BETWEEN $2 AND $3 GROUP BY 1 ORDER BY 1`, [orgId, from, to])).rows;
+    const clawbacks = (await db.query(
+      `SELECT x.id, x.created_at, x.excluded_events, x.publisher_micros, x.automatic, x.reason, x.case_id, f.status AS case_status FROM event_exclusions x LEFT JOIN fraud_cases f ON f.id = x.case_id
+       WHERE x.publisher_org_id = $1 ORDER BY x.created_at DESC LIMIT 50`, [orgId])).rows;
+    return { data: {
+      range: { from, to }, ivtRate: rate?.ivtRate ?? null, previousRate: rate?.previousRate ?? null, rendered: rate?.rendered ?? 0, invalidImpressions: rate?.invalidImpressions ?? 0,
+      clicks: rate?.clicks ?? 0, invalidClicks: rate?.invalidClicks ?? 0, invalidClickRate: rate?.invalidClickRate ?? null,
+      status: qualityStatus(rate?.ivtRate ?? null, rate?.rendered ?? 0, s.ivt), reviewAtPercent: s.ivt.publisherReviewIvtPercent,
+      reasons: reasons.map((r) => ({ reason: r.reason, type: r.type, events: Number(r.n) })), daily: daily.map((d) => ({ day: d.day, rendered: Number(d.rendered), invalid: Number(d.invalid) })),
+      clawbacks,
+    } };
   });
 
   app.post('/orgs/:orgId/fraud-cases/:id/appeal', { config: mgmt, preHandler: requireOrg('org:update'), schema: { tags: ['invalid traffic'], params: orgIdParams, body: z.object({ text: z.string().trim().min(20).max(5000) }) } }, async (req) => {

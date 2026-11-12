@@ -3771,6 +3771,42 @@
         }
       }
     },
+    "/api/v1/orgs/{orgId}/traffic-quality": {
+      "get": {
+        "tags": [
+          "invalid traffic"
+        ],
+        "description": "Your invalid-traffic rate, why traffic was not counted, and earnings removed for invalid traffic.",
+        "parameters": [
+          {
+            "schema": {
+              "default": 30,
+              "type": "integer",
+              "minimum": 7,
+              "maximum": 90
+            },
+            "in": "query",
+            "name": "days",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "orgId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/api/v1/orgs/{orgId}/fraud-cases/{id}/appeal": {
       "post": {
         "tags": [
@@ -4728,6 +4764,11 @@
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 3600000
+                        },
+                        "f": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 255
                         }
                       },
                       "required": [
@@ -4757,7 +4798,7 @@
         "tags": [
           "ad serving"
         ],
-        "description": "Click-tracking redirect. Redirects only to the destination stored for the creative; the URL cannot be supplied by the caller.",
+        "description": "Click-tracking redirect. f carries the ad tag's browser checks. Redirects only to the destination stored for the creative; the URL cannot be supplied by the caller.",
         "parameters": [
           {
             "schema": {
@@ -4768,6 +4809,16 @@
             "in": "query",
             "name": "t",
             "required": true
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "in": "query",
+            "name": "f",
+            "required": false
           }
         ],
         "responses": {
@@ -9918,6 +9969,11 @@
                         "format": "uuid",
                         "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                       },
+                      "publisherOrgId": {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
                       "ipHash": {
                         "type": "string",
                         "maxLength": 40
@@ -9925,6 +9981,11 @@
                       "visitorHash": {
                         "type": "string",
                         "maxLength": 40
+                      },
+                      "minScore": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100
                       },
                       "from": {
                         "type": "string",
@@ -9979,6 +10040,129 @@
             "required": true
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/fraud/queue": {
+      "get": {
+        "tags": [
+          "admin: invalid traffic"
+        ],
+        "description": "Cases waiting for a staff decision: open, under investigation or appealed. Most severe first.",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/fraud/publishers": {
+      "get": {
+        "tags": [
+          "admin: invalid traffic"
+        ],
+        "description": "Invalid-traffic rate per publisher, with the previous period for the trend and what was clawed back.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "in": "query",
+            "name": "from",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "in": "query",
+            "name": "to",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/fraud/clawbacks": {
+      "get": {
+        "tags": [
+          "admin: invalid traffic"
+        ],
+        "description": "Recent exclusions, automatic and by staff, newest first.",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/fraud/cases/{id}/clawback": {
+      "post": {
+        "tags": [
+          "admin: invalid traffic"
+        ],
+        "description": "Apply the exclusion the detection proposed for this case and confirm it. Settled charges are reversed.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 1000
+                  },
+                  "dryRun": {
+                    "default": false,
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/fraud/sweep": {
+      "post": {
+        "tags": [
+          "admin: invalid traffic"
+        ],
+        "description": "Run the invalid-traffic sweep now instead of waiting for the timer.",
         "responses": {
           "200": {
             "description": "Default Response"

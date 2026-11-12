@@ -69,6 +69,7 @@ export const EVENT_STATUSES = ['valid', 'invalid'] as const;
 export const INVALID_REASONS = [
   'duplicate', 'token_invalid', 'token_expired', 'replay', 'domain_mismatch', 'crawler', 'rate_anomaly',
   'sequence', 'click_too_fast', 'click_burst', 'site_inactive', 'manual_exclusion', 'tracking_disabled', 'anomaly_score',
+  'datacenter', 'automation', 'click_pattern', 'ivt_clawback',
 ] as const;
 export type InvalidReason = (typeof INVALID_REASONS)[number];
 
