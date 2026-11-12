@@ -17,13 +17,14 @@ const GROUP_HELP: Record<string, string> = {
   eligibility: 'Publisher requirements shown publicly and used in review. Thresholds are optional and configurable, never fixed.',
   pricing: 'Enabled pricing models, minimum rates, the minimum advertiser deposit and currencies.',
   popAds: 'Pop-up and pop-under placements: turn them off network-wide, or cap how often one visitor can see them. Publishers opt in per placement and can only be stricter than these limits.',
+  adRefresh: 'Viewable auto-refresh: a placement the publisher opted in shows a new ad after the current one has been at least half in view, in a visible tab, for the interval. Publishers can only be stricter than these limits; advertisers can keep campaigns out of refreshed impressions.',
   api: 'Rate limits.',
   platform: 'Maintenance mode, registration and staff sign-in rules.',
   branding: 'Names, support contact and legal links shown across the site.',
   email: 'Sender details and message templates.',
 };
 
-const GROUP_NAMES: Record<string, string> = { ivt: 'Invalid traffic', popAds: 'Pop ads', api: 'API' };
+const GROUP_NAMES: Record<string, string> = { ivt: 'Invalid traffic', popAds: 'Pop ads', adRefresh: 'Ad refresh', api: 'API' };
 const groupName = (g: string) => GROUP_NAMES[g] ?? humanize(g);
 
 type Draft = Record<string, unknown>;
@@ -33,6 +34,8 @@ const LABELS: Record<string, string> = {
   popunderEnabled: 'Pop-unders allowed',
   maxPerVisitorPerDay: 'Most pops per visitor per day',
   minMinutesBetween: 'Least minutes between pops',
+  minSeconds: 'Least seconds in view before a refresh',
+  maxPerPageView: 'Most refreshes per slot per page view',
 };
 
 function label(key: string) {

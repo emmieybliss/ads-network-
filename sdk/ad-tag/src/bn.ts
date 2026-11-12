@@ -49,6 +49,15 @@
  *   referring URL) so reports can split traffic by source; each rendered ad
  *   reports how long it was at least half in view, once, when the page is
  *   first hidden. Neither needs cookies or device storage.
+ * - Viewable auto-refresh: when the server says a slot may refresh (the
+ *   publisher opted the placement in and the network allows it), the tag asks
+ *   for a new ad once the current one has been at least half in view for the
+ *   placement's interval (30 seconds or more), counting only time when the tab
+ *   is visible and the visitor has been active in the last two minutes. A slot
+ *   refreshes at most the allowed number of times per page view; the server
+ *   checks the order and the timing again. Interstitials and pops never
+ *   refresh. A slot with data-bn-refresh="off" never refreshes. When no new ad
+ *   is available the current one stays.
  */
 
 type Format = 'image' | 'text' | 'native' | 'pop';
@@ -67,8 +76,23 @@ interface AdPayload {
 type Display = 'inline' | 'anchor' | 'rail_left' | 'rail_right' | 'interstitial' | 'popup' | 'popunder';
 interface ServeResponse {
   status: 'ok' | 'inactive' | 'blocked' | 'disabled';
-  ads: Array<{ slot: string; display?: Display; ad: AdPayload | null }>;
+  ads: Array<{ slot: string; display?: Display; refresh?: RefreshRule; ad: AdPayload | null }>;
   privacy?: { personalization: boolean; reason: string };
+}
+interface RefreshRule { seconds: number; max: number }
+/** One ad request unit: refresh is the slot's refresh number in this page view, inst tells apart slots that share a key. */
+interface UnitReq { slot: string; refresh?: number; inst?: number }
+/** A slot that may refresh, and the measurements for the ad it shows now. */
+interface RefreshState {
+  slot: string;
+  inst: number;
+  display: Display;
+  rule: RefreshRule;
+  count: number;
+  inView: boolean;
+  ms: number;
+  busy: boolean;
+  done: boolean;
 }
 interface Consent {
   personalized: boolean;
@@ -98,6 +122,8 @@ const INTERSTITIAL_GAP_MS = 10 * 60 * 1000;
 const INTERSTITIAL_WAIT_MS = 1500;
 const IST_KEY = 'bn_ist';
 const POP_MAX_AGE_MS = 10 * 60 * 1000; // a prepared pop older than this is fetched again (its token may have expired)
+const REFRESH_TICK_MS = 1000;
+const REFRESH_IDLE_MS = 2 * 60 * 1000; // no scroll, key, pointer or touch for this long pauses refresh
 const POP_SKIP = 'input, textarea, select, option, label, [contenteditable=""], [contenteditable="true"], [data-bn-slot]';
 
 function displayOf(el: Element): Display {
@@ -333,6 +359,17 @@ class Tag {
   private popAd: { ad: AdPayload; display: Display; at: number } | null = null;
   private popDone = false;
   private readonly popListener = (e: MouseEvent) => this.onPopClick(e);
+  /** Where each filled slot's creative lives, so a refresh can swap it in place. */
+  private readonly mounts = new WeakMap<Element, { mount: Node & ParentNode; frame: HTMLElement }>();
+  /** The token shown in a slot now and the observers measuring it. */
+  private readonly current = new WeakMap<Element, { token: string; observers: IntersectionObserver[] }>();
+  private readonly instances = new Map<string, number>();
+  private readonly instOf = new WeakMap<Element, number>();
+  private readonly refreshing = new Map<Element, RefreshState>();
+  private refreshObs: IntersectionObserver | null = null;
+  private refreshTimer: number | null = null;
+  private refreshLastTick = 0;
+  private lastActive = 0;
 
   constructor(api: string, siteKey: string) {
     this.api = api.replace(/\/+$/, '');
@@ -382,6 +419,11 @@ class Tag {
       /* MutationObserver missing: static pages still work */
     }
     window.addEventListener('pagehide', () => { this.reportTimeInView(); this.flush(true); });
+    this.lastActive = performance.now();
+    const active = () => { this.lastActive = performance.now(); };
+    for (const ev of ['scroll', 'wheel', 'keydown', 'pointerdown', 'pointermove', 'touchstart']) {
+      try { window.addEventListener(ev, active, { passive: true, capture: true }); } catch { /* old browser: refresh just pauses sooner */ }
+    }
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
         this.reportTimeInView();
@@ -498,7 +540,7 @@ class Tag {
     const batch = this.pending.splice(0, 10);
     if (this.pending.length) setTimeout(() => void this.request(), 0);
     if (!batch.length) return;
-    const slots: string[] = [];
+    const slots: UnitReq[] = [];
     const byslot = new Map<string, Element>();
     for (const el of batch) {
       const slot = el.getAttribute('data-bn-slot') ?? '';
@@ -511,7 +553,7 @@ class Tag {
         continue;
       }
       byslot.set(slot, el);
-      slots.push(slot);
+      slots.push({ slot, inst: this.instanceOf(el, slot) });
     }
     if (!slots.length) return;
     const res = await this.fetchAds(slots);
@@ -529,7 +571,9 @@ class Tag {
         continue;
       }
       try {
-        this.render(el, entry.ad, entry.display ?? displayOf(el));
+        const display = entry.display ?? displayOf(el);
+        this.render(el, entry.ad, display);
+        if (entry.refresh && el.getAttribute('data-bn-state') === 'filled') this.armRefresh(el, entry.slot, display, entry.refresh);
       } catch {
         collapse(el);
       }
@@ -537,8 +581,102 @@ class Tag {
     for (const el of byslot.values()) collapse(el);
   }
 
+  /** A per-key number for each slot element, so slots sharing a key refresh independently. */
+  private instanceOf(el: Element, slot: string): number {
+    const known = this.instOf.get(el);
+    if (known !== undefined) return known;
+    const n = Math.min(this.instances.get(slot) ?? 0, 49);
+    this.instances.set(slot, n + 1);
+    this.instOf.set(el, n);
+    return n;
+  }
+
+  /* -------------------------------------------------------------- refresh */
+
+  private armRefresh(el: Element, slot: string, display: Display, rule: RefreshRule): void {
+    if (display === 'interstitial' || display === 'popup' || display === 'popunder') return;
+    if (el.getAttribute('data-bn-refresh') === 'off' || this.refreshing.has(el)) return;
+    if (!('IntersectionObserver' in window)) return; // no way to know the ad was seen
+    const seconds = Math.max(30, Math.round(rule.seconds));
+    const max = Math.max(0, Math.min(20, Math.round(rule.max)));
+    if (!max) return;
+    this.refreshing.set(el, { slot, inst: this.instOf.get(el) ?? 0, display, rule: { seconds, max }, count: 0, inView: false, ms: 0, busy: false, done: false });
+    this.refreshObs ??= new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        const st = this.refreshing.get(e.target);
+        if (st) st.inView = e.isIntersecting && e.intersectionRatio >= VIEWABLE_RATIO;
+      }
+    }, { threshold: [0, VIEWABLE_RATIO, 1] });
+    this.refreshObs.observe(el);
+    if (this.refreshTimer === null) {
+      this.refreshLastTick = performance.now();
+      this.refreshTimer = window.setInterval(() => this.refreshTick(), REFRESH_TICK_MS);
+    }
+  }
+
+  /** Count in-view time for each refreshable slot; ask for a new ad when a slot has earned one. */
+  private refreshTick(): void {
+    const now = performance.now();
+    // A long gap means the timer was throttled (background tab, sleep): that time never counts.
+    const dt = Math.min(now - this.refreshLastTick, REFRESH_TICK_MS * 2);
+    this.refreshLastTick = now;
+    const visible = document.visibilityState === 'visible' && now - this.lastActive < REFRESH_IDLE_MS;
+    for (const [el, st] of this.refreshing) {
+      if (st.done || !el.isConnected || el.getAttribute('data-bn-state') !== 'filled') { this.stopRefresh(el); continue; }
+      if (st.busy || !visible || !st.inView) continue;
+      st.ms += dt;
+      if (st.ms >= st.rule.seconds * 1000) void this.refreshSlot(el, st);
+    }
+  }
+
+  private stopRefresh(el: Element): void {
+    const st = this.refreshing.get(el);
+    if (st) st.done = true;
+    this.refreshing.delete(el);
+    this.refreshObs?.unobserve(el);
+    if (!this.refreshing.size && this.refreshTimer !== null) {
+      window.clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+  }
+
+  private async refreshSlot(el: Element, st: RefreshState): Promise<void> {
+    st.busy = true;
+    st.count += 1;
+    const res = await this.fetchAds([{ slot: st.slot, refresh: st.count, inst: st.inst }]);
+    st.busy = false;
+    st.ms = 0;
+    const entry = res?.ads?.find((a) => a.slot === st.slot);
+    if (entry?.ad && el.isConnected && !st.done) {
+      try {
+        this.render(el, entry.ad, st.display);
+      } catch {
+        /* the previous ad stays */
+      }
+    }
+    // No rule back means the server refused this refresh or refresh was turned off: stop asking.
+    if (!entry?.refresh) { this.stopRefresh(el); return; }
+    st.rule = { seconds: Math.max(30, entry.refresh.seconds), max: Math.min(20, entry.refresh.max) };
+    if (st.count >= st.rule.max) this.stopRefresh(el);
+  }
+
+  /** The ad in a slot is being replaced: send its time in view now and stop measuring it. */
+  private retire(el: Element): void {
+    const cur = this.current.get(el);
+    if (!cur) return;
+    for (const o of cur.observers) o.disconnect();
+    const t = this.inView.get(cur.token);
+    if (t && !t.sent) {
+      t.sent = true;
+      const ms = Math.round(t.ms + (t.since !== null ? performance.now() - t.since : 0));
+      if (ms > 0) this.report('inview', cur.token, Math.min(ms, 3_600_000));
+    }
+    this.inView.delete(cur.token);
+    this.current.delete(el);
+  }
+
   /** One /serve call with the current consent signals. Null on any failure. */
-  private async fetchAds(slots: string[]): Promise<ServeResponse | null> {
+  private async fetchAds(units: Array<string | UnitReq>): Promise<ServeResponse | null> {
     await this.cmpReady;
     const c = this.cmp;
     const storageOk = this.deviceStorageAllowed();
@@ -551,7 +689,7 @@ class Tag {
         cache: 'no-store',
         body: JSON.stringify({
           siteKey: this.siteKey,
-          units: slots.map((slot) => ({ slot })),
+          units: units.map((u) => (typeof u === 'string' ? { slot: u } : u)),
           page: { url: pageUrl(), keywords: keywords(), referrer: referrerHost() },
           consent: {
             personalized: this.consentSet ? this.consent.personalized : undefined,
@@ -673,20 +811,10 @@ class Tag {
 
   private render(el: Element, ad: AdPayload, display: Display = 'inline', onContinue?: () => void): void {
     const host = el as HTMLElement;
-    if ((display === 'rail_left' || display === 'rail_right') && !railFits(ad.width)) {
+    const prev = this.mounts.get(host);
+    if (!prev && (display === 'rail_left' || display === 'rail_right') && !railFits(ad.width)) {
       collapse(host);
       return;
-    }
-    host.textContent = '';
-    host.style.display = '';
-    host.setAttribute('data-bn-state', 'filled');
-    const root = host.attachShadow ? host.attachShadow({ mode: 'closed' }) : null;
-    const mount: Node & ParentNode = root ?? host;
-
-    if (root) {
-      const style = document.createElement('style');
-      style.textContent = SHADOW_CSS;
-      root.appendChild(style);
     }
 
     const frame = document.createElement('div');
@@ -776,7 +904,7 @@ class Tag {
       link.appendChild(img);
       link.appendChild(box);
     } else {
-      collapse(host);
+      if (!prev) collapse(host);
       return;
     }
 
@@ -788,18 +916,39 @@ class Tag {
     frame.appendChild(link);
     // Native ads carry their disclosure in the card itself.
     if (ad.format !== 'native') frame.appendChild(label);
-    if (display === 'inline') mount.appendChild(frame);
-    else this.place(host, mount, frame, display, ad, onContinue);
+
+    if (prev) {
+      // A refresh: the new creative takes the old one's place in the same slot, wrapper and shadow root.
+      this.retire(host);
+      if (display === 'anchor') frame.style.maxWidth = ad.width ? `min(${ad.width}px, 100%)` : '';
+      if (display === 'rail_left' || display === 'rail_right') host.style.width = `${ad.width ?? 160}px`;
+      prev.frame.replaceWith(frame);
+      this.mounts.set(host, { mount: prev.mount, frame });
+    } else {
+      host.textContent = '';
+      host.style.display = '';
+      host.setAttribute('data-bn-state', 'filled');
+      const root = host.attachShadow ? host.attachShadow({ mode: 'closed' }) : null;
+      const mount: Node & ParentNode = root ?? host;
+      if (root) {
+        const style = document.createElement('style');
+        style.textContent = SHADOW_CSS;
+        root.appendChild(style);
+      }
+      if (display === 'inline') mount.appendChild(frame);
+      else this.place(host, mount, frame, display, ad, onContinue);
+      this.mounts.set(host, { mount, frame });
+    }
 
     // A render is reported as soon as the creative is in the document.
     this.report('render', ad.token);
-    this.watchViewability(host, ad.token);
-    this.trackTimeInView(host, ad.token);
+    const observers = [this.watchViewability(host, ad.token), this.trackTimeInView(host, ad.token)].filter((o): o is IntersectionObserver => o !== null);
+    this.current.set(host, { token: ad.token, observers });
   }
 
   /** Accumulate the time the ad is at least half visible in a visible tab. */
-  private trackTimeInView(el: Element, token: string): void {
-    if (!('IntersectionObserver' in window)) return;
+  private trackTimeInView(el: Element, token: string): IntersectionObserver | null {
+    if (!('IntersectionObserver' in window)) return null;
     const t = { ms: 0, since: null as number | null, sent: false };
     this.inView.set(token, t);
     const obs = new IntersectionObserver(
@@ -817,6 +966,7 @@ class Tag {
       { threshold: [0, VIEWABLE_RATIO, 1] },
     );
     obs.observe(el);
+    return obs;
   }
 
   /** One in-view report per ad, sent the first time the page is hidden after it rendered. */
@@ -831,8 +981,8 @@ class Tag {
   }
 
   /** IAB display standard: at least 50% of pixels in view for one second. */
-  private watchViewability(el: Element, token: string): void {
-    if (!('IntersectionObserver' in window)) return;
+  private watchViewability(el: Element, token: string): IntersectionObserver | null {
+    if (!('IntersectionObserver' in window)) return null;
     let timer: number | null = null;
     const obs = new IntersectionObserver(
       (entries) => {
@@ -852,6 +1002,7 @@ class Tag {
       { threshold: [0, VIEWABLE_RATIO, 1] },
     );
     obs.observe(el);
+    return obs;
   }
 
   /** Wrap a rendered ad for the anchor, side rail and interstitial placements. */

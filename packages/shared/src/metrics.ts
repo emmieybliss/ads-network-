@@ -46,5 +46,6 @@ export const METRIC_DEFINITIONS: Record<string, string> = {
   roas: 'Reported conversion value divided by spend.',
   reach: 'Distinct visitors who saw at least one valid impression. Only visitors who allowed personalization carry an id, so this counts those visitors only.',
   frequency: 'Valid impressions per reached visitor, among visitors who allowed personalization.',
+  refreshedImpressions: 'Valid impressions from viewable auto-refresh: a new ad shown in a slot after the one before it was at least 50% in view, in a visible tab, for the placement\'s refresh interval (30 seconds or more). Included in valid impressions and reported apart.',
   fillRate: 'Filled ad requests divided by ad requests, multiplied by 100.',
 };

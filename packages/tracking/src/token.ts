@@ -31,6 +31,7 @@ export interface DeliveryClaims {
   src?: string; // traffic source of the page view (see trafficSource)
   ct: boolean; // contextual (non-personalized) delivery
   v?: string;  // pseudonymous visitor hash (only with consent)
+  rf?: number; // refresh number: absent for a slot's first ad in a page view, 1 for its first refresh, ...
   iat: number; // issued at, epoch ms
   exp: number; // expiry, epoch ms
 }

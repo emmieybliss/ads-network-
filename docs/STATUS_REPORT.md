@@ -74,7 +74,6 @@ Demo accounts (development only): `admin@example.com`, `advertiser@example.com`,
 
 ## 6. Partial
 
-- **Viewable refresh:** the tag has a manual `refresh()` for new slots; no automatic refresh after time in view.
 - **Contextual targeting:** keyword and site-category matching; pages are not read or classified automatically.
 - **Bot detection:** user-agent patterns plus behaviour scoring; no datacenter IP lists, browser integrity checks or outside IVT vendor.
 - **Country:** needs a CDN country header or a `.mmdb` GeoIP file, neither bundled. Demo country history is labelled sample data.
