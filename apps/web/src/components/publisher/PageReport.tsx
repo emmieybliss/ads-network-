@@ -6,8 +6,10 @@ import { defaultRange } from '@/components/ReportExplorer';
 import { useApi } from '@/lib/hooks';
 import { qs } from '@/lib/api';
 import { formatMicros, formatNumber, formatPercent } from '@/lib/format';
+import { SafetyBadge, TopicBadge } from '@/components/topics/TopicUi';
 
-type PageRow = { siteId: string; domain: string; path: string; pageviews: number; validImpressions: number; validClicks: number; ctr: number | null; impressionsPerPageview: number | null; earningsMicros: string; pageRpmMicros: string | null };
+type PageRow = { siteId: string; domain: string; path: string; pageviews: number; validImpressions: number; validClicks: number; ctr: number | null; impressionsPerPageview: number | null; earningsMicros: string; pageRpmMicros: string | null;
+  topic: string | null; topics: string[]; brandSafety: string; safetyFlags: Array<{ category: string; risk: string }>; reviewed: boolean };
 
 const PAGE_RPM = 'Estimated earnings divided by page views, multiplied by 1,000. A page view is a page where the ad tag asked for at least one ad.';
 
@@ -15,10 +17,16 @@ const PAGE_RPM = 'Estimated earnings divided by page views, multiplied by 1,000.
 export function PageReport({ orgId, currency, siteId }: { orgId: string; currency: string; siteId?: string }) {
   const [range, setRange] = useState(defaultRange());
   const query = qs({ ...range, siteId });
-  const res = useApi<{ data: { totals: Omit<PageRow, 'siteId' | 'domain' | 'path'>; rows: PageRow[] } }>(`/orgs/${orgId}/reports/pages${query}`);
+  const res = useApi<{ data: { totals: Omit<PageRow, 'siteId' | 'domain' | 'path' | 'topic' | 'topics' | 'brandSafety' | 'safetyFlags' | 'reviewed'>; rows: PageRow[] } }>(`/orgs/${orgId}/reports/pages${query}`);
   const money = (v: string | null | undefined) => formatMicros(v, currency);
   const columns: Column<PageRow>[] = [
     { key: 'page', header: 'Page', cell: (r) => <span className="block max-w-[340px] truncate font-medium text-fg" title={`${r.domain}${r.path}`}><span className="text-muted">{r.domain}</span>{r.path}</span> },
+    { key: 'topic', header: 'Topic', cell: (r) => (
+      <span className="flex flex-wrap gap-1" title={r.reviewed ? 'Set by a reviewer' : r.topic ? 'Detected from the page text' : 'Not classified yet'}>
+        {r.topics.length ? r.topics.slice(0, 2).map((t, i) => <TopicBadge key={t} id={t} muted={i > 0} />) : <TopicBadge id={null} />}
+      </span>
+    ) },
+    { key: 'safety', header: 'Brand safety', cell: (r) => <SafetyBadge level={r.brandSafety} flags={r.safetyFlags} /> },
     { key: 'pv', header: 'Page views', align: 'right', cell: (r) => formatNumber(r.pageviews) },
     { key: 'imp', header: 'Valid impr.', align: 'right', cell: (r) => formatNumber(r.validImpressions) },
     { key: 'ipp', header: 'Impr. / page view', align: 'right', cell: (r) => (r.impressionsPerPageview == null ? '—' : r.impressionsPerPageview.toFixed(2)) },
@@ -30,7 +38,7 @@ export function PageReport({ orgId, currency, siteId }: { orgId: string; currenc
   return (
     <div className="space-y-5">
       <Card>
-        <CardHeader title="Pages" description="Earnings by page. The path is stored without the query string or fragment." actions={
+        <CardHeader title="Pages" description="Earnings by page, with each page's topic and brand-safety check, detected automatically from its text. The path is stored without the query string or fragment. High-risk pages do not show ads." actions={
           <a href={`/api/v1/orgs/${orgId}/reports/pages/export${query}`} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-surface px-3.5 text-sm font-medium shadow-sm hover:bg-surface-2">
             <Download className="size-4" aria-hidden /> Export CSV
           </a>

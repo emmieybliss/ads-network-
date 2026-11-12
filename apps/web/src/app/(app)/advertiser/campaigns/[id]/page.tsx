@@ -13,6 +13,7 @@ import { useApi } from '@/lib/hooks';
 import { useOrg } from '@/lib/session';
 import { ApiError, errorMessage, patch, post } from '@/lib/api';
 import { formatDate, formatMicros, formatNumber, humanize, timeAgo } from '@/lib/format';
+import { topicLabel } from '@blissnova/shared';
 
 function CampaignDetail() {
   const org = useOrg();
@@ -100,6 +101,9 @@ function CampaignDetail() {
                       ['Devices', c.targeting?.devices?.length ? c.targeting.devices.map(humanize).join(', ') : 'All'],
                       ['Site categories', c.targeting?.siteCategories?.length ? c.targeting.siteCategories.join(', ') : 'All'],
                       ['Keywords', c.targeting?.keywords?.length ? c.targeting.keywords.join(', ') : 'None'],
+                      ['Page topics', c.targeting?.topics?.length ? c.targeting.topics.map((t: string) => topicLabel(t)).join(', ') : 'Any'],
+                      ['Excluded topics', c.targeting?.excludeTopics?.length ? c.targeting.excludeTopics.map((t: string) => topicLabel(t)).join(', ') : 'None'],
+                      ['Brand safety', humanize(c.targeting?.brandSafety ?? 'standard')],
                       ['Personalized only', c.targeting?.requirePersonalized ? 'Yes' : 'No'],
                       ['Refreshed ad slots', c.acceptRefresh === false ? 'Not shown' : 'Shown'],
                       ['Frequency caps', c.caps.length ? c.caps.map((x: any) => `${x.maxImpressions} per ${x.scope} per ${Math.round(x.windowSeconds / 3600)}h`).join('; ') : 'None'],

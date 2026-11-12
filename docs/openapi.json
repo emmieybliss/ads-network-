@@ -1283,6 +1283,89 @@
                       "requirePersonalized": {
                         "default": false,
                         "type": "boolean"
+                      },
+                      "topics": {
+                        "default": [],
+                        "maxItems": 30,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "automotive",
+                            "books_literature",
+                            "business",
+                            "careers",
+                            "education",
+                            "arts_culture",
+                            "parenting",
+                            "food",
+                            "fitness",
+                            "health",
+                            "hobbies",
+                            "home_garden",
+                            "movies",
+                            "music",
+                            "television",
+                            "news",
+                            "finance",
+                            "pets",
+                            "real_estate",
+                            "religion",
+                            "science",
+                            "shopping",
+                            "sports",
+                            "fashion",
+                            "technology",
+                            "travel",
+                            "gaming"
+                          ]
+                        }
+                      },
+                      "excludeTopics": {
+                        "default": [],
+                        "maxItems": 30,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "automotive",
+                            "books_literature",
+                            "business",
+                            "careers",
+                            "education",
+                            "arts_culture",
+                            "parenting",
+                            "food",
+                            "fitness",
+                            "health",
+                            "hobbies",
+                            "home_garden",
+                            "movies",
+                            "music",
+                            "television",
+                            "news",
+                            "finance",
+                            "pets",
+                            "real_estate",
+                            "religion",
+                            "science",
+                            "shopping",
+                            "sports",
+                            "fashion",
+                            "technology",
+                            "travel",
+                            "gaming"
+                          ]
+                        }
+                      },
+                      "brandSafety": {
+                        "default": "standard",
+                        "type": "string",
+                        "enum": [
+                          "strict",
+                          "standard",
+                          "relaxed"
+                        ]
                       }
                     }
                   },
@@ -1553,6 +1636,89 @@
                       "requirePersonalized": {
                         "default": false,
                         "type": "boolean"
+                      },
+                      "topics": {
+                        "default": [],
+                        "maxItems": 30,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "automotive",
+                            "books_literature",
+                            "business",
+                            "careers",
+                            "education",
+                            "arts_culture",
+                            "parenting",
+                            "food",
+                            "fitness",
+                            "health",
+                            "hobbies",
+                            "home_garden",
+                            "movies",
+                            "music",
+                            "television",
+                            "news",
+                            "finance",
+                            "pets",
+                            "real_estate",
+                            "religion",
+                            "science",
+                            "shopping",
+                            "sports",
+                            "fashion",
+                            "technology",
+                            "travel",
+                            "gaming"
+                          ]
+                        }
+                      },
+                      "excludeTopics": {
+                        "default": [],
+                        "maxItems": 30,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "automotive",
+                            "books_literature",
+                            "business",
+                            "careers",
+                            "education",
+                            "arts_culture",
+                            "parenting",
+                            "food",
+                            "fitness",
+                            "health",
+                            "hobbies",
+                            "home_garden",
+                            "movies",
+                            "music",
+                            "television",
+                            "news",
+                            "finance",
+                            "pets",
+                            "real_estate",
+                            "religion",
+                            "science",
+                            "shopping",
+                            "sports",
+                            "fashion",
+                            "technology",
+                            "travel",
+                            "gaming"
+                          ]
+                        }
+                      },
+                      "brandSafety": {
+                        "default": "standard",
+                        "type": "string",
+                        "enum": [
+                          "strict",
+                          "standard",
+                          "relaxed"
+                        ]
                       }
                     }
                   },
@@ -4423,6 +4589,35 @@
                       "referrer": {
                         "type": "string",
                         "maxLength": 2048
+                      },
+                      "context": {
+                        "type": "object",
+                        "properties": {
+                          "title": {
+                            "type": "string",
+                            "maxLength": 300
+                          },
+                          "description": {
+                            "type": "string",
+                            "maxLength": 500
+                          },
+                          "headings": {
+                            "maxItems": 12,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "maxLength": 160
+                            }
+                          },
+                          "text": {
+                            "type": "string",
+                            "maxLength": 6000
+                          },
+                          "lang": {
+                            "type": "string",
+                            "maxLength": 20
+                          }
+                        }
                       }
                     },
                     "required": [
@@ -7130,6 +7325,312 @@
         }
       }
     },
+    "/api/v1/admin/page-topics": {
+      "get": {
+        "tags": [
+          "admin: inventory"
+        ],
+        "description": "Classified pages, most at risk first by default, with page views in the last 30 days.",
+        "parameters": [
+          {
+            "schema": {
+              "default": 1,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "page",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": 25,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "in": "query",
+            "name": "pageSize",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "in": "query",
+            "name": "q",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "in": "query",
+            "name": "status",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "in": "query",
+            "name": "type",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "in": "query",
+            "name": "sort",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            },
+            "in": "query",
+            "name": "order",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "safe",
+                "low",
+                "medium",
+                "high",
+                "flagged"
+              ]
+            },
+            "in": "query",
+            "name": "safety",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "in": "query",
+            "name": "topic",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "query",
+            "name": "siteId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "yes",
+                "no"
+              ]
+            },
+            "in": "query",
+            "name": "reviewed",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/page-topics/override": {
+      "put": {
+        "tags": [
+          "admin: inventory"
+        ],
+        "description": "Correct a page's topics and/or brand-safety risk. Pass null for both to go back to detection.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "siteId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  },
+                  "topics": {
+                    "nullable": true,
+                    "maxItems": 3,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "automotive",
+                        "books_literature",
+                        "business",
+                        "careers",
+                        "education",
+                        "arts_culture",
+                        "parenting",
+                        "food",
+                        "fitness",
+                        "health",
+                        "hobbies",
+                        "home_garden",
+                        "movies",
+                        "music",
+                        "television",
+                        "news",
+                        "finance",
+                        "pets",
+                        "real_estate",
+                        "religion",
+                        "science",
+                        "shopping",
+                        "sports",
+                        "fashion",
+                        "technology",
+                        "travel",
+                        "gaming"
+                      ]
+                    }
+                  },
+                  "safety": {
+                    "nullable": true,
+                    "type": "string",
+                    "enum": [
+                      "safe",
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "siteId",
+                  "path",
+                  "topics",
+                  "safety",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/page-topics/recheck": {
+      "post": {
+        "tags": [
+          "admin: inventory"
+        ],
+        "description": "Classify the page again on its next ad request, whatever the reclassify interval.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "siteId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  }
+                },
+                "required": [
+                  "siteId",
+                  "path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/page-topics/test": {
+      "post": {
+        "tags": [
+          "admin: inventory"
+        ],
+        "description": "Classify any text without storing anything: what topics and risk would a page with this text get?",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 300
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "text": {
+                    "type": "string",
+                    "maxLength": 6000
+                  },
+                  "path": {
+                    "type": "string",
+                    "maxLength": 300
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/api/v1/admin/campaigns": {
       "get": {
         "tags": [
@@ -9639,6 +10140,7 @@
                 "eligibility",
                 "pricing",
                 "popAds",
+                "contextual",
                 "api",
                 "platform",
                 "branding",

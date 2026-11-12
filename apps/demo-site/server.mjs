@@ -1,7 +1,7 @@
 /**
  * Demo publisher website for local testing.
  *
- * Serves one fictional article page with BlissNova placements, using the
+ * Serves a few fictional article pages (each on its own topic) with BlissNova placements, using the
  * same snippet a real publisher pastes, and /consent-test, which shows how
  * the tag reacts to consent signals from a stand-in consent tool, and /pop-test, which
  * shows a pop-under placement. It has no dependencies and must not
@@ -29,11 +29,57 @@ const slot = (key, extra = '', div = '') => `<div id="bn-ad-slot-${key}" data-bn
 <script async src="${esc(apiUrl)}/sdk/ads.js" data-site-key="${esc(siteKey)}" data-slot="${key}"${extra}></script>`;
 
 const ARTICLES = {
-  1: { title: 'Five small habits for a calmer workday', path: '/calmer-workday', next: 2 },
-  2: { title: 'A beginner\'s guide to keeping houseplants alive', path: '/houseplants-guide', next: 1 },
+  1: { title: 'Five small habits for a calmer workday', path: '/calmer-workday', next: 2, description: 'How the BlissNova ad tag works on a page, with small habits for a calmer workday.' },
+  2: { title: 'A beginner\'s guide to keeping houseplants alive', path: '/houseplants-guide', next: 3, description: 'Light, water, pots and soil: simple care for indoor plants.' },
+  3: {
+    title: 'A weekend in Lisbon on a small budget', path: '/lisbon-weekend', next: 4, description: 'Travel guide: where to stay, what to see and how to get around Lisbon for less.',
+    paras: [
+      'Lisbon is one of the easiest European cities for a short trip. Flights from most of the continent take under three hours, and the airport sits close to the centre, so you can be at your hotel within forty minutes of landing.',
+      'Stay in a guesthouse or hostel in Graça or Arroios rather than in the old town: rooms cost less and the tram and metro put every sight within easy reach. Book early for summer weekends.',
+      'Buy a rechargeable transport card at the airport. One card covers the metro, buses, trams and the river ferry, and a day of travel costs less than a single taxi ride.',
+      'Spend the first morning walking the Alfama district, then take tram 28 to the viewpoint at Graça. Most viewpoints are free, and the view over the river at sunset is the best part of any visit.',
+      'On the second day, take the train to Belém for the monastery and the riverside, or to Sintra for palaces in the hills. Trains leave every twenty minutes and a return ticket is inexpensive.',
+      'Eat where locals eat: a lunch menu of the day in a neighbourhood tasca usually includes soup, a main dish and a drink. Museums are free on some Sunday mornings, so check before you go.',
+    ],
+  },
+  4: {
+    title: 'Index funds explained in plain words', path: '/index-funds-explained', next: 5, description: 'Personal finance: what index funds are, what they cost and how people use them to invest for retirement.',
+    paras: [
+      'An index fund is an investment fund that buys every stock in a market index, such as a list of the largest companies in one country. Instead of picking winners, it owns the whole market and moves with it.',
+      'Because nobody is paid to pick stocks, fees are low. The yearly cost, called the expense ratio, is often a small fraction of one percent, and over decades lower fees leave noticeably more money in your savings.',
+      'Index funds suit long-term goals such as retirement. Prices rise and fall from year to year, so money you need soon belongs in a savings account rather than in the stock market.',
+      'Many people invest a fixed amount every month, whatever the market is doing. This habit spreads purchases over time and takes the guesswork out of timing.',
+      'Before you invest, build an emergency fund, pay off expensive credit card debt and check which tax-advantaged retirement accounts are available where you live.',
+      'This article is general information for the demo site, not financial advice. Read the fund documents and consider your own situation, or talk to a qualified adviser.',
+    ],
+  },
+  5: {
+    title: 'A 20-minute weeknight tomato pasta', path: '/weeknight-pasta', next: 1, description: 'Recipe: a quick tomato and garlic pasta dinner from pantry ingredients.',
+    paras: [
+      'This recipe turns a tin of tomatoes, a few cloves of garlic and a packet of pasta into dinner in twenty minutes. It serves two and doubles easily.',
+      'Ingredients: 200 g dried spaghetti, 2 tablespoons olive oil, 3 garlic cloves thinly sliced, a pinch of chilli flakes, 400 g tinned chopped tomatoes, a handful of basil leaves, salt and grated cheese to serve.',
+      'Bring a large pot of salted water to the boil and cook the pasta for one minute less than the packet says. Keep a cup of the cooking water before you drain it.',
+      'Meanwhile, warm the oil in a wide pan, add the garlic and chilli and cook gently until the garlic smells sweet but has not browned. Add the tomatoes and a pinch of salt and simmer for ten minutes.',
+      'Toss the drained pasta in the sauce with a splash of the cooking water until it coats every strand. Tear in the basil and serve with cheese.',
+      'Variations: add a spoon of capers and olives, stir in spinach at the end, or finish with a little butter for a richer sauce.',
+    ],
+  },
 };
 // Each article has its own path so per-page reports can tell them apart.
-const ARTICLE_BY_PATH = { '/': 1, '/index.html': 1, [ARTICLES[1].path]: 1, [ARTICLES[2].path]: 2 };
+const ARTICLE_BY_PATH = { '/': 1, '/index.html': 1 };
+for (const [n, a] of Object.entries(ARTICLES)) ARTICLE_BY_PATH[a.path] = Number(n);
+
+// A fictional page whose text is written to be flagged as high risk, to show brand safety: the network serves no ads on it.
+const SAFETY_TEST = {
+  title: 'Brand-safety test page: graphic violence report (fictional)', path: '/brand-safety-test', next: 1,
+  description: 'A fictional test page that the classifier should flag as high risk.',
+  paras: [
+    'This page is a brand-safety test for the local demo. Its text is fictional and deliberately uses words from the violence and crime lists so the classifier flags it as high risk.',
+    'Test sentence: the report describes a massacre, a mass shooting by a gunman, graphic violence and a rising death toll. None of this happened; it exists only to trigger detection.',
+    'Expected result: the ad slots on this page stay empty, the publisher pages report shows it as High risk, and staff see it at the top of Page topics & safety, where they can correct it.',
+  ],
+};
+ARTICLE_BY_PATH[SAFETY_TEST.path] = 'safety';
 
 // Generic sample text for the long demo article; fictional and for layout only.
 const LONG = [
@@ -49,12 +95,14 @@ const LONG = [
   'Finally, keep a short note of when you water and feed each plant. After a month you will see a pattern, and caring for them becomes a quick weekly habit rather than guesswork.',
 ];
 
-const page = (n = 1) => `<!doctype html>
+const page = (n = 1) => { const a = n === 'safety' ? SAFETY_TEST : ARTICLES[n]; return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The Demo Gazette (local demo publisher)</title>
+<title>${esc(a.title)} · The Demo Gazette (local demo publisher)</title>
+<meta name="description" content="${esc(a.description)}">
+<meta property="og:title" content="${esc(a.title)}">
 <style>
   :root { color-scheme: light dark; --bg: #fbfaf7; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #b45309; }
   @media (prefers-color-scheme: dark) { :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --accent: #f59e0b; } }
@@ -83,27 +131,32 @@ ${slot('demo-leaderboard', '', ' style="min-height:min(90px, 12.36vw)"')}
 </div>
 <div class="wrap">
   <article>
-    <h2>${esc(ARTICLES[n].title)}</h2>
+    <h2>${esc(a.title)}</h2>
     <div class="byline">By the Demo Gazette desk · sample article</div>
-${n === 1 ? `
+${a.paras ? `
+${a.paras.map((t, i) => `    <p>${esc(t)}</p>${i === 1 ? `\n    ${slot('demo-native')}` : ''}`).join('\n')}
+` : n === 1 ? `
     <p>This page exists so you can watch the BlissNova ad tag work end to end. Above, a leaderboard placement requests an image ad. In the sidebar, a text placement requests a text ad. Below this paragraph, an in-article placement requests a native ad, which matches the page's layout but is always marked "Sponsored" with the advertiser's name. All three use the same short snippet any publisher can paste into a page.</p>
     ${slot('demo-native')}
     <p>When an ad renders, the tag reports a render receipt. When at least half of the ad stays visible for a second, it reports a viewable impression. Clicking the ad goes through the network's click endpoint, which records a click before sending you on to the advertiser.</p>
     <p>Open the publisher or advertiser dashboard in another tab and refresh it after viewing and clicking: today's numbers update from the recorded events. Repeated views from the same browser are limited by frequency caps, and very fast or repeated clicks are filtered as invalid, exactly as on a live site.</p>
     <p>The tag does not read cookies or store identifiers unless the page signals consent for personalized ads. This demo page does not, so all ads here are contextual. The <a href="/consent-test">consent test page</a> shows what happens with a consent tool.</p>
+    <p>Every page is also classified automatically from its own text into topics, such as Travel or Personal Finance, and checked for brand safety. The other articles in "More stories" cover different topics, and the <a href="/brand-safety-test">brand-safety test page</a> shows a page that gets no ads.</p>
 ` : `
     <p>This second sample article shows <strong>automatic in-article ads</strong>. The page has no in-article ad snippet: its tag script carries <code>data-auto="1"</code>, and the tag adds ads between paragraphs using the site's settings (first after paragraph 2, then every 3 paragraphs, at most 3).</p>
 ${LONG.map((t) => `    <p>${esc(t)}</p>`).join('\n')}
-    ${n === 2 ? `<script async src="${esc(apiUrl)}/sdk/ads.js" data-site-key="${esc(siteKey)}" data-auto="1"></script>` : ''}
+    <script async src="${esc(apiUrl)}/sdk/ads.js" data-site-key="${esc(siteKey)}" data-auto="1"></script>
 `}
     <p>Other placement types: a <strong>sticky anchor</strong> at the bottom of the screen (close it with ×), a <strong>side rail</strong> on the right on wide screens, and an <strong>interstitial</strong> that appears when you follow the link below to the next article. The interstitial shows at most once every 10 minutes in a tab.</p>
     <p>Pop-ups and pop-unders are on their own page, so they do not get in the way here: <a href="/pop-test">see the pop-under demo</a>.</p>
-    <p><a href="${ARTICLES[ARTICLES[n].next].path}" id="next-article">Read the next article: ${esc(ARTICLES[ARTICLES[n].next].title)}</a></p>
+    <p><a href="${ARTICLES[a.next].path}" id="next-article">Read the next article: ${esc(ARTICLES[a.next].title)}</a></p>
     <p><a href="${esc(webUrl)}/publisher">Open the publisher dashboard</a> · <a href="${esc(webUrl)}/advertiser">Open the advertiser dashboard</a></p>
   </article>
   <aside>
     <h3>Sponsored</h3>
     ${slot('demo-sidebar')}
+    <h3>More stories</h3>
+    <ul>${Object.values(ARTICLES).map((x) => `<li><a href="${x.path}">${esc(x.title)}</a></li>`).join('')}<li><a href="${SAFETY_TEST.path}">Brand-safety test page</a></li></ul>
     <h3>About this demo</h3>
     <p>The site is registered as <code>demo-publisher.localhost</code>, a reserved name that can only exist on your own machine. It was verified with the development simulator, which the platform refuses to use in production.</p>
   </aside>
@@ -113,7 +166,7 @@ ${slot('demo-anchor', '', ' data-bn-display="anchor"')}
 ${slot('demo-rail', '', ' data-bn-display="rail_right"')}
 ${slot('demo-interstitial', '', ' data-bn-display="interstitial"')}
 </body>
-</html>`;
+</html>`; };
 
 
 /* ------------------------------------------------------------------------

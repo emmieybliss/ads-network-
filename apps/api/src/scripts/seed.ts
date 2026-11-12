@@ -31,6 +31,7 @@ import { LocalStorage } from '../lib/storage';
 import { createHash } from 'node:crypto';
 import { demoBannerPng } from './demo-banner';
 import { DEMO_COUNTRY_SQL } from './demo-analytics';
+import { DEMO_PAGES, seedDemoTopics } from './demo-topics';
 
 const DEMO_TAG = '[demo]';
 const CURRENCY = 'USD';
@@ -66,10 +67,13 @@ async function org(c: PoolClient, name: string, type: 'advertiser' | 'publisher'
 }
 
 // Demo-site pages each placement appears on (the demo home page shows the first article).
+// Each demo article is on its own topic, so sample history covers several topics.
+const ARTICLE_PAGES = DEMO_PAGES.flatMap((p) => Array<string>(p.weight).fill(p.path));
 const SAMPLE_PAGES: Record<string, string[]> = {
-  'demo-native': ['/', '/calmer-workday'],
+  'demo-native': ARTICLE_PAGES.filter((p) => p !== '/houseplants-guide'),
   'demo-auto': ['/houseplants-guide'],
-  default: ['/', '/', '/calmer-workday', '/houseplants-guide'],
+  'demo-popunder': ['/pop-test'],
+  default: ARTICLE_PAGES,
 };
 
 interface SampleSpec { campaignId: string; creativeId: string; unitId: string; pricing: 'cpm' | 'cpc'; rateMicros: bigint; perDay: [number, number]; ctr: number; pages: string[] }
@@ -407,6 +411,8 @@ async function main() {
       })), { siteId: site, advOrg, pubOrg, shareBps }, sampleDays);
       for (const x of campaigns) await settleCampaign(c, x.id, holdDays);
     }
+    // Topics and brand safety of the demo articles, and of the pages in the sample history.
+    await seedDemoTopics(c, site);
     return { units: Object.keys(units), campaigns, days };
   });
 

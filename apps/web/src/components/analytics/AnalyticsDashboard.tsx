@@ -8,6 +8,7 @@ import { formatMicros, formatNumber, formatPercent, isoDay } from '@/lib/format'
 import { Delta, Funnel, Heatmap, KpiTile, PeriodChart, RealtimePanel, ShareBars, countryName, dimLabel } from './parts';
 import { CountryMap } from './CountryMap';
 import { ReportEmailControl } from './ReportEmail';
+import { TopicsCard, type TopicsData } from '../topics/TopicsCard';
 
 type Audience = 'advertiser' | 'publisher' | 'admin';
 type Row = Record<string, any> & { key: string; label: string };
@@ -23,6 +24,7 @@ interface Analytics {
   breakdowns: Record<string, Row[]>;
   placements: Row[];
   countries: { rows: Row[]; count: number };
+  topics?: TopicsData;
   heatmap: { timezone: string; money: string; cells: Array<Record<string, any>> };
   funnel: Array<{ key: string; label: string; value: number }>;
   requests: Record<string, number | null> | null;
@@ -179,6 +181,8 @@ function Body({ a, currency, audience, live }: { a: Analytics; currency: string;
       </Card>
 
       <CountriesCard a={a} currency={currency} audience={audience} />
+
+      {a.topics && <TopicsCard data={a.topics} currency={currency} audience={audience} />}
 
       <div className="grid gap-5 xl:grid-cols-2">
         <Card className="min-w-0">

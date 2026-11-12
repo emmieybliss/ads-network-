@@ -131,6 +131,18 @@ export const settingsSchema = z.object({
     /** Most refreshes of one slot in one page view. */
     maxPerPageView: z.number().int().min(1).max(20).default(6),
   }).prefault({}),
+  /**
+   * Automatic page topics and brand safety. The ad tag sends a short text
+   * sample of each page; the API classifies it locally (no outside service)
+   * and keeps only the result.
+   */
+  contextual: z.object({
+    enabled: z.boolean().default(true),
+    /** Serve no ads at all on pages detected (or marked by a reviewer) as high risk. */
+    blockHighRiskPages: z.boolean().default(true),
+    /** Least time before a page whose text changed is classified again. */
+    reclassifyMinutes: z.number().int().min(1).max(10080).default(60),
+  }).prefault({}),
   api: z.object({
     authRateLimitPerMinute: z.number().int().min(1).max(1000).default(10),
     managementRateLimitPerMinute: z.number().int().min(10).max(100000).default(600),
@@ -159,7 +171,7 @@ export const settingsSchema = z.object({
 });
 
 export type PlatformSettings = z.infer<typeof settingsSchema>;
-export const SETTINGS_GROUPS = ['tracking', 'ivt', 'frequency', 'creatives', 'publishers', 'verification', 'eligibility', 'pricing', 'popAds', 'adRefresh', 'api', 'platform', 'branding', 'email'] as const;
+export const SETTINGS_GROUPS = ['tracking', 'ivt', 'frequency', 'creatives', 'publishers', 'verification', 'eligibility', 'pricing', 'popAds', 'adRefresh', 'contextual', 'api', 'platform', 'branding', 'email'] as const;
 export type SettingsGroup = (typeof SETTINGS_GROUPS)[number];
 
 export function defaultSettings(): PlatformSettings {

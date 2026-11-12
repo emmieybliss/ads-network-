@@ -75,3 +75,11 @@ Logs never contain passwords, raw session tokens or payment credentials.
 Account holders can see and revoke their own sessions. Set up data export and
 deletion requests in line with the law where you operate. This software does
 not make you compliant by itself.
+
+## Page text for topics
+
+With a page's first ad request the tag sends a sample of the page's own
+public text (title, description, headings, start of the main text) so the
+server can tell what the page is about. It is about the page, not the
+visitor; it is classified in memory and only the result (topics, risk and a
+hash) is stored. Publishers can turn it off with `data-page-text="off"`.
