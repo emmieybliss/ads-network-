@@ -162,6 +162,40 @@ places one next to an existing slot or after the last paragraph. The inserted
 slots are ordinary slots of that placement, so serving, labels, caps and
 reports are unchanged. Pausing the placement turns automatic ads off.
 
+## Automatic page topics and brand safety
+
+Migration 0018. With a page's first `/serve` request the ad tag sends a short
+text sample: the title (`og:title` first), meta description, up to 12
+headings and the first 6,000 characters of the main text (`article`, `main`
+or the body, leaving out navigation, forms, asides and ad slots). A publisher
+can turn this off with `data-page-text="off"` on the script tag.
+
+`packages/ad-decision/src/contextual.ts` classifies it locally, with no
+outside service: weighted term dictionaries per topic (tier-1 IAB Content
+Taxonomy names, a few merged), field weights (title 3, description,
+headings and keywords 2, path 1.5, body 1) and diminishing returns for
+repeats. A topic needs a score of 6 from at least two distinct terms; up to
+three are kept. Brand safety uses separate term lists (adult, violence, arms,
+crime and tragedy, hate, drugs, profanity, gambling) and gives each page
+safe, low, medium or high risk. Gambling never exceeds medium; drugs on a
+medical page and crime on a news page count at half strength. English only:
+other languages fall back to the site category.
+
+Only the result is stored (`page_contexts`, keyed by site and path, plus a
+hash of the text); the text is not. Results are cached in Redis for an hour,
+and a page is classified again when its text changes, at most once per
+`contextual.reclassifyMinutes`. Staff can correct a page's topics or risk in
+Admin > Page topics & safety; a correction wins until it is cleared.
+
+At serve time the page's topics (or the site category's, before the first
+classification) and risk go into the decision: campaigns can target topics,
+exclude topics and pick a brand-safety level (strict: checked and safe only;
+standard, the default: safe, low and unchecked; relaxed: everything but
+high). With `contextual.blockHighRiskPages` (on by default), high-risk pages
+get no ads at all. Detected terms and topic ids also count as page keywords.
+The served event records the topic and risk, and the aggregation job builds
+`topic_daily_stats`, which feeds the Page topics card in every analytics view.
+
 ## Page views and page RPM
 
 Page RPM is estimated earnings per 1,000 page views, the main number

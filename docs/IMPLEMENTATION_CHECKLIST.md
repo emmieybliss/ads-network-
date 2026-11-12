@@ -85,7 +85,7 @@ See `docs/STATUS_REPORT.md` for the full built / simulated / partial / missing r
 - [ ] Stripe and PayPal tested against the real services (only mocked APIs so far)
 - [ ] GeoIP database bundled (country comes from a CDN header or a `.mmdb` file, if configured)
 - [ ] Viewable refresh (timed re-request of in-view slots)
-- [ ] Automatic contextual classification of pages
+- [x] Automatic contextual classification of pages (topics and brand safety, English)
 - [ ] Stronger bot detection (datacenter IP lists, browser integrity checks)
 - [ ] Header bidding (Prebid.js / Prebid Server, OpenRTB)
 - [ ] Video ads (VAST)

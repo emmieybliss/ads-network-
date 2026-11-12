@@ -58,45 +58,55 @@ export async function seedDemoTopics(c: PoolClient, siteId: string) {
 export async function upgradeDemoTopics(db: Pool, siteDomain: string, onStart?: () => void): Promise<number> {
   const site = (await db.query<{ id: string }>('SELECT id FROM sites WHERE domain = $1', [siteDomain])).rows[0];
   if (!site) return 0;
-  const done = (await db.query('SELECT 1 FROM page_contexts WHERE site_id = $1 LIMIT 1', [site.id])).rowCount;
   const samples = (await db.query(`SELECT 1 FROM ad_events WHERE site_id = $1 AND client_event_id LIKE 'demo-sample:%' LIMIT 1`, [site.id])).rowCount;
-  if (done || !samples) return 0;
+  if (!samples) return 0;
+  const classified = (await db.query('SELECT 1 FROM page_contexts WHERE site_id = $1 LIMIT 1', [site.id])).rowCount;
+  // Re-aggregation is checked separately, so an interrupted upgrade finishes on the next start.
+  const aggregated = (await db.query('SELECT 1 FROM topic_daily_stats WHERE site_id = $1 LIMIT 1', [site.id])).rowCount;
+  if (classified && aggregated) return 0;
   onStart?.();
-  const client = await db.connect();
-  let days: string[] = [];
-  try {
-    await client.query('BEGIN');
-    await client.query(`SET LOCAL statement_timeout = '10min'`);
-    // In-page placements only: pop placements live on their own test page.
-    const pages = DEMO_PAGES.flatMap((p) => Array<string>(p.weight).fill(p.path));
-    await client.query(
-      `CREATE TEMP TABLE demo_page ON COMMIT DROP AS
-       SELECT d.delivery_id, ($2::text[])[1 + floor(random() * cardinality($2::text[]))::int] AS path
-       FROM (SELECT DISTINCT e.delivery_id FROM ad_events e JOIN ad_units u ON u.id = e.unit_id
-             WHERE e.site_id = $1 AND e.client_event_id LIKE 'demo-sample:%' AND e.type = 'served' AND u.display NOT IN ('popup', 'popunder')) d`, [site.id, pages]);
-    await client.query('CREATE INDEX ON demo_page (delivery_id)');
-    await client.query(`UPDATE ad_events e SET page_path = p.path FROM demo_page p WHERE e.delivery_id = p.delivery_id AND e.client_event_id LIKE 'demo-sample:%'`);
-    await client.query(`UPDATE conversions c SET page_path = p.path FROM demo_page p WHERE c.delivery_id = p.delivery_id`);
-    days = (await client.query<{ day: string }>(
-      `SELECT DISTINCT to_char(occurred_at, 'YYYY-MM-DD') AS day FROM ad_events WHERE site_id = $1 AND client_event_id LIKE 'demo-sample:%' ORDER BY 1`, [site.id])).rows.map((r) => r.day);
-    // Page views for the sample days, as the seed computes them: the most ads one campaign served on the page that day.
-    await client.query(`DELETE FROM page_views WHERE site_id = $1 AND day = ANY($2::date[])`, [site.id, days]);
-    await client.query(
-      `INSERT INTO page_views (day, site_id, page_path, views)
-       SELECT day, $1, page_path, max(n) FROM (
-         SELECT occurred_at::date AS day, page_path, campaign_id, count(*) AS n FROM ad_events
-         WHERE site_id = $1 AND type = 'served' AND page_path IS NOT NULL AND occurred_at::date = ANY($2::date[])
-         GROUP BY 1, 2, 3) u
-       GROUP BY day, page_path`, [site.id, days]);
-    await storeDemoPages(client, site.id);
-    await tagSampleEvents(client, site.id);
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined);
-    throw err;
-  } finally {
-    client.release();
+  if (!classified) {
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SET LOCAL statement_timeout = '10min'`);
+      // In-page placements only: pop placements live on their own test page.
+      const pages = DEMO_PAGES.flatMap((p) => Array<string>(p.weight).fill(p.path));
+      await client.query(
+        `CREATE TEMP TABLE demo_page ON COMMIT DROP AS
+         SELECT d.delivery_id, ($2::text[])[1 + floor(random() * cardinality($2::text[]))::int] AS path
+         FROM (SELECT DISTINCT e.delivery_id FROM ad_events e JOIN ad_units u ON u.id = e.unit_id
+               WHERE e.site_id = $1 AND e.client_event_id LIKE 'demo-sample:%' AND e.type = 'served' AND u.display NOT IN ('popup', 'popunder')) d`, [site.id, pages]);
+      await client.query('CREATE INDEX ON demo_page (delivery_id)');
+      await client.query('ANALYZE demo_page');
+      await client.query(`UPDATE ad_events e SET page_path = p.path FROM demo_page p WHERE e.delivery_id = p.delivery_id AND e.client_event_id LIKE 'demo-sample:%'`);
+      await client.query(`UPDATE conversions c SET page_path = p.path FROM demo_page p WHERE c.delivery_id = p.delivery_id`);
+      const days = await sampleDays(client, site.id);
+      // Page views for the sample days, as the seed computes them: the most ads one campaign served on the page that day.
+      await client.query(`DELETE FROM page_views WHERE site_id = $1 AND day = ANY($2::date[])`, [site.id, days]);
+      await client.query(
+        `INSERT INTO page_views (day, site_id, page_path, views)
+         SELECT day, $1, page_path, max(n) FROM (
+           SELECT occurred_at::date AS day, page_path, campaign_id, count(*) AS n FROM ad_events
+           WHERE site_id = $1 AND type = 'served' AND page_path IS NOT NULL AND occurred_at::date = ANY($2::date[])
+           GROUP BY 1, 2, 3) u
+         GROUP BY day, page_path`, [site.id, days]);
+      await storeDemoPages(client, site.id);
+      await tagSampleEvents(client, site.id);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
+  const days = await sampleDays(db, site.id);
   for (const day of days) await aggregateDay(db, day);
   return days.length;
+}
+
+async function sampleDays(db: Pool | PoolClient, siteId: string): Promise<string[]> {
+  return (await db.query<{ day: string }>(
+    `SELECT DISTINCT to_char(occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day FROM ad_events WHERE site_id = $1 AND client_event_id LIKE 'demo-sample:%' ORDER BY 1`, [siteId])).rows.map((r) => r.day);
 }

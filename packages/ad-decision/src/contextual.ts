@@ -86,9 +86,9 @@ const SAFETY_TERMS: Record<SafetyCategoryId, string[]> = {
   weapons: ['!assault rifle', '!gun shop', '!buy guns', '!ammunition sale', '!explosives', 'firearm', 'firearms', 'rifle', 'handgun', 'pistol', 'shotgun', 'ammunition', 'ammo', 'gun', 'guns', 'weapon', 'weapons', 'grenade', '~knife', '~knives'],
   crime_tragedy: ['!murder', '!murdered', '!homicide', '!fatal crash', '!death toll', '!kidnapping', '!kidnapped', '!suicide', 'crime', 'criminal', 'robbery', 'burglary', 'arrested', 'victim', 'victims', 'tragedy', 'tragic', 'disaster', 'casualties', 'fatal', 'funeral', 'mourning', 'body found', 'missing person', 'manslaughter', '~died', '~dead', '~death', '~injured', '~crash', '~police'],
   hate: ['!white supremacy', '!white supremacist', '!neo-nazi', '!neo nazi', '!ethnic cleansing', '!hate group', '!racial slur', 'hate speech', 'racist', 'racism', 'extremist', 'extremism', 'bigotry', 'xenophobia', 'antisemitism', 'antisemitic', 'islamophobia', 'homophobic', 'radicalized', 'radicalised'],
-  drugs: ['!cocaine', '!heroin', '!methamphetamine', '!crystal meth', '!fentanyl', '!buy weed', '!drug dealer', '!drug trafficking', 'cannabis', 'marijuana', 'weed', 'overdose', 'narcotics', 'opioid', 'opioids', 'ecstasy', 'lsd', 'psychedelic', 'drug abuse', 'addiction', '~drugs', '~high'],
+  drugs: ['!cocaine', '!heroin', '!methamphetamine', '!crystal meth', '!fentanyl', '!buy weed', '!drug dealer', '!drug trafficking', 'cannabis', 'marijuana', 'weed', 'overdose', 'narcotics', 'opioid', 'opioids', 'ecstasy', 'lsd', 'psychedelic', 'drug abuse', 'addiction', '~drugs'],
   profanity: ['!fuck', '!fucking', '!motherfucker', '!cunt', 'shit', 'bullshit', 'bitch', 'asshole', 'bastard', 'dickhead', 'piss', '~damn', '~crap', '~hell'],
-  gambling: ['!online casino', '!casino bonus', '!sports betting', '!sportsbook', '!slot machine', '!slots', '!free spins', 'casino', 'betting', 'bet', 'bets', 'poker', 'roulette', 'blackjack', 'wager', 'bookmaker', 'jackpot', 'gambling', 'odds', '~lottery'],
+  gambling: ['!online casino', '!casino bonus', '!sports betting', '!sportsbook', '!slot machine', '!slot machines', '!free spins', 'casino', 'betting', 'bet', 'bets', 'poker', 'roulette', 'blackjack', 'wager', 'bookmaker', 'jackpot', 'gambling', 'odds', '~lottery'],
 };
 
 /** How much each field counts. */

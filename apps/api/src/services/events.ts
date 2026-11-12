@@ -210,7 +210,10 @@ export async function aggregateDay(db: AppContext['db'], day: string) {
          COALESCE(sum(e.cost_micros) FILTER (WHERE e.billable), 0),
          COALESCE(sum(e.publisher_micros) FILTER (WHERE e.billable), 0)
        FROM ad_events e
-       LEFT JOIN ad_events s ON s.delivery_id = e.delivery_id AND s.type = 'served' AND s.occurred_at >= $1::date - 2 AND s.occurred_at < $1::date + 1
+       LEFT JOIN (
+         -- Materialized so the join is one hash join, not an index probe per event. Tokens live at most a day.
+         SELECT delivery_id, topic FROM ad_events WHERE type = 'served' AND occurred_at >= $1::date - 1 AND occurred_at < $1::date + 1 OFFSET 0
+       ) s ON s.delivery_id = e.delivery_id
        WHERE e.occurred_at >= $1::date AND e.occurred_at < $1::date + 1 AND e.type IN ('render', 'viewable', 'click')
        GROUP BY e.campaign_id, e.site_id, COALESCE(s.topic, '')`, [day]);
     await c.query(`DELETE FROM hourly_stats WHERE hour >= $1::date AND hour < $1::date + 1`, [day]);
