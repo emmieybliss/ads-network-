@@ -12,6 +12,7 @@ import { supportRoutes } from './support';
 import { adminUserRoutes } from './admin/users';
 import { adminOrgRoutes } from './admin/orgs';
 import { adminInventoryRoutes } from './admin/inventory';
+import { adminPageTopicRoutes } from './admin/page-topics';
 import { adminCampaignRoutes } from './admin/campaigns';
 import { adminFinanceRoutes } from './admin/finance';
 import { adminFraudRoutes } from './admin/fraud';
@@ -24,7 +25,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(staticRoutes);
   await app.register(async (v1) => {
     for (const r of [authRoutes, orgRoutes, advertiserRoutes, publisherRoutes, reportRoutes, billingRoutes, serveRoutes, publicRoutes, integrationRoutes, supportRoutes,
-      adminUserRoutes, adminOrgRoutes, adminInventoryRoutes, adminCampaignRoutes, adminFinanceRoutes, adminFraudRoutes, adminPlatformRoutes, partnerRoutes, analyticsRoutes, conversionRoutes]) {
+      adminUserRoutes, adminOrgRoutes, adminInventoryRoutes, adminPageTopicRoutes, adminCampaignRoutes, adminFinanceRoutes, adminFraudRoutes, adminPlatformRoutes, partnerRoutes, analyticsRoutes, conversionRoutes]) {
       await v1.register(r);
     }
     await v1.register(webhookRoutes);

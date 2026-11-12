@@ -5,3 +5,4 @@ export * from './permissions';
 export * from './statuses';
 export * from './settings';
 export * from './payout-methods';
+export * from './topics';

@@ -5,6 +5,7 @@ import { Alert, Button, Card, CardHeader, Checkbox, Field, Input, Select } from 
 import { useConfig } from '@/lib/hooks';
 import { errorMessage } from '@/lib/api';
 import { formatMicros, microsToInput } from '@/lib/format';
+import { TopicPicker } from '@/components/topics/TopicUi';
 
 export interface CampaignPayload {
   name: string;
@@ -19,7 +20,7 @@ export interface CampaignPayload {
   endAt: string | null;
   pacing: 'even' | 'asap';
   priority: number;
-  targeting: { countries: string[]; devices: string[]; siteCategories: string[]; keywords: string[]; requirePersonalized: boolean };
+  targeting: { countries: string[]; devices: string[]; siteCategories: string[]; keywords: string[]; requirePersonalized: boolean; topics: string[]; excludeTopics: string[]; brandSafety: 'strict' | 'standard' | 'relaxed' };
   caps: Array<{ scope: 'visitor' | 'page'; maxImpressions: number; windowSeconds: number }>;
 }
 
@@ -57,6 +58,9 @@ export function CampaignForm({ initial, submitLabel, onSubmit, lockedPricing }: 
     siteCategories: (t.siteCategories ?? []).join(', '),
     keywords: (t.keywords ?? []).join(', '),
     requirePersonalized: !!t.requirePersonalized,
+    topics: (t.topics ?? []) as string[],
+    excludeTopics: (t.excludeTopics ?? []) as string[],
+    brandSafety: (t.brandSafety ?? 'standard') as CampaignPayload['targeting']['brandSafety'],
   });
   const [caps, setCaps] = useState<CampaignPayload['caps']>(initial?.caps ?? []);
   const [error, setError] = useState<string | null>(null);
@@ -82,7 +86,8 @@ export function CampaignForm({ initial, submitLabel, onSubmit, lockedPricing }: 
         endAt: f.endAt ? toIso(f.endAt) : null,
         pacing: f.pacing,
         priority: Number(f.priority),
-        targeting: { countries: list(f.countries, true), devices: f.devices, siteCategories: list(f.siteCategories), keywords: list(f.keywords), requirePersonalized: f.requirePersonalized },
+        targeting: { countries: list(f.countries, true), devices: f.devices, siteCategories: list(f.siteCategories), keywords: list(f.keywords), requirePersonalized: f.requirePersonalized,
+          topics: f.topics, excludeTopics: f.excludeTopics, brandSafety: f.brandSafety },
         caps,
       });
     } catch (err) {
@@ -142,7 +147,7 @@ export function CampaignForm({ initial, submitLabel, onSubmit, lockedPricing }: 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Countries" htmlFor="ct" hint="Two-letter codes, comma separated, for example US, GB"><Input id="ct" value={f.countries} onChange={(e) => set('countries', e.target.value)} /></Field>
           <Field label="Site categories" htmlFor="sc" hint="Comma separated"><Input id="sc" value={f.siteCategories} onChange={(e) => set('siteCategories', e.target.value)} /></Field>
-          <Field label="Keywords" htmlFor="kw" hint="Matched against placement keywords" className="sm:col-span-2"><Input id="kw" value={f.keywords} onChange={(e) => set('keywords', e.target.value)} /></Field>
+          <Field label="Keywords" htmlFor="kw" hint="Matched against the page's keywords and the terms detected in its text" className="sm:col-span-2"><Input id="kw" value={f.keywords} onChange={(e) => set('keywords', e.target.value)} /></Field>
           <fieldset className="sm:col-span-2">
             <legend className="mb-2 text-sm font-medium">Devices</legend>
             <div className="flex flex-wrap gap-4">
@@ -152,6 +157,28 @@ export function CampaignForm({ initial, submitLabel, onSubmit, lockedPricing }: 
           <div className="sm:col-span-2">
             <Checkbox label="Only serve where the visitor has consented to personalized ads" checked={f.requirePersonalized} onChange={(v) => set('requirePersonalized', v)} hint="Consent decisions come from the publisher page. They are never overridden." />
           </div>
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader title="Page topics and brand safety" description="Every page is classified automatically from its own text. Pick topics to show your ads only next to matching content; leave them empty to run on any topic." />
+        <div className="space-y-5">
+          <div>
+            <p className="mb-2 text-sm font-medium">Show on pages about</p>
+            <TopicPicker label="Show on pages about" value={f.topics} disabled={f.excludeTopics} onChange={(v) => set('topics', v)} />
+            <p className="mt-1.5 text-xs text-muted">{f.topics.length ? `${f.topics.length} selected: the ad shows on pages about any of them.` : 'Any topic.'}</p>
+          </div>
+          <div>
+            <p className="mb-2 text-sm font-medium">Never show on pages about</p>
+            <TopicPicker label="Never show on pages about" value={f.excludeTopics} disabled={f.topics} onChange={(v) => set('excludeTopics', v)} />
+          </div>
+          <Field label="Brand safety" htmlFor="bs" hint="Pages are checked for adult, violent, hateful, drug, gambling and other sensitive content. High-risk pages never show ads.">
+            <Select id="bs" value={f.brandSafety} onChange={(e) => set('brandSafety', e.target.value as CampaignPayload['targeting']['brandSafety'])}>
+              <option value="strict">Strict: only pages checked and found safe</option>
+              <option value="standard">Standard: safe and low-risk pages (recommended)</option>
+              <option value="relaxed">Relaxed: also medium-risk pages, such as news about crime</option>
+            </Select>
+          </Field>
         </div>
       </Card>
 

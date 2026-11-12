@@ -150,6 +150,13 @@ if (!existsSync(seededMarker)) {
   const upgraded = await upgradeDemoAnalytics(app.ctx.db, () => console.log('Adding analytics sample fields to the existing demo data (one time, up to a minute)...')).catch((err) => { console.error('Could not add analytics fields to the demo data:', (err as Error).message); return 0; });
   if (upgraded) console.log(`Added analytics sample fields to ${upgraded} day(s) of demo data.`);
 }
+// ...and page topics, once, for demo data seeded before automatic page topics.
+{
+  const { upgradeDemoTopics } = await import('./scripts/demo-topics');
+  // The demo website's reserved name, as in scripts/seed.ts.
+  const upgraded = await upgradeDemoTopics(app.ctx.db, 'demo-publisher.localhost', () => console.log('Adding page topics to the existing demo data (one time, up to a minute)...')).catch((err) => { console.error('Could not add page topics to the demo data:', (err as Error).message); return 0; });
+  if (upgraded) console.log(`Added page topics to ${upgraded} day(s) of demo data.`);
+}
 
 // The worker's scheduled jobs, on timers instead of BullMQ.
 const log = { info: (o: object, m?: string) => app.log.info(o, m), warn: (o: object, m?: string) => app.log.warn(o, m), error: (o: object, m?: string) => app.log.error(o, m) };

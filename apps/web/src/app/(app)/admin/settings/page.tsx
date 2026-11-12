@@ -16,6 +16,7 @@ const GROUP_HELP: Record<string, string> = {
   verification: 'Domain verification methods and limits.',
   eligibility: 'Publisher requirements shown publicly and used in review. Thresholds are optional and configurable, never fixed.',
   pricing: 'Enabled pricing models, minimum rates, the minimum advertiser deposit and currencies.',
+  contextual: 'Automatic page topics and brand safety. The ad tag sends a short text sample of each page, which is classified on this server; only the result is kept. High-risk pages can be kept free of ads altogether.',
   popAds: 'Pop-up and pop-under placements: turn them off network-wide, or cap how often one visitor can see them. Publishers opt in per placement and can only be stricter than these limits.',
   api: 'Rate limits.',
   platform: 'Maintenance mode, registration and staff sign-in rules.',
@@ -23,7 +24,7 @@ const GROUP_HELP: Record<string, string> = {
   email: 'Sender details and message templates.',
 };
 
-const GROUP_NAMES: Record<string, string> = { ivt: 'Invalid traffic', popAds: 'Pop ads', api: 'API' };
+const GROUP_NAMES: Record<string, string> = { ivt: 'Invalid traffic', popAds: 'Pop ads', contextual: 'Page topics & brand safety', api: 'API' };
 const groupName = (g: string) => GROUP_NAMES[g] ?? humanize(g);
 
 type Draft = Record<string, unknown>;
@@ -33,6 +34,8 @@ const LABELS: Record<string, string> = {
   popunderEnabled: 'Pop-unders allowed',
   maxPerVisitorPerDay: 'Most pops per visitor per day',
   minMinutesBetween: 'Least minutes between pops',
+  blockHighRiskPages: 'No ads on high-risk pages',
+  reclassifyMinutes: 'Minutes before a changed page is checked again',
 };
 
 function label(key: string) {

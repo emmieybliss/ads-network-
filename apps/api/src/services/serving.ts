@@ -4,6 +4,7 @@ import type { PlatformSettings } from '@blissnova/shared';
 import { browserFamily, deviceCategory, hostAuthorized, isKnownCrawler, normalizeHost, osFamily, referrerHostOf, signDeliveryToken, trafficSource, visitorHash, type DeliveryClaims } from '@blissnova/tracking';
 import type { AppContext } from '../lib/context';
 import { decideConsent, type ConsentReason, type ConsentSignals } from './consent';
+import { resolvePageContext, writePageContext, type PageContextInput, type PageContextWrite } from './page-context';
 
 /**
  * Ad-serving runtime. Holds an in-memory snapshot of approved inventory and
@@ -52,7 +53,7 @@ async function loadSnapshot(ctx: AppContext): Promise<Snapshot> {
   for (const u of unitRows) units.set(`${u.site_id}:${u.key}`, { id: u.id, siteId: u.site_id, key: u.key, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, display: u.display ?? 'inline', popMaxPerDay: u.pop_max_per_day ?? 1, popMinutesBetween: u.pop_minutes_between ?? 60 });
 
   const camps = (await ctx.db.query(
-    `SELECT c.*, o.tier AS org_tier, t.countries, t.devices, t.site_categories, t.keywords, t.include_site_ids, t.exclude_site_ids, t.include_unit_ids, t.exclude_unit_ids, t.require_personalized
+    `SELECT c.*, o.tier AS org_tier, t.countries, t.devices, t.site_categories, t.keywords, t.include_site_ids, t.exclude_site_ids, t.include_unit_ids, t.exclude_unit_ids, t.require_personalized, t.topics, t.exclude_topics, t.brand_safety
      FROM campaigns c JOIN organizations o ON o.id = c.org_id LEFT JOIN campaign_targeting t ON t.campaign_id = c.id
      WHERE c.status IN ('active', 'scheduled') AND o.status = 'approved' AND c.spent_micros < c.lifetime_budget_micros AND (c.end_at IS NULL OR c.end_at > now())`)).rows;
   const ids = camps.map((c) => c.id);
@@ -74,6 +75,7 @@ async function loadSnapshot(ctx: AppContext): Promise<Snapshot> {
       targeting: {
         countries: c.countries ?? [], devices: c.devices ?? [], siteCategories: c.site_categories ?? [], keywords: c.keywords ?? [], includeSiteIds: c.include_site_ids ?? [],
         excludeSiteIds: c.exclude_site_ids ?? [], includeUnitIds: c.include_unit_ids ?? [], excludeUnitIds: c.exclude_unit_ids ?? [], requirePersonalized: c.require_personalized ?? false,
+        topics: c.topics ?? [], excludeTopics: c.exclude_topics ?? [], brandSafety: c.brand_safety ?? 'standard',
       },
       creatives: creatives.filter((cr) => cr.campaign_id === c.id).map((cr) => ({ id: cr.id, format: cr.format, width: cr.snapshot.width ?? null, height: cr.snapshot.height ?? null, snapshot: cr.snapshot })),
       caps: caps.filter((x) => x.campaign_id === c.id).map((x) => ({ scope: x.scope, max: x.max_impressions, window: x.window_seconds })),
@@ -128,7 +130,7 @@ export async function reserveCaps(ctx: Pick<AppContext, 'redis'>, keys: string[]
 export interface ServeRequest {
   siteKey: string;
   units: Array<{ slot: string }>;
-  page: { url: string; keywords?: string[]; referrer?: string };
+  page: { url: string; keywords?: string[]; referrer?: string; context?: PageContextInput };
   consent?: ConsentSignals;
   vid?: string;
   pv: string;
@@ -140,7 +142,7 @@ export interface ServedAd {
   display?: UnitDisplay;
   ad: null | { format: 'image' | 'text' | 'native' | 'pop'; token: string; clickUrl: string; width: number | null; height: number | null; pop?: { url: string }; image?: { url: string; alt: string }; text?: { headline: string; body: string; cta: string; displayUrl: string }; native?: { imageUrl: string; alt: string; headline: string; body: string; cta: string; displayUrl: string; sponsor: string } };
 }
-export interface ServeLog { pageView?: { siteId: string; path: string; source: string; device: string; country: string; entrance: boolean }; deliveries: Array<{ claims: DeliveryClaims; ipHash: string; uaHash: string | null }>; counters: Array<{ unitId: string; field: 'requests' | 'filled' | 'no_fill' | 'cap_rejects' | 'budget_rejects' | 'blocked' }>; day: string }
+export interface ServeLog { pageView?: { siteId: string; path: string; source: string; device: string; country: string; entrance: boolean }; pageContext?: PageContextWrite; deliveries: Array<{ claims: DeliveryClaims; ipHash: string; uaHash: string | null; topic?: string | null; safety?: string }>; counters: Array<{ unitId: string; field: 'requests' | 'filled' | 'no_fill' | 'cap_rejects' | 'budget_rejects' | 'blocked' }>; day: string }
 
 /** What the tag may do on the device: keep a visitor id only when personalization is allowed. */
 export interface ServePrivacy { personalization: boolean; reason: ConsentReason }
@@ -182,8 +184,18 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
   const vHash = personalized ? visitorHash(ctx.config.APP_SECRET, req.vid!) : undefined;
   const os = osFamily(meta.ua);
   const browser = browserFamily(meta.ua);
-  const keywords = (req.page.keywords ?? []).map((k) => k.toLowerCase().slice(0, 60)).slice(0, 20);
+  const pageKeywords = (req.page.keywords ?? []).map((k) => k.toLowerCase().slice(0, 60)).slice(0, 20);
+  // Page topics and brand safety: detected from the page's text, or assumed from the site category until then.
+  const { context: page, write } = await resolvePageContext(ctx, site, pagePath, pageKeywords, req.page.context, settings);
+  if (write) log.pageContext = write;
+  // Detected terms and topics count as page keywords too, so keyword campaigns match pages without a keywords meta tag.
+  const keywords = [...new Set([...pageKeywords, ...page.terms.map((t) => t.toLowerCase()), ...page.topics])];
   const now = Date.now();
+  if (page.safety === 'high' && settings.contextual.enabled && settings.contextual.blockHighRiskPages) {
+    // No ads at all on high-risk pages: the page view still counts, every placement reports blocked.
+    for (const u of units) if (u.unit) log.counters.push({ unitId: u.unit.id, field: 'requests' }, { unitId: u.unit.id, field: 'blocked' });
+    return { status: 'ok', ads: units.map((u) => ({ slot: u.slot, display: u.unit?.display, ad: null })), log, privacy };
+  }
   const used: string[] = [];
   const ads: ServedAd[] = [];
 
@@ -205,7 +217,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     candidates.forEach((c, i) => spentCache.set(c.id, BigInt(vals[i] ?? '0')));
     const result = decide(candidates, {
       requestId: `${meta.requestId}:${slot}`, now, siteId: site.id, siteCategory: site.category, siteAllowedFormats: site.allowedFormats, unitId: unit.id,
-      unitFormats: unit.formats, unitWidth: unit.width, unitHeight: unit.height, unitResponsive: unit.responsive, country: meta.country, device, keywords,
+      unitFormats: unit.formats, unitWidth: unit.width, unitHeight: unit.height, unitResponsive: unit.responsive, country: meta.country, device, keywords, pageTopics: page.topics, pageSafety: page.safety,
       personalized, blockedCountries: snap.blockedCountries, excludeCampaignIds: used, cpcEnabled: settings.pricing.cpcEnabled,
       revenueShareBps: site.revenueShareBps, floorCpmMicros: site.floorCpmMicros, floorCpcMicros: site.floorCpcMicros, premiumOnly: site.premiumOnly,
       spentToday: (id) => spentCache.get(id) ?? 0n,
@@ -254,7 +266,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
       sh: site.revenueShareBps, ph: pageHost, pp: pagePath, co: meta.country, dv: device, os, br: browser, src: source, ct: !personalized, v: vHash, iat: now, exp: now + settings.tracking.tokenTtlSeconds * 1000,
     };
     const token = signDeliveryToken(ctx.tokens, claims);
-    log.deliveries.push({ claims, ipHash: meta.ipHash, uaHash: null });
+    log.deliveries.push({ claims, ipHash: meta.ipHash, uaHash: null, topic: page.primary, safety: page.safety });
     log.counters.push({ unitId: unit.id, field: 'filled' });
     const snapC = cr.snapshot;
     if (pop) {
@@ -301,6 +313,7 @@ export function pathOf(url: string): string {
 }
 
 export async function writeServeLog(db: AppContext['db'], log: ServeLog) {
+  if (log.pageContext) await writePageContext(db, log.pageContext);
   if (log.pageView) {
     const pv = log.pageView;
     await db.query(
@@ -317,10 +330,10 @@ export async function writeServeLog(db: AppContext['db'], log: ServeLog) {
   for (const d of log.deliveries) {
     const c = d.claims;
     await db.query(
-      `INSERT INTO ad_events (event_key, delivery_id, type, status, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, page_path, os, browser, source)
-       VALUES ($1, $2, 'served', 'valid', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16 / 1000.0), $17, $18, $19, $20)
+      `INSERT INTO ad_events (event_key, delivery_id, type, status, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, page_path, os, browser, source, topic, brand_safety)
+       VALUES ($1, $2, 'served', 'valid', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16 / 1000.0), $17, $18, $19, $20, $21, $22)
        ON CONFLICT DO NOTHING`,
-      [`${c.d}:served`, c.d, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, d.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, c.iat, c.pp ?? null, c.os ?? 'other', c.br ?? 'other', c.src ?? 'unknown']);
+      [`${c.d}:served`, c.d, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, d.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, c.iat, c.pp ?? null, c.os ?? 'other', c.br ?? 'other', c.src ?? 'unknown', d.topic ?? null, d.safety ?? null]);
   }
   const agg = new Map<string, Record<string, number>>();
   for (const k of log.counters) {
