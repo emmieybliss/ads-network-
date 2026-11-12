@@ -20,6 +20,7 @@ export interface CampaignPayload {
   endAt: string | null;
   pacing: 'even' | 'asap';
   priority: number;
+  acceptRefresh: boolean;
   targeting: { countries: string[]; devices: string[]; siteCategories: string[]; keywords: string[]; requirePersonalized: boolean; topics: string[]; excludeTopics: string[]; brandSafety: 'strict' | 'standard' | 'relaxed' };
   caps: Array<{ scope: 'visitor' | 'page'; maxImpressions: number; windowSeconds: number }>;
 }
@@ -61,6 +62,7 @@ export function CampaignForm({ initial, submitLabel, onSubmit, lockedPricing }: 
     topics: (t.topics ?? []) as string[],
     excludeTopics: (t.excludeTopics ?? []) as string[],
     brandSafety: (t.brandSafety ?? 'standard') as CampaignPayload['targeting']['brandSafety'],
+    acceptRefresh: initial?.acceptRefresh ?? true,
   });
   const [caps, setCaps] = useState<CampaignPayload['caps']>(initial?.caps ?? []);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +88,7 @@ export function CampaignForm({ initial, submitLabel, onSubmit, lockedPricing }: 
         endAt: f.endAt ? toIso(f.endAt) : null,
         pacing: f.pacing,
         priority: Number(f.priority),
+        acceptRefresh: f.acceptRefresh,
         targeting: { countries: list(f.countries, true), devices: f.devices, siteCategories: list(f.siteCategories), keywords: list(f.keywords), requirePersonalized: f.requirePersonalized,
           topics: f.topics, excludeTopics: f.excludeTopics, brandSafety: f.brandSafety },
         caps,
@@ -156,6 +159,9 @@ export function CampaignForm({ initial, submitLabel, onSubmit, lockedPricing }: 
           </fieldset>
           <div className="sm:col-span-2">
             <Checkbox label="Only serve where the visitor has consented to personalized ads" checked={f.requirePersonalized} onChange={(v) => set('requirePersonalized', v)} hint="Consent decisions come from the publisher page. They are never overridden." />
+          </div>
+          <div className="sm:col-span-2">
+            <Checkbox label="Also show in refreshed ad slots" checked={f.acceptRefresh} onChange={(v) => set('acceptRefresh', v)} hint="Some placements show a new ad after the one before it was in view for 30 seconds or more. Refreshed impressions are reported separately. Untick to buy only each slot's first ad on a page." />
           </div>
         </div>
       </Card>

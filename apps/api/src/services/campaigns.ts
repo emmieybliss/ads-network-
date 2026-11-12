@@ -43,6 +43,8 @@ export const campaignBody = z.object({
   endAt: z.iso.datetime({ offset: true }).nullable().optional(),
   pacing: z.enum(['even', 'asap']).default('even'),
   priority: z.number().int().min(1).max(10).default(5),
+  /** Whether the campaign may fill a slot that refreshes after its first ad has been viewed. */
+  acceptRefresh: z.boolean().default(true),
   targeting: targetingSchema.prefault({}),
   caps: z.array(capSchema).max(5).default([]),
 });
@@ -104,7 +106,7 @@ export function serializeCampaign(c: Record<string, any>, t?: Record<string, any
     rateMicros: c.rate_micros, currency: c.currency, lifetimeBudgetMicros: c.lifetime_budget_micros, dailyBudgetMicros: c.daily_budget_micros,
     spentMicros: c.spent_micros, reservedMicros: c.reserved_micros, remainingMicros: (BigInt(c.lifetime_budget_micros) - BigInt(c.spent_micros)).toString(),
     maxImpressions: c.max_impressions, maxClicks: c.max_clicks, billableImpressions: c.billable_impressions, billableClicks: c.billable_clicks,
-    timezone: c.timezone, startAt: c.start_at, endAt: c.end_at, pacing: c.pacing, priority: c.priority, adminPriorityBoost: c.admin_priority_boost,
+    timezone: c.timezone, startAt: c.start_at, endAt: c.end_at, pacing: c.pacing, priority: c.priority, acceptRefresh: c.accept_refresh ?? true, adminPriorityBoost: c.admin_priority_boost,
     version: c.version, submittedAt: c.submitted_at, approvedAt: c.approved_at, createdAt: c.created_at, updatedAt: c.updated_at,
     targeting: t ? {
       countries: t.countries, devices: t.devices, siteCategories: t.site_categories, keywords: t.keywords, includeSiteIds: t.include_site_ids,

@@ -26,7 +26,9 @@ const SUMS = `sum(d.served)::bigint AS served, sum(d.rendered)::bigint AS render
   sum(d.invalid_impressions)::bigint AS invalid_impressions, sum(d.viewable_impressions)::bigint AS viewable_impressions, sum(d.valid_clicks)::bigint AS valid_clicks,
   sum(d.invalid_clicks)::bigint AS invalid_clicks, sum(d.billable_impressions)::bigint AS billable_impressions, sum(d.billable_clicks)::bigint AS billable_clicks,
   sum(d.spend_micros)::bigint AS spend_micros, sum(d.publisher_micros)::bigint AS publisher_micros, sum(d.in_view_ms)::bigint AS in_view_ms,
-  sum(d.in_view_samples)::bigint AS in_view_samples, sum(d.conversions)::bigint AS conversions, sum(d.conversion_value_micros)::bigint AS conversion_value_micros`;
+  sum(d.in_view_samples)::bigint AS in_view_samples, sum(d.conversions)::bigint AS conversions, sum(d.conversion_value_micros)::bigint AS conversion_value_micros,
+  sum(d.refreshed_impressions)::bigint AS refreshed_impressions, sum(d.refreshed_viewable_impressions)::bigint AS refreshed_viewable_impressions,
+  sum(d.refreshed_spend_micros)::bigint AS refreshed_spend_micros, sum(d.refreshed_publisher_micros)::bigint AS refreshed_publisher_micros`;
 
 function where(scope: ReportScope, f: ReportFilters) {
   const clauses = ['d.day BETWEEN $1::date AND $2::date'];
@@ -52,9 +54,15 @@ export function shape(r: Record<string, string | null>, audience: 'advertiser' |
     invalidRate: n('rendered') ? (n('invalid_impressions') / n('rendered')) * 100 : null,
     // Mean seconds a creative was in view, over impressions whose time in view was reported.
     avgTimeInViewSec: n('in_view_samples') ? n('in_view_ms') / n('in_view_samples') / 1000 : null,
+    // Impressions from viewable auto-refresh, counted apart from each slot's first ad.
+    refreshedImpressions: n('refreshed_impressions'),
+    refreshedViewableImpressions: n('refreshed_viewable_impressions'),
+    refreshedShare: n('valid_impressions') ? (n('refreshed_impressions') / n('valid_impressions')) * 100 : null,
+    refreshedViewabilityRate: n('refreshed_impressions') ? (n('refreshed_viewable_impressions') / n('refreshed_impressions')) * 100 : null,
   };
   if (audience !== 'publisher') {
     out.spendMicros = spend.toString();
+    out.refreshedSpendMicros = r.refreshed_spend_micros ?? '0';
     out.ecpmMicros = effectiveCpmMicros(spend, n('valid_impressions'))?.toString() ?? null;
     out.ecpcMicros = n('valid_clicks') ? (spend / BigInt(n('valid_clicks'))).toString() : null;
     const conv = n('conversions');
@@ -67,6 +75,7 @@ export function shape(r: Record<string, string | null>, audience: 'advertiser' |
   }
   if (audience !== 'advertiser') {
     out.earningsMicros = r.publisher_micros ?? '0';
+    out.refreshedEarningsMicros = r.refreshed_publisher_micros ?? '0';
     out.rpmMicros = effectiveCpmMicros(BigInt(r.publisher_micros ?? 0), n('valid_impressions'))?.toString() ?? null;
   }
   if (audience === 'admin') out.networkRevenueMicros = (spend - BigInt(r.publisher_micros ?? 0)).toString();

@@ -11,7 +11,7 @@ import { getSnapshot, serveAds, writeServeLog } from '../services/serving';
 
 const serveBody = z.object({
   siteKey: z.string().regex(/^pk_[A-Za-z0-9]{16,40}$/),
-  units: z.array(z.object({ slot: z.string().regex(/^[a-z0-9][a-z0-9_-]{1,63}$/) })).min(1).max(10),
+  units: z.array(z.object({ slot: z.string().regex(/^[a-z0-9][a-z0-9_-]{1,63}$/), refresh: z.number().int().min(1).max(20).optional(), inst: z.number().int().min(0).max(49).optional() })).min(1).max(10),
   page: z.object({
     url: z.string().max(2048), keywords: z.array(z.string().max(60)).max(20).optional(), referrer: z.string().max(2048).optional(),
     // A short text sample of the page for automatic topics, sent with the page's first request only. Classified, never stored.

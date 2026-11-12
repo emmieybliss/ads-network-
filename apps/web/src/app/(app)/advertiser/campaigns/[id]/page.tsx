@@ -105,6 +105,7 @@ function CampaignDetail() {
                       ['Excluded topics', c.targeting?.excludeTopics?.length ? c.targeting.excludeTopics.map((t: string) => topicLabel(t)).join(', ') : 'None'],
                       ['Brand safety', humanize(c.targeting?.brandSafety ?? 'standard')],
                       ['Personalized only', c.targeting?.requirePersonalized ? 'Yes' : 'No'],
+                      ['Refreshed ad slots', c.acceptRefresh === false ? 'Not shown' : 'Shown'],
                       ['Frequency caps', c.caps.length ? c.caps.map((x: any) => `${x.maxImpressions} per ${x.scope} per ${Math.round(x.windowSeconds / 3600)}h`).join('; ') : 'None'],
                     ]} />
                   </Card>

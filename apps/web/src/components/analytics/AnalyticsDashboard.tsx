@@ -482,6 +482,7 @@ function PlacementsCard({ a, currency, audience }: { a: Analytics; currency: str
           { key: 'i', header: 'Valid impr.', align: 'right', cell: (r) => formatNumber(r.validImpressions) },
           { key: 'v', header: 'Viewability', align: 'right', cell: (r) => <ViewBar pct={r.viewabilityRate} /> },
           { key: 't', header: 'Avg. time in view', align: 'right', cell: (r) => (r.avgTimeInViewSec === null ? '—' : `${r.avgTimeInViewSec.toFixed(1)} s`) },
+          { key: 'rf', header: 'Refreshed', align: 'right', cell: (r) => (r.refreshedImpressions ? `${formatNumber(r.refreshedImpressions)} (${formatPercent(r.refreshedShare, 0)})` : '—') },
           { key: 'c', header: 'CTR', align: 'right', cell: (r) => formatPercent(r.ctr) },
           audience === 'advertiser'
             ? { key: 'm', header: 'eCPM', align: 'right', cell: (r) => money(r.ecpmMicros) }
