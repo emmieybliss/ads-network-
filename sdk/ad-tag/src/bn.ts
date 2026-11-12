@@ -181,6 +181,58 @@ function sessionStore(): Storage | null {
 
 const idChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
+/*
+ * Browser automation checks, sent with events as a bitmask. The numbers match
+ * CLIENT_FLAG in packages/tracking/src/automation.ts. Nothing here identifies
+ * a person: it only says whether the page looks driven by a script.
+ */
+const BOT = { WEBDRIVER: 1, AUTOMATION_GLOBALS: 2, HEADLESS_WINDOW: 4, CHROME_MISMATCH: 8, ZERO_SCREEN: 16, NO_LANGUAGES: 32, SYNTHETIC_CLICK: 64, NO_POINTER_MOVEMENT: 128 } as const;
+const AUTOMATION_GLOBALS = ['_phantom', 'callPhantom', '__nightmare', 'domAutomation', 'domAutomationController', '_selenium', '__selenium_unwrapped', '__webdriver_evaluate', '__driver_evaluate', '__fxdriver_unwrapped', '__webdriver_script_fn'];
+let envFlags: number | null = null;
+let pointerMoved = false;
+
+function environmentFlags(): number {
+  if (envFlags !== null) return envFlags;
+  let f = 0;
+  try {
+    const nav = navigator as Navigator & { webdriver?: boolean };
+    const w = window as unknown as Record<string, unknown>;
+    if (nav.webdriver === true) f |= BOT.WEBDRIVER;
+    if (AUTOMATION_GLOBALS.some((k) => k in w) || Object.keys(document).some((k) => /^\$?cdc_|^\$wdc_/.test(k))) f |= BOT.AUTOMATION_GLOBALS;
+    if (document.visibilityState === 'visible' && window.outerWidth === 0 && window.outerHeight === 0) f |= BOT.HEADLESS_WINDOW;
+    const ua = nav.userAgent || '';
+    if (/Chrome\//.test(ua) && !/Edg\/|OPR\/|SamsungBrowser|; wv\)|Mobile/.test(ua) && !('chrome' in w)) f |= BOT.CHROME_MISMATCH;
+    if (!screen.width || !screen.height) f |= BOT.ZERO_SCREEN;
+    if (!nav.languages || nav.languages.length === 0) f |= BOT.NO_LANGUAGES;
+  } catch {
+    /* a locked-down page: report nothing rather than guess */
+  }
+  envFlags = f;
+  return f;
+}
+
+function watchPointer(): void {
+  try {
+    const on = () => { pointerMoved = true; document.removeEventListener('mousemove', on, true); };
+    document.addEventListener('mousemove', on, { capture: true, passive: true });
+  } catch {
+    /* no document */
+  }
+}
+
+/** Flags for one click: the page checks plus how the click itself happened. */
+function clickFlags(e: MouseEvent): number {
+  let f = environmentFlags();
+  if (!e.isTrusted) f |= BOT.SYNTHETIC_CLICK;
+  try {
+    // Keyboard activation (detail 0) and touch screens legitimately never move a mouse.
+    if (e.detail > 0 && !pointerMoved && window.matchMedia?.('(pointer: fine)').matches && !window.matchMedia('(any-pointer: coarse)').matches) f |= BOT.NO_POINTER_MOVEMENT;
+  } catch {
+    /* matchMedia unavailable */
+  }
+  return f;
+}
+
 function randomId(len: number): string {
   const bytes = new Uint8Array(len);
   const c = typeof crypto !== 'undefined' ? crypto : undefined;
@@ -391,7 +443,7 @@ class Tag {
   private cmpReady: Promise<void> = Promise.resolve();
   /** The server's last word on personalization for this visitor. */
   private privacy: { personalization: boolean; reason: string } | null = null;
-  private readonly queue: Array<{ id: string; type: 'render' | 'viewable' | 'inview'; t: string; ms?: number }> = [];
+  private readonly queue: Array<{ id: string; type: 'render' | 'viewable' | 'inview'; t: string; ms?: number; f?: number }> = [];
   /** Time each rendered ad spent at least half in view; reported once per ad when the page is hidden. */
   private readonly inView = new Map<string, { ms: number; since: number | null; sent: boolean }>();
   private flushTimer: number | null = null;
@@ -456,6 +508,7 @@ class Tag {
   start(): void {
     if (this.started) return;
     this.started = true;
+    watchPointer();
     this.cmpReady = watchCmps((s) => {
       this.cmp = { ...this.cmp, ...s };
       if (!this.deviceStorageAllowed()) dropVid();
@@ -876,6 +929,8 @@ class Tag {
     const link = document.createElement('a');
     link.className = 'bn-link';
     link.href = ad.clickUrl;
+    // The browser follows the href as it is after click handlers run, so the checks ride along.
+    link.addEventListener('click', (e) => { try { link.href = `${ad.clickUrl}${ad.clickUrl.includes('?') ? '&' : '?'}f=${clickFlags(e)}`; } catch { /* keep the plain link */ } });
     link.target = '_blank';
     link.rel = 'nofollow sponsored noopener noreferrer';
 
@@ -1130,7 +1185,7 @@ class Tag {
   }
 
   private report(type: 'render' | 'viewable' | 'inview', token: string, ms?: number): void {
-    this.queue.push({ id: randomId(22), type, t: token, ...(ms !== undefined ? { ms } : {}) });
+    this.queue.push({ id: randomId(22), type, t: token, ...(ms !== undefined ? { ms } : {}), f: environmentFlags() });
     if (this.queue.length >= MAX_BATCH) {
       this.flush(false);
       return;

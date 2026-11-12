@@ -7,6 +7,7 @@ import { aggregateDay, allocateFlatRate } from '@blissnova/api/services/events';
 import { dayInZone, invalidateServingCache } from '@blissnova/api/services/serving';
 import { sendDueReports } from '@blissnova/api/services/report-emails';
 import { syncPartnerCampaigns, type PartnerRegistry } from '@blissnova/api/services/partners';
+import { runIvtSweep } from '@blissnova/api/services/ivt';
 import { syncPendingCaptures } from '@blissnova/api/services/payments/webhook';
 import { raiseAutomaticPayouts, syncProcessingPayouts } from '@blissnova/api/services/payouts/service';
 import type { AppContext } from '@blissnova/api/lib/context';
@@ -131,6 +132,14 @@ export async function detectAnomalies(ctx: JobCtx) {
     created += ins.rowCount ?? 0;
   }
   return created;
+}
+
+/**
+ * Invalid traffic proven after the fact: reverse earnings still on hold
+ * (when automatic clawback is on) and open review cases for staff.
+ */
+export async function ivtSweep(ctx: JobCtx, now = new Date()) {
+  return runIvtSweep({ db: ctx.db, settings: ctx.settings, notify: ctx.notify, log: ctx.log }, now);
 }
 
 /** Guaranteed minimum earnings for premium publishers, for one finished UTC day. Idempotent per organization and day. */

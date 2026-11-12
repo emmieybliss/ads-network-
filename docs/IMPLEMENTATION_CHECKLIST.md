@@ -86,7 +86,7 @@ See `docs/STATUS_REPORT.md` for the full built / simulated / partial / missing r
 - [ ] GeoIP database bundled (country comes from a CDN header or a `.mmdb` file, if configured)
 - [x] Viewable auto-refresh: opt-in per placement (30 s+ in view, visible tab, active visitor, per-page-view cap), network switch and limits, advertiser opt-out, refreshed impressions reported apart (migration 0017)
 - [x] Automatic contextual classification of pages (topics and brand safety, English)
-- [ ] Stronger bot detection (datacenter IP lists, browser integrity checks)
+- [x] Stronger bot detection: datacenter IP ranges, automated-browser checks, click cadence, per-publisher IVT rates, review queue, automatic clawback (docs/INVALID_TRAFFIC.md)
 - [ ] Header bidding (Prebid.js / Prebid Server, OpenRTB)
 - [ ] Video ads (VAST)
 - [ ] Tax form collection for publishers

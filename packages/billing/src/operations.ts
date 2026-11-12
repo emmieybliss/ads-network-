@@ -334,16 +334,23 @@ export async function applyGuarantee(client: PoolClient, orgId: string, day: str
  * simply stop being billable; settled events are reversed with a new ledger
  * transaction. Original ledger rows are never altered.
  */
-export async function excludeEvents(client: PoolClient, a: { eventIds: string[]; actor: { type: 'user'; userId: string }; reason: string; caseId?: string | null }) {
-  if (a.eventIds.length === 0) return { excluded: 0, reversed: 0n };
+/**
+ * Exclude events from billing: they become invalid, campaign spend is given
+ * back and settled charges are reversed with new ledger entries (publisher
+ * earnings on hold, or available ones once finalized). Staff exclusions are
+ * 'manual_exclusion'; the automatic sweep uses 'ivt_clawback' with the system actor.
+ */
+export async function excludeEvents(client: PoolClient, a: { eventIds: string[]; actor: { type: 'user'; userId: string } | { type: 'system' }; reason: string; caseId?: string | null; invalidReason?: 'manual_exclusion' | 'ivt_clawback' }) {
+  if (a.eventIds.length === 0) return { excluded: 0, reversed: 0n, publisherReversed: 0n };
   const rows = (await client.query(
     `WITH old AS (SELECT id, billable FROM ad_events WHERE id = ANY($1::uuid[]) AND excluded_at IS NULL FOR UPDATE)
-     UPDATE ad_events e SET status = 'invalid', invalid_reason = 'manual_exclusion', billable = false, excluded_at = now(), excluded_by = $2, exclusion_case_id = $3
+     UPDATE ad_events e SET status = 'invalid', invalid_reason = $4, billable = false, excluded_at = now(), excluded_by = $2, exclusion_case_id = $3
      FROM old WHERE e.id = old.id
      RETURNING e.id, e.type, old.billable AS was_billable, e.cost_micros, e.publisher_micros, e.settlement_id, e.campaign_id, e.advertiser_org_id, e.publisher_org_id, e.currency, e.occurred_at`,
-    [a.eventIds, a.actor.userId, a.caseId ?? null],
+    [a.eventIds, a.actor.type === 'user' ? a.actor.userId : null, a.caseId ?? null, a.invalidReason ?? 'manual_exclusion'],
   )).rows;
   let reversed = 0n;
+  let publisherReversed = 0n;
   const bySettlement = new Map<string, { charge: bigint; pub: bigint; campaignId: string; advOrg: string; pubOrg: string; currency: string }>();
   for (const e of rows) {
     if (!e.was_billable) continue;
@@ -360,6 +367,7 @@ export async function excludeEvents(client: PoolClient, a: { eventIds: string[];
       bySettlement.set(e.settlement_id, cur);
     }
     reversed += cost;
+    publisherReversed += big(e.publisher_micros);
   }
   for (const [sid, s] of bySettlement) {
     const st = (await client.query('SELECT finalized_at FROM settlements WHERE id = $1 FOR UPDATE', [sid])).rows[0];
@@ -375,7 +383,7 @@ export async function excludeEvents(client: PoolClient, a: { eventIds: string[];
     });
     await client.query('UPDATE settlements SET reversed_micros = reversed_micros + $2, reversed_publisher_micros = reversed_publisher_micros + $3 WHERE id = $1', [sid, s.charge.toString(), s.pub.toString()]);
   }
-  return { excluded: rows.length, reversed };
+  return { excluded: rows.length, reversed, publisherReversed };
 }
 
 // ---------------------------------------------------------------- payouts

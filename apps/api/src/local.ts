@@ -197,7 +197,7 @@ async function run(name: string, fn: () => Promise<unknown>) {
   }
 }
 const minutely = () => run('minutely', async () => { await jobs.refreshAggregates(jobCtx); await jobs.campaignLifecycle(jobCtx); await jobs.settleAll(jobCtx); await jobs.syncPartners(jobCtx); await jobs.syncSpendCounters(jobCtx); });
-const fiveMinutely = () => run('five-minutely', async () => { await jobs.budgetAlerts(jobCtx); await jobs.lowBalanceAlerts(jobCtx); await jobs.reportEmails(jobCtx); await jobs.detectAnomalies(jobCtx); await jobs.syncProviders(jobCtx); });
+const fiveMinutely = () => run('five-minutely', async () => { await jobs.budgetAlerts(jobCtx); await jobs.lowBalanceAlerts(jobCtx); await jobs.reportEmails(jobCtx); await jobs.detectAnomalies(jobCtx); await jobs.ivtSweep(jobCtx); await jobs.syncProviders(jobCtx); });
 const daily = () => run('daily', () => jobs.dailyMaintenance(jobCtx));
 const timers = [setInterval(minutely, 60_000), setInterval(fiveMinutely, 300_000), setInterval(daily, 86_400_000)];
 await minutely();

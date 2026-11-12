@@ -1,12 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { excludeEvents } from '@blissnova/billing';
+import { DATACENTER_RANGES_SOURCES, DATACENTER_RANGES_UPDATED } from '@blissnova/tracking';
 import { audit } from '../../lib/audit';
 import { badRequest, conflict, notFound } from '../../lib/errors';
 import { bodyOf, dateRange, idParams, paramsOf, queryOf, resolveRange } from '../../lib/http';
-import { tx } from '../../lib/tx';
 import { requireUser } from '../../plugins/auth';
-import { aggregateDay } from '../../services/events';
+import { CriteriaError, excludeByCriteria, previewExclusion, publisherIvtRates, qualityStatus, runIvtSweep, type ExclusionCriteria } from '../../services/ivt';
 import { notifyOrg } from '../../services/notifications';
 import { adminList, guard, meta, mgmt, sortSql, Where } from './common';
 
@@ -15,13 +14,15 @@ const casePatch = z.object({ status: z.enum(['open', 'investigating', 'confirmed
 const excludeBody = z.object({
   criteria: z.object({
     eventIds: z.array(z.uuid()).max(5000).optional(),
-    siteId: z.uuid().optional(), campaignId: z.uuid().optional(), unitId: z.uuid().optional(), ipHash: z.string().max(40).optional(), visitorHash: z.string().max(40).optional(),
+    siteId: z.uuid().optional(), campaignId: z.uuid().optional(), unitId: z.uuid().optional(), publisherOrgId: z.uuid().optional(), ipHash: z.string().max(40).optional(), visitorHash: z.string().max(40).optional(),
+    minScore: z.number().int().min(1).max(100).optional(),
     from: z.iso.datetime({ offset: true }).optional(), to: z.iso.datetime({ offset: true }).optional(),
     types: z.array(z.enum(['render', 'viewable', 'click'])).optional(),
   }),
   reason: z.string().trim().min(10).max(1000),
   dryRun: z.boolean().default(false),
 });
+const clawbackBody = z.object({ reason: z.string().trim().min(10).max(1000), dryRun: z.boolean().default(false) });
 const appealDecision = z.object({ decision: z.enum(['upheld', 'rejected']), outcome: z.string().trim().min(10).max(2000) });
 const eventsQuery = adminList.extend({ campaignId: z.uuid().optional(), siteId: z.uuid().optional(), reason: z.string().max(40).optional(), eventType: z.enum(['served', 'render', 'viewable', 'click']).optional(), from: z.iso.date().optional(), to: z.iso.date().optional() });
 
@@ -39,7 +40,20 @@ export async function adminFraudRoutes(app: FastifyInstance) {
     const tokenInvalid = await ctx.redis.get(`ivt:token_invalid:${new Date().toISOString().slice(0, 10)}`);
     const openCases = (await db.query(`SELECT status, count(*)::int AS n FROM fraud_cases GROUP BY status`)).rows;
     const alerts = (await db.query(`SELECT count(*)::int AS n FROM anomaly_alerts WHERE acknowledged_at IS NULL`)).rows[0].n;
-    return { data: { range: r, reasons, sites: sites.map((s) => ({ ...s, invalidRate: Number(s.rendered) ? (Number(s.invalid) / Number(s.rendered)) * 100 : null, ctr: Number(s.valid) ? (Number(s.clicks) / Number(s.valid)) * 100 : null })), unattributableTokensToday: Number(tokenInvalid ?? 0), cases: openCases, unacknowledgedAlerts: alerts } };
+    const st = await ctx.settings.get();
+    const queue = (await db.query(`SELECT count(*)::int AS n FROM fraud_cases WHERE status IN ('open', 'investigating', 'appealed')`)).rows[0].n;
+    const claw = (await db.query(`SELECT count(*)::int AS n, COALESCE(sum(publisher_micros), 0)::text AS pub, COALESCE(sum(reversed_micros), 0)::text AS rev FROM event_exclusions WHERE automatic AND created_at >= $1::date AND created_at < $2::date + 1`, [r.from, r.to])).rows[0];
+    const totals = (await db.query(`SELECT COALESCE(sum(rendered), 0)::bigint AS rendered, COALESCE(sum(invalid_impressions), 0)::bigint AS invalid FROM daily_stats WHERE day BETWEEN $1 AND $2`, [r.from, r.to])).rows[0];
+    return { data: {
+      range: r, reasons, sites: sites.map((s) => ({ ...s, invalidRate: Number(s.rendered) ? (Number(s.invalid) / Number(s.rendered)) * 100 : null, ctr: Number(s.valid) ? (Number(s.clicks) / Number(s.valid)) * 100 : null })),
+      unattributableTokensToday: Number(tokenInvalid ?? 0), cases: openCases, unacknowledgedAlerts: alerts, reviewQueue: queue,
+      networkIvtRate: Number(totals.rendered) ? (Number(totals.invalid) / Number(totals.rendered)) * 100 : null,
+      automaticClawbacks: { count: claw.n, publisherMicros: claw.pub, reversedMicros: claw.rev },
+      detection: {
+        datacenterFilter: st.ivt.filterDatacenterTraffic, datacenterSources: DATACENTER_RANGES_SOURCES, datacenterUpdated: DATACENTER_RANGES_UPDATED, extraRanges: st.ivt.extraDatacenterRanges.length, trustedRanges: st.ivt.trustedRanges.length,
+        automationSignals: st.ivt.automationSignals, autoClawback: st.ivt.autoClawback, scoreThreshold: st.ivt.scoreThreshold,
+      },
+    } };
   });
 
   app.get('/admin/fraud/events', { preHandler: guard('admin:fraud:read'), schema: { tags: ['admin: invalid traffic'], querystring: eventsQuery, description: 'Event-level investigation. Raw events are retained only for the configured retention period.' } }, async (req) => {
@@ -53,7 +67,7 @@ export async function adminFraudRoutes(app: FastifyInstance) {
     if (q.from) w.add('e.occurred_at >= ?::date', q.from);
     if (q.to) w.add('e.occurred_at < ?::date + 1', q.to);
     const total = Number((await db.query(`SELECT count(*)::int AS n FROM ad_events e ${w.sql}`, w.params)).rows[0].n);
-    const rows = (await db.query(`SELECT e.id, e.delivery_id, e.type, e.status, e.invalid_reason, e.ivt_score, e.billable, e.cost_micros, e.excluded_at, e.ip_hash, e.visitor_hash, e.country, e.device, e.page_host, e.occurred_at, e.campaign_id, e.site_id, s.domain FROM ad_events e JOIN sites s ON s.id = e.site_id ${w.sql} ${sortSql(q, { occurred: 'e.occurred_at', score: 'e.ivt_score' }, 'occurred')}`, w.params)).rows;
+    const rows = (await db.query(`SELECT e.id, e.delivery_id, e.type, e.status, e.invalid_reason, e.ivt_score, e.ivt_signals, e.client_flags, e.billable, e.cost_micros, e.excluded_at, e.ip_hash, e.visitor_hash, e.country, e.device, e.page_host, e.occurred_at, e.campaign_id, e.site_id, s.domain FROM ad_events e JOIN sites s ON s.id = e.site_id ${w.sql} ${sortSql(q, { occurred: 'e.occurred_at', score: 'e.ivt_score' }, 'occurred')}`, w.params)).rows;
     return { data: rows, meta: meta(q, total) };
   });
 
@@ -74,7 +88,7 @@ export async function adminFraudRoutes(app: FastifyInstance) {
     const w = new Where();
     if (q.status) w.add('f.status = ?', q.status);
     const total = Number((await db.query(`SELECT count(*)::int AS n FROM fraud_cases f ${w.sql}`, w.params)).rows[0].n);
-    const rows = (await db.query(`SELECT f.*, u.name AS assignee FROM fraud_cases f LEFT JOIN users u ON u.id = f.assigned_to ${w.sql} ${sortSql(q, { created: 'f.created_at', updated: 'f.updated_at' }, 'created')}`, w.params)).rows;
+    const rows = (await db.query(`SELECT f.*, u.name AS assignee, o.name AS publisher_name FROM fraud_cases f LEFT JOIN users u ON u.id = f.assigned_to LEFT JOIN organizations o ON o.id = f.publisher_org_id ${w.sql} ${sortSql(q, { created: 'f.created_at', updated: 'f.updated_at' }, 'created')}`, w.params)).rows;
     return { data: rows, meta: meta(q, total) };
   });
 
@@ -92,7 +106,7 @@ export async function adminFraudRoutes(app: FastifyInstance) {
     if (!f) throw notFound();
     const [notes, exclusions, history] = await Promise.all([
       db.query(`SELECT n.id, n.body, n.created_at, a.name AS author FROM admin_notes n JOIN users a ON a.id = n.author_id WHERE n.subject_type = 'fraud_case' AND n.subject_id = $1 ORDER BY n.created_at DESC`, [id]),
-      db.query(`SELECT x.*, u.name AS actor FROM event_exclusions x JOIN users u ON u.id = x.actor_id WHERE x.case_id = $1 ORDER BY x.created_at DESC`, [id]),
+      db.query(`SELECT x.*, COALESCE(u.name, 'Automatic check') AS actor FROM event_exclusions x LEFT JOIN users u ON u.id = x.actor_id WHERE x.case_id = $1 ORDER BY x.created_at DESC`, [id]),
       db.query(`SELECT a.action, a.reason, a.after, a.created_at, u.name AS actor FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_user_id WHERE a.resource_type = 'fraud_case' AND a.resource_id = $1 ORDER BY a.created_at DESC`, [id]),
     ]);
     return { data: { ...f, notes: notes.rows, exclusions: exclusions.rows, history: history.rows } };
@@ -121,32 +135,78 @@ export async function adminFraudRoutes(app: FastifyInstance) {
     const b = bodyOf(req, excludeBody);
     const f = (await db.query('SELECT * FROM fraud_cases WHERE id = $1', [id])).rows[0];
     if (!f) throw notFound();
-    const c = b.criteria;
-    const w = new Where().raw('e.excluded_at IS NULL').raw(`e.type <> 'served'`);
-    if (c.eventIds?.length) w.add('e.id = ANY(?::uuid[])', c.eventIds);
-    if (c.siteId) w.add('e.site_id = ?', c.siteId);
-    if (c.campaignId) w.add('e.campaign_id = ?', c.campaignId);
-    if (c.unitId) w.add('e.unit_id = ?', c.unitId);
-    if (c.ipHash) w.add('e.ip_hash = ?', c.ipHash);
-    if (c.visitorHash) w.add('e.visitor_hash = ?', c.visitorHash);
-    if (c.from) w.add('e.occurred_at >= ?', c.from);
-    if (c.to) w.add('e.occurred_at < ?', c.to);
-    if (c.types?.length) w.add('e.type = ANY(?)', c.types);
-    if (w.clauses.length <= 2) throw badRequest('Provide at least one criterion');
-    if (!c.eventIds?.length && !(c.from && c.to)) throw badRequest('Bulk exclusions need a time window (from and to)');
-    const matched = (await db.query<{ id: string; occurred_at: string; billable: boolean; cost_micros: string }>(`SELECT e.id, e.occurred_at, e.billable, e.cost_micros FROM ad_events e ${w.sql} LIMIT 50001`, w.params)).rows;
-    if (matched.length > 50000) throw badRequest('More than 50,000 events match; narrow the criteria');
-    const billableTotal = matched.filter((m) => m.billable).reduce((a, m) => a + BigInt(m.cost_micros), 0n);
-    if (b.dryRun) return { data: { matched: matched.length, billable: matched.filter((m) => m.billable).length, billableMicros: billableTotal.toString() } };
-    const result = await tx(ctx, async (cl) => {
-      const r = await excludeEvents(cl, { eventIds: matched.map((m) => m.id), actor: { type: 'user', userId: actor.id }, reason: b.reason, caseId: id });
-      await cl.query('INSERT INTO event_exclusions (case_id, criteria, excluded_events, reversed_micros, reason, actor_id) VALUES ($1, $2, $3, $4, $5, $6)', [id, JSON.stringify(c), r.excluded, r.reversed.toString(), b.reason, actor.id]);
-      await audit(cl, req, { action: 'events.exclude', resourceType: 'fraud_case', resourceId: id, after: { criteria: c, excluded: r.excluded, reversedMicros: r.reversed.toString() }, reason: b.reason });
-      return r;
-    });
-    const days = [...new Set(matched.map((m) => new Date(m.occurred_at).toISOString().slice(0, 10)))];
-    for (const d of days) await aggregateDay(db, d);
-    return { data: { excluded: result.excluded, reversedMicros: result.reversed.toString(), reaggregatedDays: days } };
+    try {
+      if (b.dryRun) return { data: (await previewExclusion(db, b.criteria)).preview };
+      const result = await excludeByCriteria(db, {
+        criteria: b.criteria, caseId: id, reason: b.reason, actor: { type: 'user', userId: actor.id },
+        onCommit: async (cl, r) => { await audit(cl, req, { action: 'events.exclude', resourceType: 'fraud_case', resourceId: id, after: { criteria: b.criteria, excluded: r.excluded, reversedMicros: r.reversed.toString() }, reason: b.reason }); },
+      });
+      return { data: { excluded: result.excluded, reversedMicros: result.reversed.toString(), publisherMicros: result.publisherReversed.toString(), reaggregatedDays: result.days } };
+    } catch (err) {
+      if (err instanceof CriteriaError) throw badRequest(err.message);
+      throw err;
+    }
+  });
+
+  // ---------------------------------------------------------------- review queue, publisher rates, clawbacks
+  app.get('/admin/fraud/queue', { preHandler: guard('admin:fraud:read'), schema: { tags: ['admin: invalid traffic'], description: 'Cases waiting for a staff decision: open, under investigation or appealed. Most severe first.' } }, async () => {
+    const rows = (await db.query(
+      `SELECT f.id, f.title, f.status, f.severity, f.source, f.kind, f.signals, f.criteria, f.estimated_micros, f.created_at, f.updated_at, f.subject_type, f.subject_id, f.appeal_text,
+         COALESCE(o.name, so.name) AS publisher_name, COALESCE(f.publisher_org_id, s.org_id) AS publisher_org_id, s.domain AS site_domain, u.name AS assignee
+       FROM fraud_cases f LEFT JOIN organizations o ON o.id = f.publisher_org_id LEFT JOIN sites s ON f.subject_type = 'site' AND s.id = f.subject_id LEFT JOIN organizations so ON so.id = s.org_id
+       LEFT JOIN users u ON u.id = f.assigned_to
+       WHERE f.status IN ('open', 'investigating', 'appealed')
+       ORDER BY (f.status = 'appealed') DESC, CASE f.severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, f.created_at LIMIT 200`)).rows;
+    return { data: rows };
+  });
+
+  app.get('/admin/fraud/publishers', { preHandler: guard('admin:fraud:read'), schema: { tags: ['admin: invalid traffic'], querystring: dateRange, description: 'Invalid-traffic rate per publisher, with the previous period for the trend and what was clawed back.' } }, async (req) => {
+    const r = resolveRange(queryOf(req, dateRange), 7);
+    const s = await ctx.settings.get();
+    const rows = (await publisherIvtRates(db, r.from, r.to)).map((p) => ({ ...p, status: qualityStatus(p.ivtRate, p.rendered, s.ivt) }));
+    rows.sort((a, b) => (b.ivtRate ?? -1) - (a.ivtRate ?? -1));
+    return { data: rows, meta: { range: r, reviewAtPercent: s.ivt.publisherReviewIvtPercent, minImpressions: s.ivt.publisherReviewMinImpressions } };
+  });
+
+  app.get('/admin/fraud/clawbacks', { preHandler: guard('admin:fraud:read'), schema: { tags: ['admin: invalid traffic'], description: 'Recent exclusions, automatic and by staff, newest first.' } }, async () => {
+    const rows = (await db.query(
+      `SELECT x.id, x.case_id, x.excluded_events, x.reversed_micros, x.publisher_micros, x.reason, x.automatic, x.created_at, o.name AS publisher_name, u.name AS actor, f.title AS case_title, f.status AS case_status
+       FROM event_exclusions x LEFT JOIN organizations o ON o.id = x.publisher_org_id LEFT JOIN users u ON u.id = x.actor_id LEFT JOIN fraud_cases f ON f.id = x.case_id
+       ORDER BY x.created_at DESC LIMIT 200`)).rows;
+    return { data: rows };
+  });
+
+  app.post('/admin/fraud/cases/:id/clawback', { config: mgmt, preHandler: guard('admin:fraud:manage', { stepUp: true }), schema: { tags: ['admin: invalid traffic'], params: idParams, body: clawbackBody, description: 'Apply the exclusion the detection proposed for this case and confirm it. Settled charges are reversed.' } }, async (req) => {
+    const actor = requireUser(req);
+    const { id } = paramsOf(req, idParams);
+    const b = bodyOf(req, clawbackBody);
+    const f = (await db.query('SELECT * FROM fraud_cases WHERE id = $1', [id])).rows[0];
+    if (!f) throw notFound();
+    if (!f.criteria) throw conflict('This case has no proposed exclusion; use Exclude events on the case page');
+    if (!['open', 'investigating'].includes(f.status)) throw conflict('Only open cases can be clawed back');
+    const criteria = f.criteria as ExclusionCriteria;
+    try {
+      if (b.dryRun) return { data: (await previewExclusion(db, criteria)).preview };
+      const result = await excludeByCriteria(db, {
+        criteria, caseId: id, reason: b.reason, actor: { type: 'user', userId: actor.id },
+        onCommit: async (cl, r) => {
+          await cl.query(`UPDATE fraud_cases SET status = 'confirmed', outcome = $2, resolved_at = now(), resolved_by = $3, updated_at = now() WHERE id = $1`, [id, b.reason, actor.id]);
+          await audit(cl, req, { action: 'fraud_case.clawback', resourceType: 'fraud_case', resourceId: id, after: { excluded: r.excluded, reversedMicros: r.reversed.toString() }, reason: b.reason });
+        },
+      });
+      const orgId = f.publisher_org_id ?? (f.subject_type === 'organization' ? f.subject_id : null);
+      if (orgId) await notifyOrg(ctx, orgId, { type: 'ivt_clawback', title: 'Invalid traffic removed from your earnings', body: b.reason, link: '/publisher/policy', roles: ['owner', 'manager'] }).catch(() => undefined);
+      return { data: { excluded: result.excluded, reversedMicros: result.reversed.toString(), publisherMicros: result.publisherReversed.toString() } };
+    } catch (err) {
+      if (err instanceof CriteriaError) throw badRequest(err.message);
+      throw err;
+    }
+  });
+
+  app.post('/admin/fraud/sweep', { config: mgmt, preHandler: guard('admin:fraud:manage'), schema: { tags: ['admin: invalid traffic'], description: 'Run the invalid-traffic sweep now instead of waiting for the timer.' } }, async (req) => {
+    const r = await runIvtSweep({ db, settings: () => ctx.settings.get(), notify: (orgId, n) => notifyOrg(ctx, orgId, n) });
+    await audit(db, req, { action: 'ivt.sweep', resourceType: 'platform', resourceId: null, after: r });
+    return { data: r };
   });
 
   app.post('/admin/fraud/cases/:id/appeal-decision', { config: mgmt, preHandler: guard('admin:fraud:manage'), schema: { tags: ['admin: invalid traffic'], params: idParams, body: appealDecision } }, async (req) => {
