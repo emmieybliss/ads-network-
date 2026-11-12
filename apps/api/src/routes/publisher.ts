@@ -57,6 +57,10 @@ const unitBody = z.object({
   /** Pop placements only: most pops per visitor per day, and least minutes between two. */
   popMaxPerDay: z.number().int().min(1).max(20).default(1),
   popMinutesBetween: z.number().int().min(1).max(1440).default(60),
+  /** Viewable auto-refresh: in-page, anchor and rail placements only. */
+  refreshEnabled: z.boolean().default(false),
+  refreshSeconds: z.number().int().min(30).max(600).default(30),
+  refreshMax: z.number().int().min(1).max(20).default(4),
 });
 // No defaults here: a field left out of a PATCH must keep its stored value.
 const unitPatch = z.object({
@@ -70,7 +74,13 @@ const unitPatch = z.object({
   noFill: z.enum(['collapse', 'keep_space']).optional(),
   popMaxPerDay: z.number().int().min(1).max(20).optional(),
   popMinutesBetween: z.number().int().min(1).max(1440).optional(),
+  refreshEnabled: z.boolean().optional(),
+  refreshSeconds: z.number().int().min(30).max(600).optional(),
+  refreshMax: z.number().int().min(1).max(20).optional(),
 });
+
+/** Placement types that can refresh: interstitials and pops show once by design. */
+export const refreshable = (display: string | null | undefined) => display === 'inline' || display === 'anchor' || display === 'rail_left' || display === 'rail_right';
 
 /** Size rules for placements that sit over the page, so they cannot cover most of it. */
 function displayProblem(display: string, width: number | null | undefined, height: number | null | undefined): string | null {
@@ -127,7 +137,8 @@ export function slotContainer(key: string, u?: Record<string, any>, withId = tru
 }
 
 export function serializeUnit(u: Record<string, any>) {
-  return { id: u.id, siteId: u.site_id, key: u.key, name: u.name, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, position: u.position, display: u.display, noFill: u.no_fill, popMaxPerDay: u.pop_max_per_day, popMinutesBetween: u.pop_minutes_between, status: u.status, adminBlocked: u.admin_blocked, createdAt: u.created_at };
+  return { id: u.id, siteId: u.site_id, key: u.key, name: u.name, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, position: u.position, display: u.display, noFill: u.no_fill, popMaxPerDay: u.pop_max_per_day, popMinutesBetween: u.pop_minutes_between,
+    refreshEnabled: !!u.refresh_enabled && refreshable(u.display), refreshSeconds: u.refresh_seconds ?? 30, refreshMax: u.refresh_max ?? 4, status: u.status, adminBlocked: u.admin_blocked, createdAt: u.created_at };
 }
 
 export async function publisherRoutes(app: FastifyInstance) {
@@ -492,8 +503,9 @@ export async function publisherRoutes(app: FastifyInstance) {
     if (bad.length) throw badRequest(`This site is not approved for ${bad.join(', ')} ads`);
     const dp = displayProblem(b.display, b.width, b.height);
     if (dp) throw badRequest(dp);
-    const row = (await db.query(`INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position, display, no_fill, pop_max_per_day, pop_minutes_between) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-      [siteId, b.key, b.name, formats, b.width ?? null, b.height ?? null, b.responsive, b.position, b.display, b.noFill, b.popMaxPerDay, b.popMinutesBetween]).catch((err: { code?: string }) => {
+    const row = (await db.query(`INSERT INTO ad_units (site_id, key, name, formats, width, height, responsive, position, display, no_fill, pop_max_per_day, pop_minutes_between, refresh_enabled, refresh_seconds, refresh_max)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+      [siteId, b.key, b.name, formats, b.width ?? null, b.height ?? null, b.responsive, b.position, b.display, b.noFill, b.popMaxPerDay, b.popMinutesBetween, b.refreshEnabled && refreshable(b.display), b.refreshSeconds, b.refreshMax]).catch((err: { code?: string }) => {
       if (err.code === '23505') throw conflict('A placement with this key already exists on this site');
       throw err;
     })).rows[0];
@@ -530,8 +542,11 @@ export async function publisherRoutes(app: FastifyInstance) {
     const after = (await db.query(
       `UPDATE ad_units SET name = COALESCE($2, name), formats = COALESCE($3, formats), width = CASE WHEN $4::boolean THEN $5 ELSE width END, height = CASE WHEN $4::boolean THEN $6 ELSE height END,
          responsive = COALESCE($7, responsive), position = COALESCE($8, position), display = COALESCE($9, display), no_fill = COALESCE($10, no_fill),
-         pop_max_per_day = COALESCE($11, pop_max_per_day), pop_minutes_between = COALESCE($12, pop_minutes_between), updated_at = now() WHERE id = $1 RETURNING *`,
-      [u.id, b.name ?? null, formats, b.width !== undefined, b.width ?? null, b.height ?? null, b.responsive ?? null, b.position ?? null, b.display ?? null, b.noFill ?? null, b.popMaxPerDay ?? null, b.popMinutesBetween ?? null])).rows[0];
+         pop_max_per_day = COALESCE($11, pop_max_per_day), pop_minutes_between = COALESCE($12, pop_minutes_between),
+         refresh_enabled = CASE WHEN $16::boolean THEN COALESCE($13, refresh_enabled) ELSE false END, refresh_seconds = COALESCE($14, refresh_seconds), refresh_max = COALESCE($15, refresh_max),
+         updated_at = now() WHERE id = $1 RETURNING *`,
+      [u.id, b.name ?? null, formats, b.width !== undefined, b.width ?? null, b.height ?? null, b.responsive ?? null, b.position ?? null, b.display ?? null, b.noFill ?? null, b.popMaxPerDay ?? null, b.popMinutesBetween ?? null,
+        b.refreshEnabled ?? null, b.refreshSeconds ?? null, b.refreshMax ?? null, refreshable(display)])).rows[0];
     await audit(db, req, { action: 'unit.update', resourceType: 'ad_unit', resourceId: u.id, orgId: req.org!.id, before: serializeUnit(u), after: serializeUnit(after) });
     invalidateServingCache(app.ctx);
     return { data: serializeUnit(after) };

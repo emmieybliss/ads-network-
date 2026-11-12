@@ -57,9 +57,9 @@ export async function advertiserRoutes(app: FastifyInstance) {
     const { rate, lifetime, daily } = validateCampaignRules(b, s);
     const created = await tx(app.ctx, async (c) => {
       const row = (await c.query(
-        `INSERT INTO campaigns (org_id, name, pricing_model, rate_micros, currency, lifetime_budget_micros, daily_budget_micros, max_impressions, max_clicks, timezone, start_at, end_at, pacing, priority, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
-        [req.org!.id, b.name, b.pricingModel, rate.toString(), req.org!.currency, lifetime.toString(), daily?.toString() ?? null, b.maxImpressions ?? null, b.maxClicks ?? null, b.timezone, b.startAt, b.endAt ?? null, b.pacing, b.priority, user.id])).rows[0];
+        `INSERT INTO campaigns (org_id, name, pricing_model, rate_micros, currency, lifetime_budget_micros, daily_budget_micros, max_impressions, max_clicks, timezone, start_at, end_at, pacing, priority, created_by, accept_refresh)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+        [req.org!.id, b.name, b.pricingModel, rate.toString(), req.org!.currency, lifetime.toString(), daily?.toString() ?? null, b.maxImpressions ?? null, b.maxClicks ?? null, b.timezone, b.startAt, b.endAt ?? null, b.pacing, b.priority, user.id, b.acceptRefresh])).rows[0];
       await writeTargetingAndCaps(c, row.id, b);
       await recordHistory(c, row.id, user.id, 'created', null, b);
       await audit(c, req, { action: 'campaign.create', resourceType: 'campaign', resourceId: row.id, orgId: req.org!.id, after: b });
@@ -99,6 +99,7 @@ export async function advertiserRoutes(app: FastifyInstance) {
         endAt: patch.endAt !== undefined ? patch.endAt : before.endAt ? new Date(before.endAt).toISOString() : null,
         pacing: patch.pacing ?? before.pacing,
         priority: patch.priority ?? before.priority,
+        acceptRefresh: patch.acceptRefresh ?? before.acceptRefresh,
         targeting: patch.targeting ?? before.targeting!,
         caps: patch.caps ?? before.caps,
       };
@@ -111,10 +112,10 @@ export async function advertiserRoutes(app: FastifyInstance) {
       const newStatus: CampaignStatus = approved && targetingChanged ? 'pending_approval' : before.status as CampaignStatus;
       await c.query(
         `UPDATE campaigns SET name = $2, pricing_model = $3, rate_micros = $4, lifetime_budget_micros = $5, daily_budget_micros = $6, max_impressions = $7, max_clicks = $8,
-           timezone = $9, start_at = $10, end_at = $11, pacing = $12, priority = $13, status = $14, version = version + 1, updated_at = now(),
+           timezone = $9, start_at = $10, end_at = $11, pacing = $12, priority = $13, status = $14, accept_refresh = $15, version = version + 1, updated_at = now(),
            submitted_at = CASE WHEN $14 = 'pending_approval' AND status <> 'pending_approval' THEN now() ELSE submitted_at END
          WHERE id = $1`,
-        [id, merged.name, merged.pricingModel, rate.toString(), lifetime.toString(), daily?.toString() ?? null, merged.maxImpressions ?? null, merged.maxClicks ?? null, merged.timezone, merged.startAt, merged.endAt ?? null, merged.pacing, merged.priority, newStatus]);
+        [id, merged.name, merged.pricingModel, rate.toString(), lifetime.toString(), daily?.toString() ?? null, merged.maxImpressions ?? null, merged.maxClicks ?? null, merged.timezone, merged.startAt, merged.endAt ?? null, merged.pacing, merged.priority, newStatus, merged.acceptRefresh]);
       await writeTargetingAndCaps(c, id, merged);
       if (BigInt(before.reservedMicros) > 0n) {
         if (lifetime > BigInt(before.reservedMicros)) await reserveCampaignBudget(c, id, { type: 'user', userId: user.id });
@@ -137,8 +138,8 @@ export async function advertiserRoutes(app: FastifyInstance) {
       const start = new Date(Math.max(Date.now(), new Date(src.start_at).getTime()));
       const end = src.end_at ? new Date(start.getTime() + (new Date(src.end_at).getTime() - new Date(src.start_at).getTime())) : null;
       const row = (await c.query(
-        `INSERT INTO campaigns (org_id, name, pricing_model, rate_micros, currency, lifetime_budget_micros, daily_budget_micros, max_impressions, max_clicks, timezone, start_at, end_at, pacing, priority, created_by)
-         SELECT org_id, left('Copy of ' || name, 160), pricing_model, rate_micros, currency, lifetime_budget_micros, daily_budget_micros, max_impressions, max_clicks, timezone, $3, $4, pacing, priority, $2 FROM campaigns WHERE id = $1 RETURNING id`,
+        `INSERT INTO campaigns (org_id, name, pricing_model, rate_micros, currency, lifetime_budget_micros, daily_budget_micros, max_impressions, max_clicks, timezone, start_at, end_at, pacing, priority, created_by, accept_refresh)
+         SELECT org_id, left('Copy of ' || name, 160), pricing_model, rate_micros, currency, lifetime_budget_micros, daily_budget_micros, max_impressions, max_clicks, timezone, $3, $4, pacing, priority, $2, accept_refresh FROM campaigns WHERE id = $1 RETURNING id`,
         [id, user.id, start, end])).rows[0];
       await c.query(`INSERT INTO campaign_targeting SELECT $2, countries, devices, site_categories, keywords, include_site_ids, exclude_site_ids, include_unit_ids, exclude_unit_ids, require_personalized FROM campaign_targeting WHERE campaign_id = $1`, [id, row.id]);
       await c.query(`INSERT INTO campaign_caps (campaign_id, scope, max_impressions, window_seconds) SELECT $2, scope, max_impressions, window_seconds FROM campaign_caps WHERE campaign_id = $1`, [id, row.id]);

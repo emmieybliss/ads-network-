@@ -134,6 +134,19 @@ export const settingsSchema = z.object({
     /** Least time between two pops for one visitor on one site. */
     minMinutesBetween: z.number().int().min(1).max(1440).default(15),
   }).prefault({}),
+  /**
+   * Viewable auto-refresh. A placement the publisher has opted in shows a new
+   * ad once the current one has been at least half in view, in a visible tab
+   * with a recently active visitor, for the placement's interval. These are the
+   * network's limits on top of the publisher's own.
+   */
+  adRefresh: z.object({
+    enabled: z.boolean().default(true),
+    /** Least seconds an ad must be in view before it is replaced. Never below 30. */
+    minSeconds: z.number().int().min(30).max(600).default(30),
+    /** Most refreshes of one slot in one page view. */
+    maxPerPageView: z.number().int().min(1).max(20).default(6),
+  }).prefault({}),
   api: z.object({
     authRateLimitPerMinute: z.number().int().min(1).max(1000).default(10),
     managementRateLimitPerMinute: z.number().int().min(10).max(100000).default(600),
@@ -162,7 +175,7 @@ export const settingsSchema = z.object({
 });
 
 export type PlatformSettings = z.infer<typeof settingsSchema>;
-export const SETTINGS_GROUPS = ['tracking', 'ivt', 'frequency', 'creatives', 'publishers', 'verification', 'eligibility', 'pricing', 'popAds', 'api', 'platform', 'branding', 'email'] as const;
+export const SETTINGS_GROUPS = ['tracking', 'ivt', 'frequency', 'creatives', 'publishers', 'verification', 'eligibility', 'pricing', 'popAds', 'adRefresh', 'api', 'platform', 'branding', 'email'] as const;
 export type SettingsGroup = (typeof SETTINGS_GROUPS)[number];
 
 export function defaultSettings(): PlatformSettings {
@@ -178,6 +191,7 @@ export function publicSettings(s: PlatformSettings) {
     creatives: s.creatives,
     eligibility: s.eligibility,
     popAds: s.popAds,
+    adRefresh: s.adRefresh,
     verification: { allowedMethods: s.verification.allowedMethods, challengeTtlHours: s.verification.challengeTtlHours },
   };
 }

@@ -14,10 +14,10 @@ import { decideConsent, type ConsentReason, type ConsentSignals } from './consen
  * Postgres transaction, when an impression or click becomes billable.
  */
 export interface SiteSnap { id: string; orgId: string; domain: string; allowedDomains: string[]; includeSubdomains: boolean; category: string; allowedFormats: string[]; revenueShareBps: number; blockedCategories: string[]; floorCpmMicros: bigint | null; floorCpcMicros: bigint | null; premiumOnly: boolean }
-export interface UnitSnap { id: string; siteId: string; key: string; formats: string[]; width: number | null; height: number | null; responsive: boolean; display: UnitDisplay; popMaxPerDay: number; popMinutesBetween: number }
+export interface UnitSnap { id: string; siteId: string; key: string; formats: string[]; width: number | null; height: number | null; responsive: boolean; display: UnitDisplay; popMaxPerDay: number; popMinutesBetween: number; refreshEnabled: boolean; refreshSeconds: number; refreshMax: number }
 export type UnitDisplay = 'inline' | 'anchor' | 'rail_left' | 'rail_right' | 'interstitial' | 'popup' | 'popunder';
 export interface CreativeSnap extends CreativeCandidate { snapshot: { headline?: string; body?: string; cta?: string; storageKey?: string | null; altText?: string; displayUrl?: string; sponsorName?: string; destinationUrl: string } }
-export interface CampaignSnap extends CampaignCandidate { caps: Array<{ scope: 'visitor' | 'page'; max: number; window: number }>; orgCaps: Array<{ max: number; window: number }>; creatives: CreativeSnap[] }
+export interface CampaignSnap extends CampaignCandidate { acceptRefresh: boolean; caps: Array<{ scope: 'visitor' | 'page'; max: number; window: number }>; orgCaps: Array<{ max: number; window: number }>; creatives: CreativeSnap[] }
 
 interface Snapshot { at: number; version: string; sites: Map<string, SiteSnap>; units: Map<string, UnitSnap>; campaigns: CampaignSnap[]; blockedCountries: string[]; defaultShareBps: number }
 
@@ -49,7 +49,8 @@ async function loadSnapshot(ctx: AppContext): Promise<Snapshot> {
   }
   const units = new Map<string, UnitSnap>();
   const unitRows = (await ctx.db.query(`SELECT u.* FROM ad_units u JOIN sites s ON s.id = u.site_id WHERE u.status = 'active' AND NOT u.admin_blocked AND s.status = 'approved'`)).rows;
-  for (const u of unitRows) units.set(`${u.site_id}:${u.key}`, { id: u.id, siteId: u.site_id, key: u.key, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, display: u.display ?? 'inline', popMaxPerDay: u.pop_max_per_day ?? 1, popMinutesBetween: u.pop_minutes_between ?? 60 });
+  for (const u of unitRows) units.set(`${u.site_id}:${u.key}`, { id: u.id, siteId: u.site_id, key: u.key, formats: u.formats, width: u.width, height: u.height, responsive: u.responsive, display: u.display ?? 'inline', popMaxPerDay: u.pop_max_per_day ?? 1, popMinutesBetween: u.pop_minutes_between ?? 60,
+    refreshEnabled: !!u.refresh_enabled, refreshSeconds: u.refresh_seconds ?? 30, refreshMax: u.refresh_max ?? 4 });
 
   const camps = (await ctx.db.query(
     `SELECT c.*, o.tier AS org_tier, t.countries, t.devices, t.site_categories, t.keywords, t.include_site_ids, t.exclude_site_ids, t.include_unit_ids, t.exclude_unit_ids, t.require_personalized
@@ -70,7 +71,7 @@ async function loadSnapshot(ctx: AppContext): Promise<Snapshot> {
       id: c.id, orgId: c.org_id, premium: c.org_tier === 'premium', status: c.status, priority: Math.max(1, Math.min(15, c.priority + c.admin_priority_boost)), pricingModel: c.pricing_model,
       rateMicros: BigInt(c.rate_micros), currency: c.currency, lifetimeBudgetMicros: BigInt(c.lifetime_budget_micros), spentMicros: BigInt(c.spent_micros),
       dailyBudgetMicros: c.daily_budget_micros ? BigInt(c.daily_budget_micros) : null, startAt: new Date(c.start_at).getTime(), endAt: c.end_at ? new Date(c.end_at).getTime() : null,
-      timezone: c.timezone, pacing: c.pacing,
+      timezone: c.timezone, pacing: c.pacing, acceptRefresh: c.accept_refresh ?? true,
       targeting: {
         countries: c.countries ?? [], devices: c.devices ?? [], siteCategories: c.site_categories ?? [], keywords: c.keywords ?? [], includeSiteIds: c.include_site_ids ?? [],
         excludeSiteIds: c.exclude_site_ids ?? [], includeUnitIds: c.include_unit_ids ?? [], excludeUnitIds: c.exclude_unit_ids ?? [], requirePersonalized: c.require_personalized ?? false,
@@ -127,7 +128,8 @@ export async function reserveCaps(ctx: Pick<AppContext, 'redis'>, keys: string[]
 
 export interface ServeRequest {
   siteKey: string;
-  units: Array<{ slot: string }>;
+  /** refresh: 1 for a slot's first refresh in this page view, 2 for the next...; inst tells apart slots that share a key. */
+  units: Array<{ slot: string; refresh?: number; inst?: number }>;
   page: { url: string; keywords?: string[]; referrer?: string };
   consent?: ConsentSignals;
   vid?: string;
@@ -138,6 +140,8 @@ export interface ServedAd {
   slot: string;
   /** How the tag shows this placement; absent when the slot is unknown. */
   display?: UnitDisplay;
+  /** Present when the tag may refresh this slot: least seconds in view first, and most refreshes in this page view. */
+  refresh?: { seconds: number; max: number };
   ad: null | { format: 'image' | 'text' | 'native' | 'pop'; token: string; clickUrl: string; width: number | null; height: number | null; pop?: { url: string }; image?: { url: string; alt: string }; text?: { headline: string; body: string; cta: string; displayUrl: string }; native?: { imageUrl: string; alt: string; headline: string; body: string; cta: string; displayUrl: string; sponsor: string } };
 }
 export interface ServeLog { pageView?: { siteId: string; path: string; source: string; device: string; country: string; entrance: boolean }; deliveries: Array<{ claims: DeliveryClaims; ipHash: string; uaHash: string | null }>; counters: Array<{ unitId: string; field: 'requests' | 'filled' | 'no_fill' | 'cap_rejects' | 'budget_rejects' | 'blocked' }>; day: string }
@@ -163,7 +167,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
   }
   const originHost = meta.origin ? (() => { try { return normalizeHost(new URL(meta.origin!).hostname); } catch { return ''; } })() : null;
   const domainOk = hostAuthorized(pageHost, site.domain, site.allowedDomains, site.includeSubdomains) && (originHost === null || hostAuthorized(originHost, site.domain, site.allowedDomains, site.includeSubdomains));
-  const units = req.units.map((u) => ({ slot: u.slot, unit: snap.units.get(`${site.id}:${u.slot}`) }));
+  const units = req.units.map((u) => ({ slot: u.slot, refresh: u.refresh, inst: u.inst, unit: snap.units.get(`${site.id}:${u.slot}`) }));
   if (!domainOk || isKnownCrawler(meta.ua)) {
     for (const u of units) if (u.unit) log.counters.push({ unitId: u.unit.id, field: 'requests' }, { unitId: u.unit.id, field: 'blocked' });
     return { ...empty('blocked'), log };
@@ -187,9 +191,18 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
   const used: string[] = [];
   const ads: ServedAd[] = [];
 
-  for (const { slot, unit } of units) {
+  for (const { slot, unit, refresh: refreshN, inst } of units) {
     if (!unit) { ads.push({ slot, ad: null }); continue; }
     log.counters.push({ unitId: unit.id, field: 'requests' });
+    const rp = refreshPolicy(settings, unit);
+    const rfKey = `rf:${req.pv.slice(0, 40)}:${unit.id}:${inst ?? 0}`;
+    const refreshN_ = refreshN ?? 0;
+    if (refreshN_ > 0 && !(await refreshAllowed(ctx, rp, rfKey, refreshN_, now))) {
+      // Too early, past the limit, or refresh is off: the slot keeps the ad it has.
+      log.counters.push({ unitId: unit.id, field: 'blocked' });
+      ads.push({ slot, display: unit.display, ad: null });
+      continue;
+    }
     const pop = unit.display === 'popup' || unit.display === 'popunder';
     if (pop && !popAllowed(settings, unit.display)) {
       log.counters.push({ unitId: unit.id, field: 'blocked' });
@@ -198,7 +211,8 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     }
     const spentCache = new Map<string, bigint>();
     // A pop opens the landing page itself, so there is no click to charge: CPC campaigns never fill pops.
-    const candidates = pop ? snap.campaigns.filter((c) => c.pricingModel !== 'cpc') : snap.campaigns;
+    // Advertisers who opted out of refreshed impressions only fill a slot's first ad.
+    const candidates = snap.campaigns.filter((c) => (!pop || c.pricingModel !== 'cpc') && (refreshN_ === 0 || c.acceptRefresh));
     // Pre-load today's spend estimates for the candidates in one round trip.
     const keys = candidates.map((c) => `spend:${c.id}:${dayInZone(now, c.timezone)}`);
     const vals = keys.length ? await ctx.redis.mget(...keys) : [];
@@ -217,8 +231,12 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
       const capKeys: string[] = [];
       const limits: Array<{ max: number; window: number }> = [];
       // Page-level cap: campaign-specific or the network default.
-      const pageCap = c.caps.find((x) => x.scope === 'page') ?? (settings.frequency.defaultMaxPerPage > 0 ? { scope: 'page' as const, max: settings.frequency.defaultMaxPerPage, window: 1800 } : null);
-      if (pageCap) { capKeys.push(`fc:p:${req.pv.slice(0, 40)}:${c.id}`); limits.push({ max: pageCap.max, window: pageCap.window }); }
+      // An advertiser's own page cap counts every ad on the page, refreshed or not. The network
+      // default only keeps a campaign from filling several slots at once, so each refresh round
+      // counts on its own (otherwise a refreshed slot could never show a campaign seen earlier).
+      const ownPageCap = c.caps.find((x) => x.scope === 'page');
+      const pageCap = ownPageCap ?? (settings.frequency.defaultMaxPerPage > 0 ? { scope: 'page' as const, max: settings.frequency.defaultMaxPerPage, window: 1800 } : null);
+      if (pageCap) { capKeys.push(`fc:p:${req.pv.slice(0, 40)}:${c.id}${!ownPageCap && refreshN_ > 0 ? `:r${refreshN_}` : ''}`); limits.push({ max: pageCap.max, window: pageCap.window }); }
       if (pop) {
         // Pops are capped per visitor whether or not the visitor allowed an id: by hashed IP address, per site.
         // The tighter of the placement's limits and the network's wins.
@@ -241,7 +259,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     if (!chosen) {
       const budgetRejected = result.rejected.some((r) => r.reason === 'budget' || r.reason === 'daily_budget' || r.reason === 'pacing');
       log.counters.push({ unitId: unit.id, field: capRejected ? 'cap_rejects' : budgetRejected ? 'budget_rejects' : 'no_fill' });
-      ads.push({ slot, display: unit.display, ad: null });
+      ads.push({ slot, display: unit.display, ad: null, ...(rp && refreshN_ > 0 ? { refresh: rp } : {}) });
       continue;
     }
     const c = chosen.campaign as CampaignSnap;
@@ -251,7 +269,7 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     if (cost > 0n) await ctx.redis.multi().incrby(`spend:${c.id}:${dayInZone(now, c.timezone)}`, Number(cost)).expire(`spend:${c.id}:${dayInZone(now, c.timezone)}`, 3 * 86400).exec();
     const claims: DeliveryClaims = {
       d: randomUUID(), c: c.id, cr: cr.id, ao: c.orgId, s: site.id, u: unit.id, po: site.orgId, pm: c.pricingModel, r: c.rateMicros.toString(), cur: c.currency,
-      sh: site.revenueShareBps, ph: pageHost, pp: pagePath, co: meta.country, dv: device, os, br: browser, src: source, ct: !personalized, v: vHash, iat: now, exp: now + settings.tracking.tokenTtlSeconds * 1000,
+      sh: site.revenueShareBps, ph: pageHost, pp: pagePath, co: meta.country, dv: device, os, br: browser, src: source, ct: !personalized, v: vHash, ...(refreshN_ > 0 ? { rf: refreshN_ } : {}), iat: now, exp: now + settings.tracking.tokenTtlSeconds * 1000,
     };
     const token = signDeliveryToken(ctx.tokens, claims);
     log.deliveries.push({ claims, ipHash: meta.ipHash, uaHash: null });
@@ -261,9 +279,11 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
       ads.push({ slot, display: unit.display, ad: { format: 'pop', token, clickUrl: `${ctx.config.PUBLIC_API_URL}/api/v1/click?t=${encodeURIComponent(token)}`, width: null, height: null, pop: { url: snapC.destinationUrl } } });
       continue;
     }
+    if (rp && refreshN_ === 0) await ctx.redis.set(rfKey, String(now), 'EX', 1800);
     ads.push({
       slot,
       display: unit.display,
+      ...(rp ? { refresh: rp } : {}),
       ad: {
         format: cr.format, token, clickUrl: `${ctx.config.PUBLIC_API_URL}/api/v1/click?t=${encodeURIComponent(token)}`, width: cr.width, height: cr.height,
         ...(cr.format === 'image' && snapC.storageKey ? { image: { url: ctx.storage.publicUrl(snapC.storageKey), alt: snapC.altText ?? snapC.headline ?? 'Advertisement' } } : {}),
@@ -273,6 +293,33 @@ export async function serveAds(ctx: AppContext, req: ServeRequest, meta: ServeMe
     });
   }
   return { status: 'ok', ads, log, privacy };
+}
+
+/** The refresh rule for a placement, or null when it does not refresh: the stricter of the publisher's and the network's limits. */
+export function refreshPolicy(settings: PlatformSettings, unit: Pick<UnitSnap, 'display' | 'refreshEnabled' | 'refreshSeconds' | 'refreshMax'>): { seconds: number; max: number } | null {
+  if (!settings.adRefresh.enabled || !unit.refreshEnabled) return null;
+  if (unit.display !== 'inline' && unit.display !== 'anchor' && unit.display !== 'rail_left' && unit.display !== 'rail_right') return null;
+  return { seconds: Math.max(30, unit.refreshSeconds, settings.adRefresh.minSeconds), max: Math.min(unit.refreshMax, settings.adRefresh.maxPerPageView) };
+}
+
+// Server-side guard for refresh requests: the slot showed an ad in this page
+// view, this is the next refresh in order, within the limit, and the interval
+// has passed (a little slack for timers and network delay).
+const REFRESH_SCRIPT = `
+local last = tonumber(redis.call('GET', KEYS[1]) or '0')
+if last == 0 then return 0 end
+local n = tonumber(redis.call('GET', KEYS[2]) or '0')
+if tonumber(ARGV[1]) ~= n + 1 or n + 1 > tonumber(ARGV[2]) then return 0 end
+if tonumber(ARGV[3]) - last < tonumber(ARGV[4]) then return 0 end
+redis.call('SET', KEYS[1], ARGV[3], 'EX', 1800)
+redis.call('SET', KEYS[2], tostring(n + 1), 'EX', 1800)
+return 1
+`;
+const REFRESH_SLACK_MS = 3000;
+
+async function refreshAllowed(ctx: Pick<AppContext, 'redis'>, rp: { seconds: number; max: number } | null, key: string, n: number, now: number): Promise<boolean> {
+  if (!rp) return false;
+  return (await ctx.redis.eval(REFRESH_SCRIPT, 2, key, `${key}:n`, String(n), String(rp.max), String(now), String(rp.seconds * 1000 - REFRESH_SLACK_MS))) === 1;
 }
 
 /** Whether the network currently serves this pop placement type. */
@@ -317,10 +364,10 @@ export async function writeServeLog(db: AppContext['db'], log: ServeLog) {
   for (const d of log.deliveries) {
     const c = d.claims;
     await db.query(
-      `INSERT INTO ad_events (event_key, delivery_id, type, status, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, page_path, os, browser, source)
-       VALUES ($1, $2, 'served', 'valid', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16 / 1000.0), $17, $18, $19, $20)
+      `INSERT INTO ad_events (event_key, delivery_id, type, status, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, visitor_hash, ip_hash, country, device, contextual, page_host, currency, occurred_at, page_path, os, browser, source, refresh_count)
+       VALUES ($1, $2, 'served', 'valid', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16 / 1000.0), $17, $18, $19, $20, $21)
        ON CONFLICT DO NOTHING`,
-      [`${c.d}:served`, c.d, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, d.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, c.iat, c.pp ?? null, c.os ?? 'other', c.br ?? 'other', c.src ?? 'unknown']);
+      [`${c.d}:served`, c.d, c.c, c.cr, c.ao, c.s, c.u, c.po, c.v ?? null, d.ipHash, c.co, c.dv, c.ct, c.ph, c.cur, c.iat, c.pp ?? null, c.os ?? 'other', c.br ?? 'other', c.src ?? 'unknown', Math.max(0, Math.min(20, c.rf ?? 0))]);
   }
   const agg = new Map<string, Record<string, number>>();
   for (const k of log.counters) {

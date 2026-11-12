@@ -151,6 +151,16 @@ if (!existsSync(seededMarker)) {
   if (upgraded) console.log(`Added analytics sample fields to ${upgraded} day(s) of demo data.`);
 }
 
+// Demo data seeded before viewable auto-refresh existed gets it on the sidebar and rail once.
+{
+  const marker = join(dataDir, 'refresh-demo');
+  if (!existsSync(marker)) {
+    const r = await app.ctx.db.query(`UPDATE ad_units u SET refresh_enabled = true, refresh_seconds = 30, refresh_max = 4 FROM sites s
+      WHERE s.id = u.site_id AND s.domain = $1 AND u.key IN ('demo-sidebar', 'demo-rail') AND NOT u.refresh_enabled`, ['demo-publisher.localhost']).catch(() => null);
+    if (r) writeFileSync(marker, new Date().toISOString());
+  }
+}
+
 // The worker's scheduled jobs, on timers instead of BullMQ.
 const log = { info: (o: object, m?: string) => app.log.info(o, m), warn: (o: object, m?: string) => app.log.warn(o, m), error: (o: object, m?: string) => app.log.error(o, m) };
 const jobCtx: import('../../worker/src/jobs').JobCtx = {

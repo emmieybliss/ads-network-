@@ -65,6 +65,7 @@ export function useAction<A extends unknown[], R>(fn: (...args: A) => Promise<R>
 
 export interface ClientConfig {
   pricing: { cpmEnabled: boolean; cpcEnabled: boolean; flatEnabled: boolean; defaultCurrency: string; minCampaignBudgetMicros: string; minDepositMicros?: string; minCpmMicros: string; minCpcMicros: string };
+  adRefresh?: { enabled: boolean; minSeconds: number; maxPerPageView: number };
   popAds?: { enabled: boolean; popunderEnabled: boolean; maxPerVisitorPerDay: number; minMinutesBetween: number };
   creatives: { allowedFormats: string[]; maxUploadBytes: number; allowedImageTypes: string[]; allowedSizes?: Array<[number, number]> };
   eligibility: { minMonthlyPageviews: number | null; requireOriginalContent: boolean; requirePrivacyPolicy: boolean; requireContactInformation: boolean; requireTrafficIntegrity: boolean; prohibitedCategories: string[]; allowedCountries: string[]; allowedLanguages: string[]; prohibitedContent: string[]; notes: string };

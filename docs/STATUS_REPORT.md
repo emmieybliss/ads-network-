@@ -74,7 +74,6 @@ Demo accounts (development only): `admin@example.com`, `advertiser@example.com`,
 
 ## 6. Partial
 
-- **Viewable refresh:** the tag has a manual `refresh()` for new slots; no automatic refresh after time in view.
 - **Contextual targeting:** keyword and site-category matching; pages are not read or classified automatically.
 - **Bot detection:** user-agent patterns, cloud/hosting IP ranges (bundled from provider-published lists; only Amazon's list could be fetched when it was built, run `node scripts/update-datacenter-ranges.mjs` to add Google Cloud, Oracle, DigitalOcean and Linode), automated-browser checks in the ad tag, click timing and rate checks, a sweep every five minutes with automatic clawback of held earnings, and a staff review queue. No outside IVT vendor (MRC-accredited SIVT detection would need one).
 - **Country:** needs a CDN country header or a `.mmdb` GeoIP file, neither bundled. Demo country history is labelled sample data.
