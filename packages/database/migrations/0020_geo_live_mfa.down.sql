@@ -1,0 +1,10 @@
+DELETE FROM auth_events WHERE type IN ('mfa_enabled', 'mfa_disabled', 'mfa_backup_code_used', 'mfa_reset');
+ALTER TABLE auth_events DROP CONSTRAINT auth_events_type_check;
+ALTER TABLE auth_events ADD CONSTRAINT auth_events_type_check CHECK (type IN ('login_success', 'login_failure', 'logout', 'mfa_success', 'mfa_failure', 'password_reset', 'password_changed', 'session_revoked', 'step_up', 'step_up_failure', 'locked_out'));
+DROP TABLE mfa_trusted_devices;
+DROP TABLE mfa_backup_codes;
+ALTER TABLE users DROP COLUMN mfa_enabled_at, DROP COLUMN mfa_last_step;
+DROP TABLE report_rollup;
+ALTER TABLE conversions DROP COLUMN inserted_at;
+ALTER TABLE ad_events DROP COLUMN inserted_at;
+ALTER TABLE campaign_targeting DROP COLUMN exclude_countries;

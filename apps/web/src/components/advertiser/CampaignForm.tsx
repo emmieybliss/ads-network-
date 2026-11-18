@@ -2,7 +2,9 @@
 import { useState, type FormEvent } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Alert, Button, Card, CardHeader, Checkbox, Field, Input, Select } from '@/components/ui';
-import { useConfig } from '@/lib/hooks';
+import { useApi, useConfig } from '@/lib/hooks';
+import { useOrg } from '@/lib/session';
+import { CountryPicker } from '@/components/advertiser/CountryPicker';
 import { errorMessage } from '@/lib/api';
 import { formatMicros, microsToInput } from '@/lib/format';
 import { TopicPicker } from '@/components/topics/TopicUi';
@@ -21,7 +23,7 @@ export interface CampaignPayload {
   pacing: 'even' | 'asap';
   priority: number;
   acceptRefresh: boolean;
-  targeting: { countries: string[]; devices: string[]; siteCategories: string[]; keywords: string[]; requirePersonalized: boolean; topics: string[]; excludeTopics: string[]; brandSafety: 'strict' | 'standard' | 'relaxed' };
+  targeting: { countries: string[]; excludeCountries?: string[]; devices: string[]; siteCategories: string[]; keywords: string[]; requirePersonalized: boolean; topics: string[]; excludeTopics: string[]; brandSafety: 'strict' | 'standard' | 'relaxed' };
   caps: Array<{ scope: 'visitor' | 'page'; maxImpressions: number; windowSeconds: number }>;
 }
 
@@ -40,6 +42,8 @@ const toLocal = (iso: string | null | undefined) => {
 /** Campaign settings form, used to create a campaign and to edit one. */
 export function CampaignForm({ initial, submitLabel, onSubmit, lockedPricing }: { initial?: Record<string, any>; submitLabel: string; onSubmit: (p: CampaignPayload) => Promise<void>; lockedPricing?: boolean }) {
   const cfg = useConfig().data?.data;
+  const org = useOrg();
+  const shares = useApi<{ data: Array<{ country: string; share: number }> }>(`/orgs/${org.id}/targeting/countries`).data?.data;
   const t = initial?.targeting ?? {};
   const [f, setF] = useState({
     name: initial?.name ?? '',
@@ -54,7 +58,8 @@ export function CampaignForm({ initial, submitLabel, onSubmit, lockedPricing }: 
     endAt: toLocal(initial?.endAt),
     pacing: (initial?.pacing ?? 'even') as 'even' | 'asap',
     priority: String(initial?.priority ?? 5),
-    countries: (t.countries ?? []).join(', '),
+    countries: (t.countries ?? []) as string[],
+    excludeCountries: (t.excludeCountries ?? []) as string[],
     devices: (t.devices ?? []) as string[],
     siteCategories: (t.siteCategories ?? []).join(', '),
     keywords: (t.keywords ?? []).join(', '),
@@ -89,7 +94,7 @@ export function CampaignForm({ initial, submitLabel, onSubmit, lockedPricing }: 
         pacing: f.pacing,
         priority: Number(f.priority),
         acceptRefresh: f.acceptRefresh,
-        targeting: { countries: list(f.countries, true), devices: f.devices, siteCategories: list(f.siteCategories), keywords: list(f.keywords), requirePersonalized: f.requirePersonalized,
+        targeting: { countries: f.countries, excludeCountries: f.excludeCountries, devices: f.devices, siteCategories: list(f.siteCategories), keywords: list(f.keywords), requirePersonalized: f.requirePersonalized,
           topics: f.topics, excludeTopics: f.excludeTopics, brandSafety: f.brandSafety },
         caps,
       });
@@ -148,7 +153,10 @@ export function CampaignForm({ initial, submitLabel, onSubmit, lockedPricing }: 
       <Card>
         <CardHeader title="Targeting" description="Leave a field empty to include everything. Targeting narrows where ads are eligible; it does not guarantee delivery." />
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Countries" htmlFor="ct" hint="Two-letter codes, comma separated, for example US, GB"><Input id="ct" value={f.countries} onChange={(e) => set('countries', e.target.value)} /></Field>
+          <fieldset className="sm:col-span-2">
+            <legend className="mb-2 text-sm font-medium">Locations</legend>
+            <CountryPicker include={f.countries} exclude={f.excludeCountries} shares={shares} onChange={({ include, exclude }) => setF((x) => ({ ...x, countries: include, excludeCountries: exclude }))} />
+          </fieldset>
           <Field label="Site categories" htmlFor="sc" hint="Comma separated"><Input id="sc" value={f.siteCategories} onChange={(e) => set('siteCategories', e.target.value)} /></Field>
           <Field label="Keywords" htmlFor="kw" hint="Matched against the page's keywords and the terms detected in its text" className="sm:col-span-2"><Input id="kw" value={f.keywords} onChange={(e) => set('keywords', e.target.value)} /></Field>
           <fieldset className="sm:col-span-2">

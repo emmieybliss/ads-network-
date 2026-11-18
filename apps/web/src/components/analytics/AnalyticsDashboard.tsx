@@ -1,8 +1,9 @@
 'use client';
 import { useMemo, useState, type ReactNode } from 'react';
+import { LiveIndicator } from '@/components/LiveIndicator';
 import { AlertTriangle, Download, Info, Sparkles, TrendingUp } from 'lucide-react';
 import { Async, Card, CardHeader, EmptyState, Field, Input, Select, Table, Tabs, cn, type Column } from '../ui';
-import { useApi } from '@/lib/hooks';
+import { useApi, useConfig } from '@/lib/hooks';
 import { qs } from '@/lib/api';
 import { formatMicros, formatNumber, formatPercent, isoDay } from '@/lib/format';
 import { Delta, Funnel, Heatmap, KpiTile, PeriodChart, RealtimePanel, ShareBars, countryName, dimLabel } from './parts';
@@ -65,7 +66,7 @@ export function AnalyticsDashboard({ basePath, audience, currency, filters = {},
   const [preset, setPreset] = useState<string>('30');
   const [range, setRange] = useState(rangeFor(30));
   const query = qs({ ...range, ...filters });
-  const res = useApi<{ data: Analytics }>(`${basePath}${query}`);
+  const res = useApi<{ data: Analytics }>(`${basePath}${query}`, { live: true });
   const choose = (id: string, days: number) => { setPreset(id); setRange(rangeFor(days)); };
 
   return (
@@ -81,6 +82,7 @@ export function AnalyticsDashboard({ basePath, audience, currency, filters = {},
           <Field label="From" htmlFor="an-from"><Input id="an-from" type="date" value={range.from} max={range.to} onChange={(e) => { setPreset('custom'); setRange({ ...range, from: e.target.value }); }} /></Field>
           <Field label="To" htmlFor="an-to"><Input id="an-to" type="date" value={range.to} min={range.from} onChange={(e) => { setPreset('custom'); setRange({ ...range, to: e.target.value }); }} /></Field>
           {res.data && <span className="pb-2 text-xs text-muted">Compared with {res.data.data.previousRange.from} to {res.data.data.previousRange.to}</span>}
+          <LiveIndicator className={cn('mb-1.5', !exportPath && 'ml-auto')} />
           {exportPath && (
             <a href={`/api/v1${exportPath}${qs({ ...range, ...filters, groupBy: 'day' })}`} className="ml-auto inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-surface px-3.5 text-sm font-medium shadow-sm hover:bg-surface-2">
               <Download className="size-4" aria-hidden /> Export CSV
@@ -394,6 +396,7 @@ function CountriesCard({ a, currency, audience }: { a: Analytics; currency: stri
             {sorted.length > 15 && (
               <button className="mt-3 text-sm font-medium text-primary hover:underline" onClick={() => setAll(!all)}>{all ? 'Show top 15' : `Show all ${sorted.length} countries`}</button>
             )}
+            <GeoAttribution />
           </div>
         </>
       )}
@@ -514,3 +517,9 @@ function Fact({ label, value, hint }: { label: string; value: ReactNode; hint?: 
   );
 }
 
+/** Credit the free GeoIP database where its countries are shown, as its licence (CC BY 4.0) asks. */
+function GeoAttribution() {
+  const a = (useConfig().data?.data as { geoAttribution?: { text: string; url: string } | null } | undefined)?.geoAttribution;
+  if (!a) return null;
+  return <p className="mt-3 text-[11px] text-muted">Countries from the visitor's IP address. <a href={a.url} target="_blank" rel="noreferrer" className="underline">{a.text}</a>.</p>;
+}

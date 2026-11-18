@@ -54,7 +54,7 @@ async function loadSnapshot(ctx: AppContext): Promise<Snapshot> {
     refreshEnabled: !!u.refresh_enabled, refreshSeconds: u.refresh_seconds ?? 30, refreshMax: u.refresh_max ?? 4 });
 
   const camps = (await ctx.db.query(
-    `SELECT c.*, o.tier AS org_tier, t.countries, t.devices, t.site_categories, t.keywords, t.include_site_ids, t.exclude_site_ids, t.include_unit_ids, t.exclude_unit_ids, t.require_personalized, t.topics, t.exclude_topics, t.brand_safety
+    `SELECT c.*, o.tier AS org_tier, t.countries, t.devices, t.site_categories, t.keywords, t.include_site_ids, t.exclude_site_ids, t.include_unit_ids, t.exclude_unit_ids, t.require_personalized, t.topics, t.exclude_topics, t.brand_safety, t.exclude_countries
      FROM campaigns c JOIN organizations o ON o.id = c.org_id LEFT JOIN campaign_targeting t ON t.campaign_id = c.id
      WHERE c.status IN ('active', 'scheduled') AND o.status = 'approved' AND c.spent_micros < c.lifetime_budget_micros AND (c.end_at IS NULL OR c.end_at > now())`)).rows;
   const ids = camps.map((c) => c.id);
@@ -74,7 +74,7 @@ async function loadSnapshot(ctx: AppContext): Promise<Snapshot> {
       dailyBudgetMicros: c.daily_budget_micros ? BigInt(c.daily_budget_micros) : null, startAt: new Date(c.start_at).getTime(), endAt: c.end_at ? new Date(c.end_at).getTime() : null,
       timezone: c.timezone, pacing: c.pacing, acceptRefresh: c.accept_refresh ?? true,
       targeting: {
-        countries: c.countries ?? [], devices: c.devices ?? [], siteCategories: c.site_categories ?? [], keywords: c.keywords ?? [], includeSiteIds: c.include_site_ids ?? [],
+        countries: c.countries ?? [], excludeCountries: c.exclude_countries ?? [], devices: c.devices ?? [], siteCategories: c.site_categories ?? [], keywords: c.keywords ?? [], includeSiteIds: c.include_site_ids ?? [],
         excludeSiteIds: c.exclude_site_ids ?? [], includeUnitIds: c.include_unit_ids ?? [], excludeUnitIds: c.exclude_unit_ids ?? [], requirePersonalized: c.require_personalized ?? false,
         topics: c.topics ?? [], excludeTopics: c.exclude_topics ?? [], brandSafety: c.brand_safety ?? 'standard',
       },

@@ -10,6 +10,8 @@ export * from './contextual';
  */
 export interface Targeting {
   countries: string[];
+  /** Countries the campaign never serves in, even when countries is empty (all countries). */
+  excludeCountries?: string[];
   devices: string[];
   siteCategories: string[];
   keywords: string[];
@@ -193,7 +195,7 @@ export function decide(candidates: CampaignCandidate[], ctx: RequestContext): De
     const cost = unitCostMicros(c);
     if (c.spentMicros + cost > c.lifetimeBudgetMicros || c.spentMicros >= c.lifetimeBudgetMicros) { reject(c, 'budget'); continue; }
     if (ctx.blockedCountries.includes(ctx.country)) { reject(c, 'blocked_country'); continue; }
-    if (nonEmptyMiss(t.countries, ctx.country)) { reject(c, 'country'); continue; }
+    if (nonEmptyMiss(t.countries, ctx.country) || (t.excludeCountries?.length && t.excludeCountries.includes(ctx.country))) { reject(c, 'country'); continue; }
     if (nonEmptyMiss(t.devices, ctx.device)) { reject(c, 'device'); continue; }
     if (nonEmptyMiss(t.siteCategories, ctx.siteCategory)) { reject(c, 'site_category'); continue; }
     if (t.excludeSiteIds.includes(ctx.siteId) || nonEmptyMiss(t.includeSiteIds, ctx.siteId)) { reject(c, 'site_list'); continue; }

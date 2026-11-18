@@ -393,12 +393,31 @@ as money, suspensions and settings, require a reason and recent re-authenticatio
   script tag. The API-key management API remains for future integrations.
 - **No separate "approved" campaign status.** Admin approval moves a campaign
   straight to `active`, or to `scheduled` if its start date is in the future.
-- **Reports are near real time, not instant.** Live events appear after the
-  next aggregation run, which happens within about one minute.
+- **Reports are live, within seconds.** Every 5 seconds the worker adds the
+  events written since the last pass (by `ad_events.inserted_at`, so queued or
+  late events are not skipped) to the report tables of the day they happened
+  on; `report_rollup` records how far it has got. Every 5 minutes, and after
+  any correction (invalid traffic, flat-rate allocation), the day is rebuilt
+  from the event log, which also catches an event that was still being written
+  during a live pass. Both run under one lock in one snapshot, so nothing is
+  counted twice. Dashboards poll `GET /reports/freshness` (one row) every 5
+  seconds and reload only when it moves.
 - **Formats are image, text and native.** Images only for uploaded creatives (PNG, JPEG, GIF, WEBP, checked by magic
   bytes). SVG and HTML creatives are not accepted, so no advertiser markup or
   script runs on publisher pages.
 - **Country** comes from a trusted CDN header (`GEO_COUNTRY_HEADER`) or, without
-  one, a local `.mmdb` country database (`GEOIP_DB_PATH`, e.g. the free DB-IP
-  Lite file). Only the country code is kept; no database is bundled. Visits to
-  the local demo come from 127.0.0.1, so they show as unknown.
+  one, a local `.mmdb` country database (`GEOIP_DB_PATH`). With
+  `GEOIP_AUTO_UPDATE=true` the API downloads the free DB-IP Lite file, checks it
+  answers lookups, and swaps in each month's file without a restart; a failed
+  download keeps the database in use. Only the country code is kept. The local
+  demo downloads it on first start. Its own visits come from 127.0.0.1, which no
+  database knows, so in development an admin can pick a test country for local
+  visits (System health > Visitor location, or `GEO_LOCAL_COUNTRY`).
+- **Two-step verification** is TOTP (RFC 6238, any authenticator app), set up
+  with a QR code. Each code is accepted once (the last used 30-second step is
+  stored). Ten one-time backup codes are stored as HMACs only. "Don't ask again
+  on this device" sets a 30-day httpOnly cookie whose hash is stored; password
+  changes and resets forget every trusted device. The network can require it
+  for staff or for everyone (people without it are sent to set it up first),
+  and support can reset it for someone who lost their phone (step-up, reason,
+  audit entry, email to the person).

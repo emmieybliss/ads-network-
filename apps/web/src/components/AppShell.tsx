@@ -145,6 +145,11 @@ export function AppShell({ portal, children }: { portal: Portal; children: React
       router.replace(`/login?next=${encodeURIComponent(path)}`);
       return;
     }
+    // The network requires two-step verification: set it up before anything else.
+    if (me.mfaRequired && !me.mfaEnabled && portal !== 'account') {
+      router.replace('/account/security?setup=required');
+      return;
+    }
     if (portal === 'admin' && !me.platformRole) router.replace('/app');
     if ((portal === 'advertiser' || portal === 'publisher') && org?.type !== portal) {
       const match = me.organizations.find((o) => o.type === portal);
@@ -156,6 +161,7 @@ export function AppShell({ portal, children }: { portal: Portal; children: React
   useEffect(() => setMobileOpen(false), [path]);
 
   if (loading || !me) return <Loading label="Loading your workspace…" />;
+  if (me.mfaRequired && !me.mfaEnabled && portal !== 'account') return <Loading />;
   if (portal === 'admin' && !me.platformRole) return <Loading />;
   if ((portal === 'advertiser' || portal === 'publisher') && org?.type !== portal) return <Loading />;
 

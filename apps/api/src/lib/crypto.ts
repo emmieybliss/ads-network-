@@ -99,11 +99,31 @@ export function totp(secretB32: string, time = Date.now(), step = 30, digits = 6
 }
 
 export function verifyTotp(secretB32: string, code: string, time = Date.now(), window = 1): boolean {
-  if (!/^\d{6}$/.test(code)) return false;
+  return totpStep(secretB32, code, time, window) !== null;
+}
+
+/** The 30-second step a valid code belongs to (one step either side allowed for clock drift), or null. */
+export function totpStep(secretB32: string, code: string, time = Date.now(), window = 1): number | null {
+  if (!/^\d{6}$/.test(code)) return null;
   for (let w = -window; w <= window; w++) {
-    if (safeEqual(totp(secretB32, time + w * 30_000), code)) return true;
+    if (safeEqual(totp(secretB32, time + w * 30_000), code)) return Math.floor((time + w * 30_000) / 30_000);
   }
-  return false;
+  return null;
+}
+
+/** Ten one-time backup codes like "4f7k-2m9q" (no 0/o/1/l to avoid misreading). */
+export function newBackupCodes(n = 10): string[] {
+  const alphabet = 'abcdefghijkmnpqrstuvwxyz23456789';
+  return Array.from({ length: n }, () => {
+    const b = randomBytes(8);
+    const s = Array.from(b, (x) => alphabet[x % alphabet.length]).join('');
+    return `${s.slice(0, 4)}-${s.slice(4)}`;
+  });
+}
+
+/** Backup codes are compared case- and dash-insensitively. */
+export function normalizeBackupCode(code: string): string {
+  return code.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 export function newTotpSecret(): string {

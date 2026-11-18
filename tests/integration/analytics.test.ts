@@ -304,8 +304,8 @@ describe('country report', () => {
     const geo = openGeoDb(new URL('../fixtures/GeoIP2-Country-Test.mmdb', import.meta.url).pathname, () => undefined);
     expect(geo?.country('81.2.69.160')).toBe('GB');
     expect(geo?.country('127.0.0.1')).toBeNull();
-    const saved = h.app.ctx.geo;
-    h.app.ctx.geo = geo;
+    const saved = h.app.ctx.geoip.db;
+    h.app.ctx.geoip.db = geo;
     try {
       const s = await setup();
       // Test-database addresses: 81.2.69.160 is GB, 216.160.83.56 is US; loopback is not in it.
@@ -344,7 +344,7 @@ describe('country report', () => {
         (h.app.ctx.config as any).GEO_COUNTRY_HEADER = header;
       }
     } finally {
-      h.app.ctx.geo = saved;
+      h.app.ctx.geoip.db = saved;
     }
   });
 

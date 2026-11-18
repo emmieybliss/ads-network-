@@ -1,5 +1,6 @@
 'use client';
 import { useMemo, useState } from 'react';
+import { LiveIndicator } from '@/components/LiveIndicator';
 import { Download } from 'lucide-react';
 import { Async, Button, Card, CardHeader, EmptyState, Field, Input, Select, Stat, Table, type Column } from './ui';
 import { TrendChart } from './charts';
@@ -30,7 +31,7 @@ export function ReportExplorer({ orgId, audience, currency, filters = {} }: { or
   const [range, setRange] = useState(defaultRange());
   const [groupBy, setGroupBy] = useState('day');
   const query = qs({ ...range, groupBy, ...filters });
-  const res = useApi<{ data: { totals: Record<string, any>; rows: Row[]; requests?: Record<string, number | null>; definitions: Record<string, string> } }>(`/orgs/${orgId}/reports${query}`);
+  const res = useApi<{ data: { totals: Record<string, any>; rows: Row[]; requests?: Record<string, number | null>; definitions: Record<string, string> } }>(`/orgs/${orgId}/reports${query}`, { live: true });
   const money = (v: unknown) => formatMicros(v as string, currency);
   const adv = audience === 'advertiser';
 
@@ -70,7 +71,8 @@ export function ReportExplorer({ orgId, audience, currency, filters = {} }: { or
           <div className="flex gap-2">
             {[7, 30, 90].map((d) => <Button key={d} variant="secondary" size="sm" onClick={() => setRange(defaultRange(d))}>{d} days</Button>)}
           </div>
-          <a href={`/api/v1/orgs/${orgId}/reports/export${query}`} className="ml-auto inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-surface px-3.5 text-sm font-medium shadow-sm hover:bg-surface-2">
+          <LiveIndicator className="mb-1.5 ml-auto" />
+          <a href={`/api/v1/orgs/${orgId}/reports/export${query}`} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-surface px-3.5 text-sm font-medium shadow-sm hover:bg-surface-2">
             <Download className="size-4" aria-hidden /> Export CSV
           </a>
         </div>

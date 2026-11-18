@@ -11,7 +11,7 @@ import { formatDate, formatMicros, formatNumber, microsToInput } from '@/lib/for
 export default function Earnings() {
   const org = useOrg();
   const { can } = useSession();
-  const res = useApi<{ data: any }>(`/orgs/${org.id}/earnings`);
+  const res = useApi<{ data: any }>(`/orgs/${org.id}/earnings`, { live: true });
   const payouts = useApi<{ data: any[] }>(`/orgs/${org.id}/payouts`);
   const [amount, setAmount] = useState('');
   const [key, setKey] = useState(idempotencyKey);

@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import { LiveIndicator } from '@/components/LiveIndicator';
 import { Async, Badge, Card, CardHeader, PageHeader, Stat } from '@/components/ui';
 import { TrendChart } from '@/components/charts';
 import { useApi } from '@/lib/hooks';
@@ -17,10 +18,10 @@ function Health({ h }: { h: any }) {
 }
 
 export default function AdminOverview() {
-  const res = useApi<{ data: any }>('/admin/overview');
+  const res = useApi<{ data: any }>('/admin/overview', { live: true });
   return (
     <>
-      <PageHeader title="Network overview" description="Last 30 days. All figures come from recorded, validated events in this installation." />
+      <PageHeader title="Network overview" description="Last 30 days. All figures come from recorded, validated events in this installation." actions={<LiveIndicator />} />
       <Async res={res}>
         {({ data: d }) => (
           <div className="space-y-5">

@@ -171,7 +171,8 @@ pnpm audit
   are paid by staff and recorded with their reference. The simulated provider
   works only outside production. See docs/PAYMENTS_AND_PAYOUTS.md for the
   accounts and keys needed to go live.
-- No GeoIP database is bundled. Country targeting relies on a header from a CDN
-  you trust, or reports "ZZ" (unknown).
+- No GeoIP database is bundled in the repository. With `GEOIP_AUTO_UPDATE=true`
+  (on in the local demo) the free DB-IP Lite country database is downloaded on
+  first start and refreshed monthly; a CDN country header, when set, comes first.
 - No company registration details, addresses, customers, testimonials or
   performance figures are included. Add real ones only when you have them.

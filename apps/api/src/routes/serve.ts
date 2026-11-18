@@ -53,9 +53,7 @@ export async function serveRoutes(app: FastifyInstance) {
   // The CDN's header when there is one, else the local GeoIP database, else unknown ("ZZ").
   function country(req: FastifyRequest) {
     const h = ctx.config.GEO_COUNTRY_HEADER;
-    const v = h ? req.headers[h.toLowerCase()] : undefined;
-    if (typeof v === 'string' && /^[A-Z]{2}$/i.test(v) && v.toUpperCase() !== 'XX') return v.toUpperCase();
-    return ctx.geo?.country(req.ip) ?? 'ZZ';
+    return ctx.geoip.resolve(req.ip, h ? req.headers[h.toLowerCase()] : undefined).country;
   }
 
   async function dispatch(ev: AdmittedEvent) {

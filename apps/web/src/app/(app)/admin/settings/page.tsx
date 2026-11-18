@@ -20,7 +20,7 @@ const GROUP_HELP: Record<string, string> = {
   popAds: 'Pop-up and pop-under placements: turn them off network-wide, or cap how often one visitor can see them. Publishers opt in per placement and can only be stricter than these limits.',
   adRefresh: 'Viewable auto-refresh: a placement the publisher opted in shows a new ad after the current one has been at least half in view, in a visible tab, for the interval. Publishers can only be stricter than these limits; advertisers can keep campaigns out of refreshed impressions.',
   api: 'Rate limits.',
-  platform: 'Maintenance mode, registration and staff sign-in rules.',
+  platform: 'Maintenance mode, registration and sign-in rules. Requiring two-step verification asks everyone without it to set it up (authenticator app, with backup codes) before they continue.',
   branding: 'Names, support contact and legal links shown across the site.',
   email: 'Sender details and message templates.',
 };
@@ -48,6 +48,8 @@ const LABELS: Record<string, string> = {
   maxPerPageView: 'Most refreshes per slot per page view',
   blockHighRiskPages: 'No ads on high-risk pages',
   reclassifyMinutes: 'Minutes before a changed page is checked again',
+  requireMfaForStaff: 'Require two-step verification for staff',
+  requireMfaForAllUsers: 'Require two-step verification for everyone',
 };
 
 function label(key: string) {
