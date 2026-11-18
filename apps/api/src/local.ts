@@ -168,6 +168,19 @@ if (!existsSync(seededMarker)) {
   }
 }
 
+// Demo data seeded before the starter legal pages, policies and FAQs gets them once.
+{
+  const marker = join(dataDir, 'starter-content-2026-11');
+  if (!existsSync(marker)) {
+    const { installStarterContent } = await import('./services/starter-content');
+    const r = await installStarterContent(app.ctx.db, { publish: true }).catch((err) => { console.error('Could not add the legal pages and FAQs:', (err as Error).message); return null; });
+    if (r) {
+      if (r.added || r.replaced) console.log(`Added ${r.added + r.replaced} legal page, policy and FAQ draft(s).`);
+      writeFileSync(marker, new Date().toISOString());
+    }
+  }
+}
+
 // The worker's scheduled jobs, on timers instead of BullMQ.
 const log = { info: (o: object, m?: string) => app.log.info(o, m), warn: (o: object, m?: string) => app.log.warn(o, m), error: (o: object, m?: string) => app.log.error(o, m) };
 const jobCtx: import('../../worker/src/jobs').JobCtx = {

@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { SETTINGS_GROUPS, ctr, type SettingsGroup } from '@blissnova/shared';
+import { CONTENT_TOKENS, SETTINGS_GROUPS, STARTER_CONTENT, ctr, missingCompanyDetails, type SettingsGroup } from '@blissnova/shared';
 import { loadMigrations } from '@blissnova/database';
 import { audit } from '../../lib/audit';
 import { badRequest, notFound } from '../../lib/errors';
 import { bodyOf, dateRange, idParams, paramsOf, queryOf, resolveRange, toCsv } from '../../lib/http';
 import { requireUser } from '../../plugins/auth';
 import { invalidateServingCache } from '../../services/serving';
+import { installStarterContent } from '../../services/starter-content';
 import { adminList, guard, meta, mgmt, reasonRequired, sortSql, Where } from './common';
 
 const SENSITIVE_GROUPS: SettingsGroup[] = ['pricing', 'publishers', 'platform', 'tracking', 'api'];
@@ -128,7 +129,10 @@ export async function adminPlatformRoutes(app: FastifyInstance) {
   // ---------------------------------------------------------------- content
   app.get('/admin/content', { preHandler: guard('admin:overview'), schema: { tags: ['admin: content'] } }, async () => {
     const rows = (await db.query(`SELECT * FROM content_items ORDER BY kind, sort_order, title`)).rows;
-    return { data: rows };
+    const s = await app.ctx.settings.get();
+    const starterSlugs = new Set(STARTER_CONTENT.map((c) => `${c.kind}/${c.slug}`));
+    const present = new Set(rows.map((r) => `${r.kind}/${r.slug}`));
+    return { data: rows, missingDetails: missingCompanyDetails(s), starterMissing: [...starterSlugs].filter((k) => !present.has(k)).length, tokens: CONTENT_TOKENS };
   });
 
   app.post('/admin/content', { config: mgmt, preHandler: guard('admin:content:manage'), schema: { tags: ['admin: content'], body: contentBody } }, async (req, reply) => {
@@ -146,6 +150,13 @@ export async function adminPlatformRoutes(app: FastifyInstance) {
     const row = (await db.query(`UPDATE content_items SET kind = $2, slug = $3, title = $4, body = $5, url = $6, sort_order = $7, published = $8, updated_by = $9, updated_at = now() WHERE id = $1 RETURNING *`, [id, b.kind, b.slug, b.title, b.body, b.url ?? null, b.sortOrder, b.published, req.auth!.user!.id])).rows[0];
     await audit(db, req, { action: 'content.update', resourceType: 'content_item', resourceId: id, before, after: row });
     return { data: row };
+  });
+
+  app.post('/admin/content/starter', { config: mgmt, preHandler: guard('admin:content:manage'), schema: { tags: ['admin: content'], body: z.object({ publish: z.boolean().default(false) }) } }, async (req) => {
+    const { publish } = bodyOf(req, z.object({ publish: z.boolean().default(false) }));
+    const result = await installStarterContent(db, { publish, userId: req.auth!.user!.id });
+    await audit(db, req, { action: 'content.install_starter', resourceType: 'content_item', after: { publish, ...result } });
+    return { data: result };
   });
 
   app.delete('/admin/content/:id', { config: mgmt, preHandler: guard('admin:content:manage'), schema: { tags: ['admin: content'], params: idParams } }, async (req) => {

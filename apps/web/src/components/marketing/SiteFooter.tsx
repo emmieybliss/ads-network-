@@ -4,10 +4,10 @@ import { brand } from '@/lib/brand';
 
 const COLS = [
   { title: 'Platform', links: [['/#platform', 'Overview'], ['/#formats', 'Ad formats'], ['/#how-it-works', 'How it works'], ['/#pricing', 'Pricing']] },
-  { title: 'Advertisers', links: [['/advertisers', 'Advertise with us'], ['/register?type=advertiser', 'Create an account'], [brand.legal.advertiserPolicyUrl, 'Advertiser policies']] },
+  { title: 'Advertisers', links: [['/advertisers', 'Advertise with us'], ['/register?type=advertiser', 'Create an account'], [brand.legal.advertiserPolicyUrl, 'Advertiser policies'], ['/policies/creatives', 'Creative rules']] },
   { title: 'Publishers', links: [['/publishers', 'Monetize your site'], ['/publisher-requirements', 'Requirements'], [brand.legal.publisherPolicyUrl, 'Publisher policies']] },
   { title: 'Resources', links: [['/docs', 'Documentation'], ['/docs/api', 'API reference'], ['/resources', 'Resources'], ['/report-abuse', 'Report an ad or site']] },
-  { title: 'Legal', links: [[brand.legal.termsUrl, 'Terms of service'], [brand.legal.privacyUrl, 'Privacy policy'], ['/legal/cookies', 'Cookies and tracking']] },
+  { title: 'Legal', links: [[brand.legal.termsUrl, 'Terms of service'], ['/legal/publisher-terms', 'Publisher terms'], ['/legal/advertiser-terms', 'Advertiser terms'], [brand.legal.privacyUrl, 'Privacy policy'], ['/legal/cookies', 'Cookies and tracking']] },
 ] as const;
 
 export function SiteFooter() {

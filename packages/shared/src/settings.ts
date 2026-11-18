@@ -174,6 +174,12 @@ export const settingsSchema = z.object({
     productName: z.string().min(1).max(80).default(DEFAULT_BRAND.productName),
     companyName: z.string().min(1).max(120).default(DEFAULT_BRAND.companyName),
     supportEmail: z.email().default(DEFAULT_BRAND.supportEmail),
+    /** Company details used in the legal pages and policies ({{companyAddress}} and so on). Empty means not supplied yet. */
+    companyAddress: z.string().max(300).default(''),
+    companyRegistration: z.string().max(120).default(''),
+    governingLaw: z.string().max(120).default(''),
+    legalEmail: z.union([z.literal(''), z.email()]).default(''),
+    privacyEmail: z.union([z.literal(''), z.email()]).default(''),
     primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).default(DEFAULT_BRAND.colors.primary),
     termsUrl: z.string().max(500).default(DEFAULT_BRAND.legal.termsUrl),
     privacyUrl: z.string().max(500).default(DEFAULT_BRAND.legal.privacyUrl),
