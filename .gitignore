@@ -15,3 +15,7 @@ acceptance-screenshots/
 
 # Local (no Docker) demo data
 .local-data/
+
+# Production secrets
+deploy/prod.env
+payment-keys.env

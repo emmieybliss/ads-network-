@@ -10,8 +10,8 @@ import { formatDate, formatMicros, humanize } from '@/lib/format';
 
 interface Provider { id: string; label: string; supportsCheckout: boolean; detail?: string; mode?: string }
 
-const METHOD_ICON: Record<string, typeof CreditCard> = { stripe: CreditCard, paypal: Wallet, bank_transfer: Building2, dev_simulated: FlaskConical };
-const METHOD_LABEL: Record<string, string> = { stripe: 'Card', paypal: 'PayPal', bank_transfer: 'Bank transfer', dev_simulated: 'Simulated' };
+const METHOD_ICON: Record<string, typeof CreditCard> = { stripe: CreditCard, paystack: CreditCard, paypal: Wallet, bank_transfer: Building2, dev_simulated: FlaskConical };
+const METHOD_LABEL: Record<string, string> = { stripe: 'Card', paystack: 'Card (Paystack)', paypal: 'PayPal', bank_transfer: 'Bank transfer', dev_simulated: 'Simulated' };
 
 function AddFunds({ orgId, currency, minDepositMicros, providers, onDone }: { orgId: string; currency: string; minDepositMicros: string; providers: Provider[]; onDone: (msg: string) => void }) {
   const [open, setOpen] = useState(false);
@@ -62,7 +62,7 @@ function AddFunds({ orgId, currency, minDepositMicros, providers, onDone }: { or
                     className={cn('flex items-start gap-2.5 rounded-xl border p-3 text-left text-sm transition-colors', provider === p.id ? 'border-primary bg-primary-soft' : 'border-border hover:bg-surface-2')}>
                     <Icon className={cn('mt-0.5 size-4 shrink-0', provider === p.id ? 'text-primary' : 'text-muted')} />
                     <span><span className="font-medium">{p.label}</span>{p.mode === 'test' && <Badge tone="warning" className="ml-1.5">Test mode</Badge>}
-                      <span className="block text-xs text-muted">{p.id === 'stripe' ? 'Visa, Mastercard, Amex and wallets, on Stripe’s secure page.' : p.id === 'paypal' ? 'Pay with your PayPal balance or a card on PayPal.' : p.id === 'bank_transfer' ? 'Credited after finance confirms receipt.' : 'Local testing only.'}</span></span>
+                      <span className="block text-xs text-muted">{p.id === 'stripe' ? 'Visa, Mastercard, Amex and wallets, on Stripe’s secure page.' : p.id === 'paystack' ? 'Card, bank transfer or USSD, on Paystack’s secure page.' : p.id === 'paypal' ? 'Pay with your PayPal balance or a card on PayPal.' : p.id === 'bank_transfer' ? 'Credited after finance confirms receipt.' : 'Local testing only.'}</span></span>
                   </button>
                 );
               })}

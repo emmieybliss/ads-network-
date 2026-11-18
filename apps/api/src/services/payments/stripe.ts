@@ -8,7 +8,11 @@ const ZERO_DECIMAL = new Set(['JPY', 'KRW', 'VND', 'CLP', 'PYG', 'UGX', 'XAF', '
 export class StripeProvider implements PaymentProvider {
   readonly id = 'stripe';
   readonly label = 'Card (Stripe)';
-  constructor(private secretKey: string | undefined, private webhookSecret: string | undefined, private fetchImpl: typeof fetch = fetch) {}
+  constructor(private secretKey: string | undefined, private webhookSecret: string | undefined, private fetchImpl: typeof fetch = fetch, apiBase = 'https://api.stripe.com') {
+    this.apiBase = apiBase.replace(/\/+$/, '');
+  }
+  /** Stripe's API, or a local stripe-mock server in development and tests. */
+  private readonly apiBase: string;
 
   status(): ProviderStatus {
     const configured = Boolean(this.secretKey && this.webhookSecret);
@@ -44,7 +48,7 @@ export class StripeProvider implements PaymentProvider {
       'line_items[0][price_data][unit_amount]': this.toMinor(req.amountMicros, req.currency).toString(),
       'line_items[0][price_data][product_data][name]': req.description,
     });
-    const res = await this.fetchImpl('https://api.stripe.com/v1/checkout/sessions', {
+    const res = await this.fetchImpl(`${this.apiBase}/v1/checkout/sessions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${this.secretKey}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Idempotency-Key': `checkout-${req.paymentId}` },
       body: form,
@@ -77,6 +81,12 @@ export class StripeProvider implements PaymentProvider {
     const paymentId = (obj.client_reference_id as string) || metadata.payment_id || null;
     const currency = typeof obj.currency === 'string' ? obj.currency.toUpperCase() : null;
     const amount = typeof obj.amount_total === 'number' && currency ? this.fromMinor(obj.amount_total, currency) : null;
+    if (evt.type === 'charge.dispute.created') {
+      // Chargeback: the money is held by the card network. We record it for finance; the balance is left alone
+      // until staff decide (respond in Stripe, or refund/adjust here).
+      const pi = typeof obj.payment_intent === 'string' ? obj.payment_intent : null;
+      return { ok: true, raw: evt, event: { eventId: evt.id, type: evt.type, paymentId: null, providerRef: null, outcome: 'disputed', amountMicros: amount ?? (typeof obj.amount === 'number' && currency ? this.fromMinor(obj.amount, currency) : null), currency, chargeRef: pi, dispute: { id: String(obj.id ?? ''), reason: typeof obj.reason === 'string' ? obj.reason : null } } };
+    }
     let outcome: 'succeeded' | 'failed' | 'ignored' = 'ignored';
     if ((evt.type === 'checkout.session.completed' && obj.payment_status === 'paid') || evt.type === 'checkout.session.async_payment_succeeded') outcome = 'succeeded';
     else if (evt.type === 'checkout.session.async_payment_failed' || evt.type === 'checkout.session.expired') outcome = 'failed';
@@ -88,7 +98,7 @@ export class StripeProvider implements PaymentProvider {
     if (!this.secretKey) throw new Error('Stripe is not configured');
     if (!payment.provider_charge_ref) throw new Error('This payment has no Stripe PaymentIntent on record, so it cannot be refunded through Stripe');
     const form = new URLSearchParams({ payment_intent: payment.provider_charge_ref, amount: this.toMinor(amountMicros, payment.currency).toString(), 'metadata[payment_id]': payment.id });
-    const res = await this.fetchImpl('https://api.stripe.com/v1/refunds', {
+    const res = await this.fetchImpl(`${this.apiBase}/v1/refunds`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${this.secretKey}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Idempotency-Key': `refund-${idempotencyKey}` },
       body: form,
@@ -102,7 +112,7 @@ export class StripeProvider implements PaymentProvider {
   async testConnection() {
     if (!this.secretKey) return { ok: false, detail: 'STRIPE_SECRET_KEY is not set' };
     try {
-      const res = await this.fetchImpl('https://api.stripe.com/v1/balance', { headers: { Authorization: `Bearer ${this.secretKey}` } });
+      const res = await this.fetchImpl(`${this.apiBase}/v1/balance`, { headers: { Authorization: `Bearer ${this.secretKey}` } });
       return res.ok ? { ok: true, detail: 'Authenticated request to Stripe succeeded' } : { ok: false, detail: `Stripe responded ${res.status}` };
     } catch (err) {
       return { ok: false, detail: `Could not reach Stripe: ${(err as Error).message}` };
