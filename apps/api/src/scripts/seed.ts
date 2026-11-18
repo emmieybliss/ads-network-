@@ -32,6 +32,7 @@ import { createHash } from 'node:crypto';
 import { demoBannerPng } from './demo-banner';
 import { DEMO_COUNTRY_SQL } from './demo-analytics';
 import { DEMO_PAGES, seedDemoTopics } from './demo-topics';
+import { installStarterContent } from '../services/starter-content';
 
 const DEMO_TAG = '[demo]';
 const CURRENCY = 'USD';
@@ -221,16 +222,8 @@ async function main() {
 
   const out = await withTransaction(pool, async (c) => {
     // --- platform content so the public pages are not blank -----------------
-    await c.query(
-      `INSERT INTO content_items (kind, slug, title, body, sort_order, published) VALUES
-         ('faq', 'what-is-blissnova', 'What is the BlissNova Ad Network?', 'A multi-publisher advertising network: advertisers run campaigns, publishers place ad units on their sites, and the platform handles delivery, measurement and payouts.', 1, true),
-         ('faq', 'how-are-clicks-counted', 'How are impressions and clicks counted?', 'Every delivery is recorded, then filtered for invalid traffic. Only valid events are reported and billed. Click-through rate is valid clicks divided by valid impressions, multiplied by 100.', 2, true),
-         ('faq', 'when-do-publishers-get-paid', 'When do publishers get paid?', 'Earnings move from pending to available after the platform hold period, then can be requested as a payout. Payout methods and schedules are configured by the platform operator.', 3, true),
-         ('faq', 'what-do-i-need-to-start', 'What do I need to start?', 'Advertisers need a funded account balance and at least one approved creative. Publishers need a verified and approved site and a placement, then paste the JavaScript ad tag into any page; no plugin is needed.', 4, true),
-         ('legal', 'terms', 'Terms of service', 'Placeholder. The platform operator must supply their own terms of service, reviewed by a qualified professional, before launch.', 1, false),
-         ('legal', 'privacy', 'Privacy policy', 'Placeholder. The platform operator must supply their own privacy policy, reviewed by a qualified professional, before launch.', 2, false)
-       ON CONFLICT (kind, slug) DO NOTHING`,
-    );
+    // Starter legal pages, policies and FAQs (drafts for the operator to review).
+    await installStarterContent(c, { publish: true });
     const planCount = (await c.query<{ n: string }>('SELECT count(*)::text AS n FROM pricing_plans')).rows[0]!.n;
     if (planCount === '0') await c.query(
       `INSERT INTO pricing_plans (audience, name, summary, price_label, features, cta_label, highlighted, sort_order, published) VALUES

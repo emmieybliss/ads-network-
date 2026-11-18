@@ -1,4 +1,4 @@
-export interface CheckoutRequest { paymentId: string; orgId: string; amountMicros: bigint; currency: string; successUrl: string; cancelUrl: string; description: string }
+export interface CheckoutRequest { paymentId: string; orgId: string; amountMicros: bigint; currency: string; successUrl: string; cancelUrl: string; description: string; /** The signed-in payer, for providers that need it (Paystack). */ customerEmail?: string }
 export interface CheckoutResult { providerRef: string | null; checkoutUrl: string | null; instructions?: string }
 
 export interface NormalizedWebhookEvent {
@@ -7,12 +7,15 @@ export interface NormalizedWebhookEvent {
   /** Our payment id when the provider echoes it back (metadata / client reference). */
   paymentId: string | null;
   providerRef: string | null;
-  outcome: 'succeeded' | 'failed' | 'ignored';
+  /** disputed: the buyer's bank opened a chargeback; finance must respond in the provider dashboard. */
+  outcome: 'succeeded' | 'failed' | 'ignored' | 'disputed';
   amountMicros: bigint | null;
   currency: string | null;
   failureReason?: string;
   /** The provider's charge id (Stripe PaymentIntent, PayPal capture), kept for refunds. */
   chargeRef?: string | null;
+  /** For disputes: the provider's dispute id and reason code. */
+  dispute?: { id: string; reason: string | null };
 }
 
 export interface CaptureResult { outcome: 'succeeded' | 'pending' | 'failed'; amountMicros: bigint | null; currency: string | null; chargeRef: string | null; failureReason?: string }

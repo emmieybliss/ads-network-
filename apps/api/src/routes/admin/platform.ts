@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { SETTINGS_GROUPS, ctr, type SettingsGroup } from '@blissnova/shared';
+import { CONTENT_TOKENS, SETTINGS_GROUPS, STARTER_CONTENT, ctr, missingCompanyDetails, type SettingsGroup } from '@blissnova/shared';
 import { loadMigrations } from '@blissnova/database';
 import { audit } from '../../lib/audit';
 import { badRequest, notFound } from '../../lib/errors';
 import { bodyOf, dateRange, idParams, paramsOf, queryOf, resolveRange, toCsv } from '../../lib/http';
 import { requireUser } from '../../plugins/auth';
 import { invalidateServingCache } from '../../services/serving';
+import { installStarterContent } from '../../services/starter-content';
 import { adminList, guard, meta, mgmt, reasonRequired, sortSql, Where } from './common';
 
 const SENSITIVE_GROUPS: SettingsGroup[] = ['pricing', 'publishers', 'platform', 'tracking', 'api'];
@@ -131,7 +132,7 @@ export async function adminPlatformRoutes(app: FastifyInstance) {
     const s = await ctx.settings.get();
     const updated = (await db.query(`SELECT p.key, p.updated_at, u.name AS updated_by FROM platform_settings p LEFT JOIN users u ON u.id = p.updated_by`)).rows;
     // Secrets are never returned; only whether they are configured.
-    const secrets = { smtpConfigured: Boolean(config.SMTP_HOST), stripeConfigured: Boolean(config.STRIPE_SECRET_KEY && config.STRIPE_WEBHOOK_SECRET), paypalConfigured: Boolean(config.PAYPAL_CLIENT_ID && config.PAYPAL_CLIENT_SECRET && config.PAYPAL_WEBHOOK_ID), errorReportingConfigured: Boolean(config.ERROR_REPORT_WEBHOOK_URL) };
+    const secrets = { smtpConfigured: Boolean(config.SMTP_HOST), stripeConfigured: Boolean(config.STRIPE_SECRET_KEY && config.STRIPE_WEBHOOK_SECRET), paystackConfigured: Boolean(config.PAYSTACK_SECRET_KEY), paypalConfigured: Boolean(config.PAYPAL_CLIENT_ID && config.PAYPAL_CLIENT_SECRET && config.PAYPAL_WEBHOOK_ID), errorReportingConfigured: Boolean(config.ERROR_REPORT_WEBHOOK_URL) };
     return { data: { settings: s, updated, secrets, groups: SETTINGS_GROUPS } };
   });
 
@@ -155,7 +156,10 @@ export async function adminPlatformRoutes(app: FastifyInstance) {
   // ---------------------------------------------------------------- content
   app.get('/admin/content', { preHandler: guard('admin:overview'), schema: { tags: ['admin: content'] } }, async () => {
     const rows = (await db.query(`SELECT * FROM content_items ORDER BY kind, sort_order, title`)).rows;
-    return { data: rows };
+    const s = await app.ctx.settings.get();
+    const starterSlugs = new Set(STARTER_CONTENT.map((c) => `${c.kind}/${c.slug}`));
+    const present = new Set(rows.map((r) => `${r.kind}/${r.slug}`));
+    return { data: rows, missingDetails: missingCompanyDetails(s), starterMissing: [...starterSlugs].filter((k) => !present.has(k)).length, tokens: CONTENT_TOKENS };
   });
 
   app.post('/admin/content', { config: mgmt, preHandler: guard('admin:content:manage'), schema: { tags: ['admin: content'], body: contentBody } }, async (req, reply) => {
@@ -173,6 +177,13 @@ export async function adminPlatformRoutes(app: FastifyInstance) {
     const row = (await db.query(`UPDATE content_items SET kind = $2, slug = $3, title = $4, body = $5, url = $6, sort_order = $7, published = $8, updated_by = $9, updated_at = now() WHERE id = $1 RETURNING *`, [id, b.kind, b.slug, b.title, b.body, b.url ?? null, b.sortOrder, b.published, req.auth!.user!.id])).rows[0];
     await audit(db, req, { action: 'content.update', resourceType: 'content_item', resourceId: id, before, after: row });
     return { data: row };
+  });
+
+  app.post('/admin/content/starter', { config: mgmt, preHandler: guard('admin:content:manage'), schema: { tags: ['admin: content'], body: z.object({ publish: z.boolean().default(false) }) } }, async (req) => {
+    const { publish } = bodyOf(req, z.object({ publish: z.boolean().default(false) }));
+    const result = await installStarterContent(db, { publish, userId: req.auth!.user!.id });
+    await audit(db, req, { action: 'content.install_starter', resourceType: 'content_item', after: { publish, ...result } });
+    return { data: result };
   });
 
   app.delete('/admin/content/:id', { config: mgmt, preHandler: guard('admin:content:manage'), schema: { tags: ['admin: content'], params: idParams } }, async (req) => {

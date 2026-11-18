@@ -10,6 +10,7 @@ import { FormatThumb, NativeAdCard, PublisherDashboardMock, ReportsMock } from '
 import { brand } from '@/lib/brand';
 import { formatMicros } from '@/lib/format';
 import { publicGet, type ContentItem, type PricingPlan, type PublicConfig } from '@/lib/server-api';
+import { RichText } from '@/components/marketing/RichText';
 
 export const revalidate = 60;
 
@@ -354,7 +355,7 @@ export default async function HomePage() {
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-4 font-medium text-fg marker:content-none">
                     {f.title}<span className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border text-muted transition-transform group-open:rotate-45">+</span>
                   </summary>
-                  <p className="mt-3 whitespace-pre-line text-[15px] leading-relaxed text-muted">{f.body}</p>
+                  <RichText body={f.body} compact className="mt-3 text-muted" />
                 </details>
               ))}
             </div>

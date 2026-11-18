@@ -118,6 +118,27 @@ Object.assign(process.env, {
   GEOIP_AUTO_UPDATE: process.env.GEOIP_AUTO_UPDATE ?? 'true',
 });
 
+// Optional test-mode payment keys, so card checkout can be tried for real on
+// this PC. Read from payment-keys.env in the project folder (see
+// payment-keys.env.example). Live keys are refused: the demo must never take
+// real money.
+const keysFile = resolve(process.env.PAYMENT_KEYS_FILE ?? join(process.cwd(), '..', '..', 'payment-keys.env'));
+if (existsSync(keysFile)) {
+  const allowed = new Set(['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_API_BASE', 'PAYSTACK_SECRET_KEY', 'PAYSTACK_CURRENCIES', 'PAYPAL_CLIENT_ID', 'PAYPAL_CLIENT_SECRET', 'PAYPAL_WEBHOOK_ID']);
+  const loaded: string[] = [];
+  for (const line of readFileSync(keysFile, 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.*?)\s*$/);
+    if (!m || !allowed.has(m[1]!) || !m[2]) continue;
+    if (/_live_/.test(m[2])) {
+      console.error(`${m[1]} in ${keysFile} is a live key. The demo only accepts test keys (sk_test_...). It was ignored.`);
+      continue;
+    }
+    process.env[m[1]!] = m[2];
+    loaded.push(m[1]!);
+  }
+  if (loaded.length) console.log(`Test payment keys loaded from ${keysFile}: ${loaded.join(', ')}`);
+}
+
 // Imported only now, so they read the environment set above.
 const { default: RedisMock } = await import('ioredis-mock');
 const { buildApp } = await import('./app');
@@ -168,6 +189,19 @@ if (!existsSync(seededMarker)) {
     const r = await app.ctx.db.query(`UPDATE ad_units u SET refresh_enabled = true, refresh_seconds = 30, refresh_max = 4 FROM sites s
       WHERE s.id = u.site_id AND s.domain = $1 AND u.key IN ('demo-sidebar', 'demo-rail') AND NOT u.refresh_enabled`, ['demo-publisher.localhost']).catch(() => null);
     if (r) writeFileSync(marker, new Date().toISOString());
+  }
+}
+
+// Demo data seeded before the starter legal pages, policies and FAQs gets them once.
+{
+  const marker = join(dataDir, 'starter-content-2026-11');
+  if (!existsSync(marker)) {
+    const { installStarterContent } = await import('./services/starter-content');
+    const r = await installStarterContent(app.ctx.db, { publish: true }).catch((err) => { console.error('Could not add the legal pages and FAQs:', (err as Error).message); return null; });
+    if (r) {
+      if (r.added || r.replaced) console.log(`Added ${r.added + r.replaced} legal page, policy and FAQ draft(s).`);
+      writeFileSync(marker, new Date().toISOString());
+    }
   }
 }
 

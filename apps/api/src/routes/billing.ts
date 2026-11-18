@@ -59,7 +59,7 @@ export async function billingRoutes(app: FastifyInstance) {
     if (existing) return { data: existing };
     const id = randomUUID();
     const checkout = await provider.createCheckout({
-      paymentId: id, orgId: req.org!.id, amountMicros: amount, currency: req.org!.currency, description: `${s.branding.productName} account funding`,
+      paymentId: id, orgId: req.org!.id, customerEmail: user.email, amountMicros: amount, currency: req.org!.currency, description: `${s.branding.productName} account funding`,
       successUrl: `${ctx.config.PUBLIC_SITE_URL}/advertiser/billing?payment=${id}&status=returned`, cancelUrl: `${ctx.config.PUBLIC_SITE_URL}/advertiser/billing?payment=${id}&status=cancelled`,
     }).catch((err: Error) => {
       req.log.warn({ err: err.message, provider: provider.id }, 'checkout creation failed');

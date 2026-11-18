@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { DEFAULT_BRAND, METRIC_DEFINITIONS, publicSettings } from '@blissnova/shared';
+import { DEFAULT_BRAND, METRIC_DEFINITIONS, contentTokenValues, fillContentTokens, publicSettings } from '@blissnova/shared';
 import { bodyOf } from '../lib/http';
 
 const abuseBody = z.object({
@@ -17,12 +17,15 @@ export async function publicRoutes(app: FastifyInstance) {
   app.get('/public/config', { config: cfg, schema: { tags: ['public'] } }, async (_req, reply) => {
     const s = await app.ctx.settings.get();
     reply.header('cache-control', 'public, max-age=60');
-    return { data: { ...publicSettings(s), brand: { ...DEFAULT_BRAND, productName: s.branding.productName, companyName: s.branding.companyName, supportEmail: s.branding.supportEmail, publicSiteUrl: app.ctx.config.PUBLIC_SITE_URL, apiUrl: app.ctx.config.PUBLIC_API_URL }, metricDefinitions: METRIC_DEFINITIONS, geoAttribution: app.ctx.geoip.status().database?.attribution ?? null } };
+    return { data: { ...publicSettings(s), brand: { ...DEFAULT_BRAND, productName: s.branding.productName, companyName: s.branding.companyName, supportEmail: s.branding.supportEmail, companyAddress: s.branding.companyAddress, publicSiteUrl: app.ctx.config.PUBLIC_SITE_URL, apiUrl: app.ctx.config.PUBLIC_API_URL }, metricDefinitions: METRIC_DEFINITIONS, geoAttribution: app.ctx.geoip.status().database?.attribution ?? null } };
   });
 
   app.get('/public/content', { config: cfg, schema: { tags: ['public'], querystring: z.object({ kind: z.string().max(40).optional() }) } }, async (req, reply) => {
     const { kind } = req.query as { kind?: string };
     const rows = (await db.query(`SELECT kind, slug, title, body, url, sort_order, updated_at FROM content_items WHERE published AND ($1::text IS NULL OR kind = $1) ORDER BY kind, sort_order, title`, [kind ?? null])).rows;
+    // Company details and figures such as {{companyAddress}} come from Settings, so documents stay current.
+    const values = contentTokenValues(await app.ctx.settings.get(), app.ctx.config.PUBLIC_SITE_URL);
+    for (const r of rows) { r.title = fillContentTokens(r.title, values); r.body = fillContentTokens(r.body, values); }
     reply.header('cache-control', 'public, max-age=60');
     return { data: rows };
   });

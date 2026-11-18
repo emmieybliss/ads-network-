@@ -183,6 +183,7 @@ export async function adminFinanceRoutes(app: FastifyInstance) {
     const checks = (await db.query(`SELECT DISTINCT ON (provider) provider, ok, detail, created_at FROM provider_checks ORDER BY provider, created_at DESC`)).rows;
     const known = [
       { id: 'stripe', label: 'Card (Stripe)', configured: Boolean(ctx.config.STRIPE_SECRET_KEY && ctx.config.STRIPE_WEBHOOK_SECRET), supportsCheckout: true, supportsWebhooks: true, detail: 'Requires STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET.' },
+      { id: 'paystack', label: 'Card (Paystack)', configured: false, supportsCheckout: true, supportsWebhooks: true, detail: 'Requires PAYSTACK_SECRET_KEY. For businesses registered in Nigeria, Ghana, Kenya or South Africa.' },
       { id: 'paypal', label: 'PayPal', configured: false, supportsCheckout: true, supportsWebhooks: true, detail: 'Requires PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET and PAYPAL_WEBHOOK_ID.' },
     ];
     const list = [...ctx.payments.list().map((p) => p.status()), ...known.filter((k) => !ctx.payments.get(k.id))];

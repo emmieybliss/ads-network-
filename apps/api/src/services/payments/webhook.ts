@@ -1,8 +1,10 @@
 import { confirmPayment, failPayment } from '@blissnova/billing';
-import { formatMoney } from '@blissnova/shared';
+import { formatMicros, formatMoney } from '@blissnova/shared';
+
+const formatMoneyPlain = (micros: bigint, currency: string) => `${formatMicros(micros)} ${currency}`;
 import type { AppContext } from '../../lib/context';
 import { tx } from '../../lib/tx';
-import { notifyOrg } from '../notifications';
+import { notifyOrg, notifyStaff } from '../notifications';
 
 type Q = { query: (sql: string, params?: unknown[]) => Promise<unknown> };
 
@@ -84,6 +86,17 @@ export async function handlePaymentWebhook(ctx: AppContext, providerId: string, 
     if (e.outcome === 'ignored') {
       await ctx.db.query('UPDATE payment_webhook_events SET processed_at = now() WHERE id = $1', [eventRowId]);
       return { status: 200, body: { received: true, ignored: true } };
+    }
+    if (e.outcome === 'disputed') {
+      const p = e.chargeRef ? (await ctx.db.query(`SELECT id, org_id, amount_micros, currency FROM payments WHERE provider = $1 AND provider_charge_ref = $2`, [providerId, e.chargeRef])).rows[0] : undefined;
+      await ctx.db.query(`INSERT INTO security_events (type, severity, subject, detail) VALUES ('payment_disputed', 'critical', $1, $2)`, [p?.id ?? e.chargeRef ?? null, JSON.stringify({
+        provider: providerId, dispute: e.dispute?.id ?? null, reason: e.dispute?.reason ?? null, orgId: p?.org_id ?? null, chargeRef: e.chargeRef ?? null,
+        amount: e.amountMicros !== null && e.currency ? formatMoneyPlain(e.amountMicros, e.currency) : null,
+        action: 'Respond to the dispute in the provider dashboard before its deadline. The advertiser balance was not changed.',
+      })]);
+      await ctx.db.query('UPDATE payment_webhook_events SET processed_at = now() WHERE id = $1', [eventRowId]);
+      await notifyStaff(ctx, ['super_admin', 'finance'], 'Card payment disputed', `A ${providerId} payment${e.amountMicros !== null && e.currency ? ` of ${formatMoneyPlain(e.amountMicros, e.currency)}` : ''} was disputed (${e.dispute?.reason ?? 'no reason given'}). Respond in the ${providerId} dashboard before the deadline.`, '/admin/finance').catch(() => undefined);
+      return { status: 200, body: { received: true } };
     }
     const payment = (await ctx.db.query(`SELECT * FROM payments WHERE provider = $1 AND (id::text = $2 OR provider_ref = $3)`, [providerId, e.paymentId ?? '', e.providerRef ?? ''])).rows[0];
     if (!payment) throw new Error('No matching payment for webhook event');

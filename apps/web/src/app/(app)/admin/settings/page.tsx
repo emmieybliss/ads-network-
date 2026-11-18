@@ -21,7 +21,7 @@ const GROUP_HELP: Record<string, string> = {
   adRefresh: 'Viewable auto-refresh: a placement the publisher opted in shows a new ad after the current one has been at least half in view, in a visible tab, for the interval. Publishers can only be stricter than these limits; advertisers can keep campaigns out of refreshed impressions.',
   api: 'Rate limits.',
   platform: 'Maintenance mode, registration and sign-in rules. Requiring two-step verification asks everyone without it to set it up (authenticator app, with backup codes) before they continue.',
-  branding: 'Names, support contact and legal links shown across the site.',
+  branding: 'Names, company details, contact addresses and legal links. Company details fill the placeholders in the legal pages, policies and FAQs (Admin › Content).',
   email: 'Sender details and message templates.',
 };
 
@@ -31,6 +31,11 @@ const groupName = (g: string) => GROUP_NAMES[g] ?? humanize(g);
 type Draft = Record<string, unknown>;
 
 const LABELS: Record<string, string> = {
+  companyAddress: 'Registered company address',
+  companyRegistration: 'Company registration number',
+  governingLaw: 'Governing law (for example, England and Wales)',
+  legalEmail: 'Legal contact email (empty uses the support email)',
+  privacyEmail: 'Privacy contact email (empty uses the support email)',
   minDepositMicros: 'Minimum deposit',
   popunderEnabled: 'Pop-unders allowed',
   maxPerVisitorPerDay: 'Most pops per visitor per day',
@@ -65,7 +70,7 @@ function SettingInput({ k, value, onChange, disabled }: { k: string; value: unkn
   if (k.endsWith('Bps')) return <Field label={label(k)} htmlFor={id}><Input id={id} disabled={disabled} type="number" step="0.01" min={0} max={100} defaultValue={Number(value) / 100} onBlur={(e) => onChange(Math.round(Number(e.target.value) * 100))} /></Field>;
   if (typeof value === 'number' || (value === null && /Pageviews|Count|Days|Hours/.test(k))) return <Field label={label(k)} htmlFor={id} hint={value === null ? 'Empty means no requirement' : undefined}><Input id={id} disabled={disabled} type="number" defaultValue={value === null ? '' : String(value)} onBlur={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))} /></Field>;
   if (Array.isArray(value) && value.every((x) => typeof x === 'string')) return <Field label={label(k)} htmlFor={id} hint="One per line"><Textarea id={id} disabled={disabled} rows={Math.min(6, Math.max(2, value.length))} defaultValue={value.join('\n')} onBlur={(e) => onChange(e.target.value.split('\n').map((x) => x.trim()).filter(Boolean))} /></Field>;
-  if (typeof value === 'string') return <Field label={label(k)} htmlFor={id}>{value.length > 80 || /message|notes/i.test(k) ? <Textarea id={id} disabled={disabled} rows={3} defaultValue={value} onBlur={(e) => onChange(e.target.value)} /> : <Input id={id} disabled={disabled} defaultValue={value} onBlur={(e) => onChange(e.target.value)} />}</Field>;
+  if (typeof value === 'string') return <Field label={label(k)} htmlFor={id}>{value.length > 80 || /message|notes|^companyAddress$/i.test(k) ? <Textarea id={id} disabled={disabled} rows={3} defaultValue={value} onBlur={(e) => onChange(e.target.value)} /> : <Input id={id} disabled={disabled} defaultValue={value} onBlur={(e) => onChange(e.target.value)} />}</Field>;
   return <Field label={label(k)} htmlFor={id} hint="JSON"><Textarea id={id} disabled={disabled} rows={6} className="font-mono text-xs" defaultValue={JSON.stringify(value, null, 2)} onBlur={(e) => { try { onChange(JSON.parse(e.target.value)); } catch { /* keep previous value until valid */ } }} /></Field>;
 }
 
