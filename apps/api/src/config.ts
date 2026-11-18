@@ -43,6 +43,14 @@ const envSchema = z.object({
   SMTP_SECURE: bool(false),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  /** Override only to point at a local stripe-mock server while testing. Production requires Stripe's own API. */
+  STRIPE_API_BASE: z.string().url().default('https://api.stripe.com'),
+  /** Paystack secret key (dashboard, Settings, API Keys & Webhooks). sk_test_ while testing; production requires sk_live_. */
+  PAYSTACK_SECRET_KEY: z.string().optional(),
+  /** Currencies your Paystack business is enabled for (USD needs Paystack's approval). */
+  PAYSTACK_CURRENCIES: z.string().default('NGN,USD'),
+  /** Override only for local mock testing. Production requires Paystack's own API. */
+  PAYSTACK_API_BASE: z.string().url().default('https://api.paystack.co'),
   /** PayPal REST app (developer.paypal.com). Used for PayPal deposits by advertisers and PayPal payouts to publishers. */
   PAYPAL_CLIENT_ID: z.string().optional(),
   PAYPAL_CLIENT_SECRET: z.string().optional(),
@@ -71,7 +79,7 @@ const envSchema = z.object({
   ENABLE_DEV_VERIFICATION_SIMULATOR: bool(false),
   /** Comma-separated DNS servers used for TXT verification lookups. Empty = the system resolver. */
   VERIFICATION_DNS_SERVERS: z.string().default(''),
-  ERROR_REPORT_WEBHOOK_URL: z.string().url().optional(),
+  ERROR_REPORT_WEBHOOK_URL: z.preprocess((v) => (v === '' ? undefined : v), z.string().url().optional()),
   SEED_DEMO_DATA: bool(false),
 });
 
@@ -106,6 +114,9 @@ export function productionProblems(c: z.infer<typeof envSchema>, corsOrigins: st
   if (c.ENABLE_DEV_PARTNER_SIMULATOR) p.push('ENABLE_DEV_PARTNER_SIMULATOR must be false: the simulated partner network is for local development only');
   if (Boolean(c.STRIPE_SECRET_KEY) !== Boolean(c.STRIPE_WEBHOOK_SECRET)) p.push('Set both STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET, or neither');
   if (c.STRIPE_SECRET_KEY && !/^(sk|rk)_live_/.test(c.STRIPE_SECRET_KEY)) p.push('STRIPE_SECRET_KEY must be a live key (sk_live_ or rk_live_); test keys take no real payments');
+  if (c.STRIPE_API_BASE.replace(/\/+$/, '') !== 'https://api.stripe.com') p.push('STRIPE_API_BASE must be https://api.stripe.com in production (other values are for local stripe-mock testing)');
+  if (c.PAYSTACK_SECRET_KEY && !c.PAYSTACK_SECRET_KEY.startsWith('sk_live_')) p.push('PAYSTACK_SECRET_KEY must be a live key (sk_live_); test keys take no real payments');
+  if (c.PAYSTACK_API_BASE.replace(/\/+$/, '') !== 'https://api.paystack.co') p.push('PAYSTACK_API_BASE must be https://api.paystack.co in production');
   const paypal = [c.PAYPAL_CLIENT_ID, c.PAYPAL_CLIENT_SECRET, c.PAYPAL_WEBHOOK_ID].filter(Boolean).length;
   if (paypal > 0 && paypal < 3) p.push('Set PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET and PAYPAL_WEBHOOK_ID together, or none of them');
   if (paypal === 3 && c.PAYPAL_ENV !== 'live') p.push('PAYPAL_ENV must be live in production; sandbox moves no real money');
