@@ -54,6 +54,10 @@ certificate by itself. Only ports 80 and 443 are open to the internet.
    `deploy/Caddyfile` trusts Cloudflare's address ranges to name the real
    visitor IP, so invalid-traffic checks and frequency caps see visitors,
    not Cloudflare.
+   The free DB-IP Lite country database (`GEOIP_DB_PATH`,
+   `GEOIP_AUTO_UPDATE=true`) is the fallback when a request has no country
+   header. It downloads on first start and refreshes monthly; **Admin ›
+   System › Visitor location** shows its status and looks up any IP.
 
 ## Step 2. Server
 

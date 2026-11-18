@@ -19,6 +19,8 @@ export interface Me {
   platformRole: string | null;
   platformPermissions: string[];
   mfaEnabled: boolean;
+  /** The network requires two-step verification of this person. */
+  mfaRequired?: boolean;
   emailVerified: boolean;
   organizations: OrgSummary[];
 }

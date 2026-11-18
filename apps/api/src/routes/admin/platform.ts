@@ -94,10 +94,37 @@ export async function adminPlatformRoutes(app: FastifyInstance) {
         email: { provider: ctx.mailer.name, configured: ctx.mailer.configured, last7Days: email },
         payments: ctx.payments.list().map((p) => p.status()),
         geoHeader: config.GEO_COUNTRY_HEADER || null,
-        geoDatabase: ctx.geo?.description ?? null,
+        geoDatabase: ctx.geoip.db?.description ?? null,
+        geo: ctx.geoip.status(),
         publicUrls: { site: config.PUBLIC_SITE_URL, api: config.PUBLIC_API_URL },
       },
     };
+  });
+
+  // ---------------------------------------------------------------- visitor location (GeoIP)
+  const lookupBody = z.object({ ip: z.union([z.ipv4(), z.ipv6()]) });
+  const localCountryBody = z.object({ country: z.string().trim().toUpperCase().regex(/^$|^[A-Z]{2}$/, 'Use a two-letter country code, or leave it empty') });
+
+  app.get('/admin/geo', { preHandler: guard('admin:settings:read'), schema: { tags: ['admin: settings'], description: 'How visitor countries are found: the CDN header, the GeoIP database and its monthly update.' } }, async () => ({ data: ctx.geoip.status() }));
+
+  app.post('/admin/geo/lookup', { preHandler: guard('admin:settings:read'), schema: { tags: ['admin: settings'], body: lookupBody, description: 'The country the ad server would use for an IP address (without a CDN header).' } }, async (req) => {
+    const { ip } = bodyOf(req, lookupBody);
+    return { data: { ip, ...ctx.geoip.resolve(ip) } };
+  });
+
+  app.post('/admin/geo/update', { preHandler: guard('admin:settings:manage'), schema: { tags: ['admin: settings'], description: 'Download the GeoIP database now instead of waiting for the daily check.' } }, async (req) => {
+    if (!config.GEOIP_DB_PATH) throw badRequest('Set GEOIP_DB_PATH first: the server needs a place to keep the database.');
+    const r = await ctx.geoip.update({ force: true });
+    await audit(db, req, { action: 'geo.update', resourceType: 'geoip', resourceId: 'database', after: { updated: r.updated, message: r.message } });
+    return { data: { ...r, status: ctx.geoip.status() } };
+  });
+
+  app.put('/admin/geo/local-country', { preHandler: guard('admin:settings:manage'), schema: { tags: ['admin: settings'], body: localCountryBody, description: 'Development only: the country that visits from this computer or the local network count as.' } }, async (req) => {
+    if (config.NODE_ENV === 'production') throw badRequest('The local test country is for development only.');
+    const { country } = bodyOf(req, localCountryBody);
+    ctx.geoip.setLocalCountry(country);
+    await audit(db, req, { action: 'geo.local_country', resourceType: 'geoip', resourceId: 'local', after: { country } });
+    return { data: ctx.geoip.status() };
   });
 
   // ---------------------------------------------------------------- settings

@@ -116,8 +116,8 @@ export function requirePlatform(perm: PlatformPermission) {
     const user = requireUser(req);
     if (!platformRoleHas(user.platformRole, perm)) throw forbidden();
     const s = await req.server.ctx.settings.get();
-    if (s.platform.requireMfaForStaff && (!user.mfaEnabled || !req.auth?.session?.mfaVerified)) {
-      throw new AppError(403, 'mfa_required', 'Multi-factor authentication is required for staff accounts');
+    if ((s.platform.requireMfaForStaff || s.platform.requireMfaForAllUsers) && (!user.mfaEnabled || !req.auth?.session?.mfaVerified)) {
+      throw new AppError(403, 'mfa_required', 'Two-step verification is required for staff accounts. Turn it on under Sign-in & security.');
     }
   };
 }
@@ -146,6 +146,10 @@ export function requireOrg(perm: OrgPermission, opts: { type?: OrgType; allowSus
     if (req.auth.kind === 'session') {
       if (!row.role) throw notFound();
       role = row.role;
+      const s = await req.server.ctx.settings.get();
+      if (s.platform.requireMfaForAllUsers && (!req.auth.user!.mfaEnabled || !req.auth.session?.mfaVerified)) {
+        throw new AppError(403, 'mfa_required', 'This network requires two-step verification. Turn it on under Sign-in & security to continue.');
+      }
       if (!orgRoleHas(row.type, row.role, perm)) throw forbidden();
       if (!perm.endsWith(':read') && !req.auth.user!.emailVerified) throw forbidden('Verify your email address before making changes');
     }

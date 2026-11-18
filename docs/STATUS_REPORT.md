@@ -53,10 +53,10 @@ Demo accounts (development only): `admin@example.com`, `advertiser@example.com`,
 
 ## 4. Built
 
-- **Accounts:** registration, email verification, password reset, TOTP MFA, step-up, session revocation, CSRF, lockout, rate limits, audit log, 11 platform roles plus organization roles, team invites, API keys.
+- **Accounts:** registration, email verification, password reset, two-step verification (authenticator app with QR setup, one-use codes, backup codes, trusted devices, required for staff or everyone, support reset), step-up, session revocation, CSRF, lockout, rate limits, audit log, 11 platform roles plus organization roles, team invites, API keys.
 - **Domain verification:** DNS TXT, HTML file and meta tag over an SSRF-safe fetch (private IPs blocked, every redirect checked, time and size limits). Development simulator refused in production.
 - **Publisher onboarding:** site lifecycle from Draft to Approved/Rejected/Suspended, configurable eligibility checklist, verification never approves on its own. ads.txt line per publisher and public sellers.json.
-- **Advertiser platform:** CPM, CPC (behind a switch) and flat campaigns; lifetime and daily budgets; even or fast pacing; frequency caps; targeting by country, device, site category, keyword, and site/placement lists; image, text, native and pop creatives with review and versions; conversion tracking.
+- **Advertiser platform:** CPM, CPC (behind a switch) and flat campaigns; lifetime and daily budgets; even or fast pacing; frequency caps; targeting by country (include and exclude, searchable picker with region shortcuts), device, site category, keyword, and site/placement lists; image, text, native and pop creatives with review and versions; conversion tracking.
 - **Ad serving:** eligibility checks, ranking by priority and expected value with pacing, Redis frequency caps and budget reservation, signed delivery tokens, safe no-fill.
 - **Ad tag:** about 8 KB gzipped, closed shadow root, lazy loading, viewability (50% for 1 s), batching, multiple slots; anchor, side rail, interstitial, auto in-article, native and pop formats; TCF v2.2, GPP, US Privacy and GPC consent with a non-personalized fallback.
 - **Tracking and invalid traffic:** unique event ids, replay and sequence checks, deduplication, separate request/impression/viewable/click/invalid/billable counts, combined IVT score, data-center and automated-browser filtering, click cadence checks, per-publisher IVT rates, an automatic review queue and clawback of held earnings, fraud cases, exclusions and publisher appeals (see docs/INVALID_TRAFFIC.md).
@@ -76,9 +76,9 @@ Demo accounts (development only): `admin@example.com`, `advertiser@example.com`,
 
 - **Contextual targeting:** pages are classified automatically on the server into IAB-style topics with a brand-safety risk (English dictionaries, no outside service); campaigns target or exclude topics and choose a brand-safety level; keyword and site-category matching remain. Not yet: other languages, machine-learned models.
 - **Bot detection:** user-agent patterns, cloud/hosting IP ranges (bundled from provider-published lists; only Amazon's list could be fetched when it was built, run `node scripts/update-datacenter-ranges.mjs` to add Google Cloud, Oracle, DigitalOcean and Linode), automated-browser checks in the ad tag, click timing and rate checks, a sweep every five minutes with automatic clawback of held earnings, and a staff review queue. No outside IVT vendor (MRC-accredited SIVT detection would need one).
-- **Country:** needs a CDN country header or a `.mmdb` GeoIP file, neither bundled. Demo country history is labelled sample data.
+- **Country:** from a CDN header, or the free DB-IP Lite database downloaded and refreshed monthly (`GEOIP_AUTO_UPDATE`; the local demo does this on first start). Country-level only, as accurate as DB-IP Lite. Demo country history is labelled sample data.
 - **Bank and crypto payouts:** staff pay outside the platform and record the reference.
-- **Reports** refresh every minute, not instantly.
+- **Reports** are live within about 5 to 10 seconds (rolled up every 5 seconds, rebuilt every 5 minutes). Earnings stay estimates until settled.
 - **Auctions:** campaigns compete in an internal ranking only.
 
 ## 7. Missing

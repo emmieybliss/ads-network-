@@ -1,5 +1,6 @@
 'use client';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { countryLabel } from '@/lib/countries';
 import { Suspense, useState } from 'react';
 import { Archive, Copy, Pause, Pencil, Play, Plus, Send, Trash2 } from 'lucide-react';
 import { ADVERTISER_CAMPAIGN_TRANSITIONS, EDITABLE_CAMPAIGN_STATUSES } from '@blissnova/shared';
@@ -21,7 +22,7 @@ function CampaignDetail() {
   const router = useRouter();
   const search = useSearchParams();
   const [tab, setTab] = useState(search.get('tab') ?? 'overview');
-  const res = useApi<{ data: any }>(`/orgs/${org.id}/campaigns/${id}`);
+  const res = useApi<{ data: any }>(`/orgs/${org.id}/campaigns/${id}`, { live: true });
   const creatives = useApi<{ data: Creative[] }>(`/orgs/${org.id}/campaigns/${id}/creatives`);
   const history = useApi<{ data: any[] }>(tab === 'history' ? `/orgs/${org.id}/campaigns/${id}/history` : null);
   const [editor, setEditor] = useState<{ creative: Creative | null } | null>(null);
@@ -97,7 +98,8 @@ function CampaignDetail() {
                       ['Reserved from balance', money(c.reservedMicros)],
                       ['Pacing', c.pacing === 'even' ? 'Even' : 'As fast as possible'],
                       ['Priority', String(c.priority)],
-                      ['Countries', c.targeting?.countries?.length ? c.targeting.countries.join(', ') : 'All'],
+                      ['Countries', c.targeting?.countries?.length ? c.targeting.countries.map(countryLabel).join(', ') : 'All'],
+                      ...(c.targeting?.excludeCountries?.length ? [['Excluded countries', c.targeting.excludeCountries.map(countryLabel).join(', ')] as [string, string]] : []),
                       ['Devices', c.targeting?.devices?.length ? c.targeting.devices.map(humanize).join(', ') : 'All'],
                       ['Site categories', c.targeting?.siteCategories?.length ? c.targeting.siteCategories.join(', ') : 'All'],
                       ['Keywords', c.targeting?.keywords?.length ? c.targeting.keywords.join(', ') : 'None'],

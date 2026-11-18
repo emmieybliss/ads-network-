@@ -27,6 +27,8 @@ export interface PartnerCampaignSpec {
   name: string;
   currency: string;
   countries: string[];
+  /** Countries the campaign must not run in. */
+  excludeCountries?: string[];
   devices: string[];
   startAt: string;
   endAt: string | null;
@@ -135,7 +137,7 @@ async function syncOne(deps: SyncDeps, id: string) {
   const { db } = deps;
   const load = async () => (await db.query(
     `SELECT pc.*, c.status AS c_status, c.name AS c_name, c.currency, c.rate_micros, c.lifetime_budget_micros, c.reserved_micros, c.spent_micros, c.daily_budget_micros,
-            c.start_at, c.end_at, n.enabled AS n_enabled, t.countries, t.devices
+            c.start_at, c.end_at, n.enabled AS n_enabled, t.countries, t.exclude_countries, t.devices
      FROM partner_campaigns pc JOIN campaigns c ON c.id = pc.campaign_id JOIN partner_networks n ON n.id = pc.network_id LEFT JOIN campaign_targeting t ON t.campaign_id = c.id
      WHERE pc.id = $1`, [id])).rows[0];
   let pc = await load();
@@ -157,7 +159,7 @@ async function syncOne(deps: SyncDeps, id: string) {
     if (!ads.length) return set('pending', 'Add a native ad (image, headline and sponsor name) and get it approved to run on partner networks.');
     const budget = partnerBudget(pc, pc);
     const { externalId } = await adapter.createCampaign(
-      { reference: pc.id, name: pc.c_name, currency: pc.currency, countries: pc.countries ?? [], devices: pc.devices ?? [], startAt: new Date(pc.start_at).toISOString(), endAt: pc.end_at ? new Date(pc.end_at).toISOString() : null }, budget);
+      { reference: pc.id, name: pc.c_name, currency: pc.currency, countries: pc.countries ?? [], excludeCountries: pc.exclude_countries ?? [], devices: pc.devices ?? [], startAt: new Date(pc.start_at).toISOString(), endAt: pc.end_at ? new Date(pc.end_at).toISOString() : null }, budget);
     await db.query(`UPDATE partner_campaigns SET external_id = $2, pushed_cpc_micros = $3, pushed_total_micros = $4, pushed_daily_micros = $5 WHERE id = $1`,
       [id, externalId, budget.cpcMicros.toString(), budget.totalMicros.toString(), budget.dailyMicros?.toString() ?? null]);
     const sent = await adapter.submitAds(externalId, ads);

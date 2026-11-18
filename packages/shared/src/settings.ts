@@ -168,6 +168,8 @@ export const settingsSchema = z.object({
     maintenanceMode: z.boolean().default(false),
     maintenanceMessage: z.string().max(500).default(''),
     requireMfaForStaff: z.boolean().default(false),
+    /** Everyone (advertisers and publishers too) must use two-step verification; people without it are asked to set it up before they continue. */
+    requireMfaForAllUsers: z.boolean().default(false),
     registrationOpen: z.boolean().default(true),
   }).prefault({}),
   branding: z.object({

@@ -6,6 +6,8 @@ import { badRequest, conflict, forbidden, notFound } from '../../lib/errors';
 import { bodyOf, idParams, paramsOf, queryOf } from '../../lib/http';
 import { tx } from '../../lib/tx';
 import { requireUser } from '../../plugins/auth';
+import { backupCodesLeft, clearMfa } from '../../services/mfa';
+import { queueEmail } from '../../services/notifications';
 import { adminList, guard, meta, mgmt, reasonRequired, sortSql, Where } from './common';
 
 const roleBody = z.object({ platformRole: z.enum(PLATFORM_ROLES).nullable(), reason: z.string().trim().min(3).max(1000) });
@@ -41,7 +43,12 @@ export async function adminUserRoutes(app: FastifyInstance) {
       db.query(`SELECT n.id, n.body, n.created_at, a.name AS author FROM admin_notes n JOIN users a ON a.id = n.author_id WHERE n.subject_type = 'user' AND n.subject_id = $1 ORDER BY n.created_at DESC`, [id]),
       db.query(`SELECT action, resource_type, resource_id, reason, created_at FROM audit_logs WHERE actor_user_id = $1 ORDER BY created_at DESC LIMIT 50`, [id]),
     ]);
-    return { data: { ...u, organizations: orgs.rows, sessions: sessions.rows, authEvents: events.rows, notes: notes.rows, activity: activity.rows } };
+    const mfa = u.mfa_enabled ? {
+      enabledAt: (await db.query('SELECT mfa_enabled_at FROM users WHERE id = $1', [id])).rows[0]?.mfa_enabled_at ?? null,
+      backupCodesLeft: await backupCodesLeft(db, id),
+      trustedDevices: Number((await db.query<{ n: string }>(`SELECT count(*)::text AS n FROM mfa_trusted_devices WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()`, [id])).rows[0]!.n),
+    } : null;
+    return { data: { ...u, mfa, organizations: orgs.rows, sessions: sessions.rows, authEvents: events.rows, notes: notes.rows, activity: activity.rows } };
   });
 
   async function superAdminCount() {
@@ -80,6 +87,24 @@ export async function adminUserRoutes(app: FastifyInstance) {
     const r = await db.query(`UPDATE sessions SET revoked_at = now(), revoked_reason = 'admin_revoked' WHERE user_id = $1 AND revoked_at IS NULL`, [id]);
     await audit(db, req, { action: 'user.sessions_revoked', resourceType: 'user', resourceId: id, after: { count: r.rowCount }, reason });
     return { revoked: r.rowCount };
+  });
+
+  // For a person who lost their phone and their backup codes: support checks who they are, then resets.
+  app.post('/admin/users/:id/mfa/reset', { config: mgmt, preHandler: guard('admin:users:manage', { stepUp: true }), schema: { tags: ['admin: users'], params: idParams, body: reasonRequired, description: 'Turn off two-step verification for a person who lost access to their authenticator app and backup codes, and sign them out everywhere. They set it up again at their next sign-in if the network requires it.' } }, async (req) => {
+    const actor = requireUser(req);
+    const { id } = paramsOf(req, idParams);
+    const { reason } = bodyOf(req, reasonRequired);
+    if (id === actor.id) throw conflict('Ask another administrator to reset your own two-step verification');
+    const u = (await db.query('SELECT id, email, name, platform_role, mfa_enabled FROM users WHERE id = $1', [id])).rows[0];
+    if (!u) throw notFound();
+    if (!u.mfa_enabled) throw badRequest('Two-step verification is not on for this person');
+    if (u.platform_role === 'super_admin' && actor.platformRole !== 'super_admin') throw forbidden('Only a super administrator can reset another super administrator');
+    await clearMfa(db, id);
+    await db.query(`UPDATE sessions SET revoked_at = now(), revoked_reason = 'mfa_reset' WHERE user_id = $1 AND revoked_at IS NULL`, [id]);
+    await db.query(`INSERT INTO auth_events (user_id, type, ip_hash, user_agent, detail) VALUES ($1, 'mfa_reset', $2, $3, 'by administrator')`, [id, req.ipHash, (req.headers['user-agent'] ?? '').slice(0, 300)]);
+    await audit(db, req, { action: 'user.mfa_reset', resourceType: 'user', resourceId: id, before: { mfaEnabled: true }, after: { mfaEnabled: false }, reason });
+    await queueEmail(app.ctx, u.email, 'suspicious_activity', { detail: 'An administrator turned off two-step verification for your account at your request, and signed you out everywhere. Sign in with your password and set it up again under Sign-in & security.' }).catch(() => undefined);
+    return { ok: true };
   });
 
   app.put('/admin/users/:id/role', { config: mgmt, preHandler: guard('admin:roles:manage', { stepUp: true }), schema: { tags: ['admin: users'], params: idParams, body: roleBody } }, async (req) => {

@@ -39,6 +39,14 @@ export async function advertiserRoutes(app: FastifyInstance) {
   }
 
   // ---------------------------------------------------------------- campaigns
+  // Where the network's traffic comes from, as shares only, to guide country targeting (like a reach estimate).
+  app.get('/orgs/:orgId/targeting/countries', { preHandler: requireOrg('campaign:read', { ...adv, allowSuspended: true }), schema: { tags: ['campaigns'], params: orgParams, description: 'Share of the network\'s valid impressions by country over the last 30 days. Shares only, never counts.' } }, async () => {
+    const rows = (await db.query<{ country: string; n: string }>(
+      `SELECT country, sum(valid_impressions)::text AS n FROM daily_stats WHERE day >= CURRENT_DATE - 30 AND country <> 'ZZ' GROUP BY country HAVING sum(valid_impressions) > 0`)).rows;
+    const total = rows.reduce((a, r) => a + Number(r.n), 0);
+    return { data: total ? rows.map((r) => ({ country: r.country, share: Number(r.n) / total })).sort((a, b) => b.share - a.share) : [] };
+  });
+
   app.get('/orgs/:orgId/campaigns', { preHandler: requireOrg('campaign:read', { ...adv, allowSuspended: true }), schema: { tags: ['campaigns'], params: orgParams, querystring: listQuery } }, async (req) => {
     const q = queryOf(req, listQuery);
     const where = ['org_id = $1'];
@@ -141,7 +149,7 @@ export async function advertiserRoutes(app: FastifyInstance) {
         `INSERT INTO campaigns (org_id, name, pricing_model, rate_micros, currency, lifetime_budget_micros, daily_budget_micros, max_impressions, max_clicks, timezone, start_at, end_at, pacing, priority, created_by, accept_refresh)
          SELECT org_id, left('Copy of ' || name, 160), pricing_model, rate_micros, currency, lifetime_budget_micros, daily_budget_micros, max_impressions, max_clicks, timezone, $3, $4, pacing, priority, $2, accept_refresh FROM campaigns WHERE id = $1 RETURNING id`,
         [id, user.id, start, end])).rows[0];
-      await c.query(`INSERT INTO campaign_targeting (campaign_id, countries, devices, site_categories, keywords, include_site_ids, exclude_site_ids, include_unit_ids, exclude_unit_ids, require_personalized, topics, exclude_topics, brand_safety) SELECT $2, countries, devices, site_categories, keywords, include_site_ids, exclude_site_ids, include_unit_ids, exclude_unit_ids, require_personalized, topics, exclude_topics, brand_safety FROM campaign_targeting WHERE campaign_id = $1`, [id, row.id]);
+      await c.query(`INSERT INTO campaign_targeting (campaign_id, countries, devices, site_categories, keywords, include_site_ids, exclude_site_ids, include_unit_ids, exclude_unit_ids, require_personalized, topics, exclude_topics, brand_safety, exclude_countries) SELECT $2, countries, devices, site_categories, keywords, include_site_ids, exclude_site_ids, include_unit_ids, exclude_unit_ids, require_personalized, topics, exclude_topics, brand_safety, exclude_countries FROM campaign_targeting WHERE campaign_id = $1`, [id, row.id]);
       await c.query(`INSERT INTO campaign_caps (campaign_id, scope, max_impressions, window_seconds) SELECT $2, scope, max_impressions, window_seconds FROM campaign_caps WHERE campaign_id = $1`, [id, row.id]);
       await c.query(`INSERT INTO creatives (campaign_id, org_id, name, format, headline, body, cta, asset_id, width, height, destination_url, display_url, alt_text, created_by)
                      SELECT $2, org_id, name, format, headline, body, cta, asset_id, width, height, destination_url, display_url, alt_text, $3 FROM creatives WHERE campaign_id = $1 AND status <> 'archived'`, [id, row.id, user.id]);

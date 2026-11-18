@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { METRIC_DEFINITIONS } from '@blissnova/shared';
 import { dateRange, orgParams, queryOf, resolveRange } from '../lib/http';
 import { forbidden } from '../lib/errors';
-import { requireOrg } from '../plugins/auth';
+import { requireOrg, requireUser } from '../plugins/auth';
+import { reportFreshness } from '../services/events';
 import { analyticsOverview, realtime } from '../services/analytics';
 import { queueEmail } from '../services/notifications';
 import { buildPerformanceReport, nextSendAt, type ReportFrequency } from '../services/report-emails';
@@ -20,6 +21,13 @@ const DESCRIPTION = 'Analytics for the period and the same-length period before 
 
 export async function analyticsRoutes(app: FastifyInstance) {
   const { db } = app.ctx;
+
+  // Dashboards poll this (a single-row read) and reload their reports only when it moves.
+  app.get('/reports/freshness', { config: { allowDuringMaintenance: true }, schema: { tags: ['reports'], description: 'When the reports last changed (changedAt) and the time up to which events are included (builtThrough). New events are added every few seconds.' } }, async (req, reply) => {
+    requireUser(req);
+    reply.header('cache-control', 'no-store');
+    return { data: await reportFreshness(db) };
+  });
 
   app.get('/orgs/:orgId/analytics', { preHandler: requireOrg('report:read', { allowSuspended: true }), schema: { tags: ['analytics'], params: orgParams, querystring: orgQuery, description: DESCRIPTION } }, async (req) => {
     const q = queryOf(req, orgQuery);

@@ -17,7 +17,7 @@ const PAGE_RPM = 'Estimated earnings divided by page views, multiplied by 1,000.
 export function PageReport({ orgId, currency, siteId }: { orgId: string; currency: string; siteId?: string }) {
   const [range, setRange] = useState(defaultRange());
   const query = qs({ ...range, siteId });
-  const res = useApi<{ data: { totals: Omit<PageRow, 'siteId' | 'domain' | 'path' | 'topic' | 'topics' | 'brandSafety' | 'safetyFlags' | 'reviewed'>; rows: PageRow[] } }>(`/orgs/${orgId}/reports/pages${query}`);
+  const res = useApi<{ data: { totals: Omit<PageRow, 'siteId' | 'domain' | 'path' | 'topic' | 'topics' | 'brandSafety' | 'safetyFlags' | 'reviewed'>; rows: PageRow[] } }>(`/orgs/${orgId}/reports/pages${query}`, { live: true });
   const money = (v: string | null | undefined) => formatMicros(v, currency);
   const columns: Column<PageRow>[] = [
     { key: 'page', header: 'Page', cell: (r) => <span className="block max-w-[340px] truncate font-medium text-fg" title={`${r.domain}${r.path}`}><span className="text-muted">{r.domain}</span>{r.path}</span> },

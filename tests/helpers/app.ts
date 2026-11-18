@@ -71,6 +71,7 @@ const WIPE = [
   'provider_checks',
   'data_exports',
   'admin_notes',
+  'report_rollup',
 ];
 
 export interface Harness {

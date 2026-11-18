@@ -2,13 +2,15 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { ORG_ROLE_PERMISSIONS, PLATFORM_ROLE_PERMISSIONS, type OrgType, type OrgRole } from '@blissnova/shared';
 import { AppError, badRequest, notFound } from '../lib/errors';
-import { decryptSecret, dummyVerify, encryptSecret, hashPassword, newTotpSecret, randomToken, sha256, verifyPassword, verifyTotp } from '../lib/crypto';
+import QRCode from 'qrcode';
+import { dummyVerify, encryptSecret, hashPassword, newTotpSecret, randomToken, sha256, verifyPassword } from '../lib/crypto';
 import { hit } from '../lib/ratelimit';
 import { audit } from '../lib/audit';
 import { bodyOf, idParams, paramsOf } from '../lib/http';
 import { checkPassword, clearSessionCookies, requireStepUp, requireUser, setSessionCookies } from '../plugins/auth';
 import { queueEmail } from '../services/notifications';
 import { createOrganization } from '../services/orgs';
+import { TRUST_COOKIE, backupCodesLeft, clearMfa, issueBackupCodes, mfaRequiredFor, revokeTrustedDevices, trustThisDevice, trustedDevice, useBackupCode, useTotp } from '../services/mfa';
 
 const password = z.string().min(12, 'Use at least 12 characters').max(256);
 const email = z.email().max(254).transform((v) => v.toLowerCase());
@@ -20,12 +22,24 @@ const registerBody = z.object({
   accountType: z.enum(['advertiser', 'publisher']).optional(),
   organizationName: z.string().trim().min(1).max(160).optional(),
 });
-const loginBody = z.object({ email, password: z.string().min(1).max(256), totp: z.string().regex(/^\d{6}$/).optional() });
+const loginBody = z.object({
+  email, password: z.string().min(1).max(256),
+  totp: z.string().regex(/^\d{6}$/).optional(),
+  /** One of the ten one-time backup codes, for when the phone is not at hand. */
+  backupCode: z.string().trim().min(8).max(20).optional(),
+  /** Skip the code on this browser for 30 days. */
+  trustDevice: z.boolean().optional(),
+});
 const tokenBody = z.object({ token: z.string().min(20).max(200) });
 const resetBody = z.object({ token: z.string().min(20).max(200), password });
 const changePwBody = z.object({ currentPassword: z.string().min(1).max(256), newPassword: password });
 const stepUpBody = z.object({ password: z.string().min(1).max(256), totp: z.string().regex(/^\d{6}$/).optional() });
 const codeBody = z.object({ code: z.string().regex(/^\d{6}$/) });
+
+async function securityEmail(app: FastifyInstance, userId: string, detail: string) {
+  const u = (await app.ctx.db.query<{ email: string }>('SELECT email FROM users WHERE id = $1', [userId])).rows[0];
+  if (u) await queueEmail(app.ctx, u.email, 'suspicious_activity', { detail }).catch(() => undefined);
+}
 
 async function createSession(app: FastifyInstance, req: FastifyRequest, userId: string, mfaVerified: boolean) {
   const token = randomToken(32);
@@ -64,8 +78,11 @@ export async function profile(app: FastifyInstance, userId: string) {
   const u = (await app.ctx.db.query(`SELECT id, email, name, platform_role, mfa_enabled, email_verified_at, created_at FROM users WHERE id = $1`, [userId])).rows[0];
   const orgs = (await app.ctx.db.query(
     `SELECT o.id, o.name, o.type, o.status, o.currency, m.role FROM memberships m JOIN organizations o ON o.id = m.org_id WHERE m.user_id = $1 ORDER BY o.created_at`, [userId])).rows;
+  const mfaRequired = mfaRequiredFor(await app.ctx.settings.get(), { platformRole: u.platform_role });
   return {
     id: u.id, email: u.email, name: u.name, platformRole: u.platform_role, mfaEnabled: u.mfa_enabled, emailVerified: Boolean(u.email_verified_at), createdAt: u.created_at,
+    /** The network requires two-step verification of this person; without it they are asked to set it up first. */
+    mfaRequired,
     platformPermissions: u.platform_role ? PLATFORM_ROLE_PERMISSIONS[u.platform_role as keyof typeof PLATFORM_ROLE_PERMISSIONS] : [],
     organizations: orgs.map((o) => ({ id: o.id, name: o.name, type: o.type, status: o.status, currency: o.currency, role: o.role, permissions: ORG_ROLE_PERMISSIONS[o.type as OrgType][o.role as OrgRole] })),
   };
@@ -106,7 +123,7 @@ export async function authRoutes(app: FastifyInstance) {
       await authEvent(app, req, 'locked_out', null, b.email);
       throw new AppError(429, 'rate_limited', 'Too many failed attempts. Try again in 15 minutes or reset your password.');
     }
-    const u = (await db.query('SELECT id, password_hash, status, mfa_enabled, mfa_secret_enc FROM users WHERE email = $1', [b.email])).rows[0];
+    const u = (await db.query('SELECT id, name, password_hash, status, mfa_enabled, mfa_secret_enc FROM users WHERE email = $1', [b.email])).rows[0];
     const fail = async (userId: string | null, detail: string) => {
       await hit(app.ctx.redis, `${lockKey}:fail`, 5, 900);
       await authEvent(app, req, 'login_failure', userId, b.email, detail);
@@ -122,20 +139,32 @@ export async function authRoutes(app: FastifyInstance) {
       throw new AppError(403, 'forbidden', 'This account is suspended. Contact support.');
     }
     let mfaVerified = false;
+    let codesLeft: number | null = null;
     if (u.mfa_enabled) {
-      if (!b.totp) return reply.status(200).send({ mfaRequired: true });
-      if (!verifyTotp(decryptSecret(config.ENCRYPTION_KEY, u.mfa_secret_enc), b.totp)) {
-        await authEvent(app, req, 'mfa_failure', u.id, b.email);
-        return fail(u.id, 'bad_totp');
+      if (await trustedDevice(app.ctx, req, u.id)) {
+        mfaVerified = true;
+      } else {
+        if (!b.totp && !b.backupCode) return reply.status(200).send({ mfaRequired: true, methods: ['totp', 'backup_code'] });
+        const ok = b.totp ? await useTotp(app.ctx, u.id, u.mfa_secret_enc, b.totp) : (codesLeft = await useBackupCode(app.ctx, u.id, b.backupCode!)) !== null;
+        if (!ok) {
+          await hit(app.ctx.redis, `${lockKey}:fail`, 5, 900);
+          await authEvent(app, req, 'mfa_failure', u.id, b.email, b.totp ? 'bad_totp' : 'bad_backup_code');
+          throw new AppError(401, 'unauthenticated', b.totp ? 'That code is not valid or was already used. Wait for the next code in your authenticator app.' : 'That backup code is not valid or was already used.');
+        }
+        mfaVerified = true;
+        if (b.trustDevice) await trustThisDevice(app.ctx, req, reply, u.id);
+        if (codesLeft !== null) {
+          await authEvent(app, req, 'mfa_backup_code_used', u.id, b.email, `left=${codesLeft}`);
+          await queueEmail(app.ctx, b.email, 'suspicious_activity', { detail: `A backup code was used to sign in to your account. You have ${codesLeft} backup ${codesLeft === 1 ? 'code' : 'codes'} left; you can make new ones under Sign-in & security.` }).catch(() => undefined);
+        }
       }
-      mfaVerified = true;
     }
     await app.ctx.redis.del(`rl:${lockKey}:fail`);
     const token = await createSession(app, req, u.id, mfaVerified);
     await db.query('UPDATE users SET last_login_at = now() WHERE id = $1', [u.id]);
     await authEvent(app, req, 'login_success', u.id, b.email);
     setSessionCookies(reply, token, config.SESSION_TTL_HOURS, config.COOKIE_SECURE);
-    return { user: await profile(app, u.id) };
+    return { user: await profile(app, u.id), ...(codesLeft !== null ? { backupCodesLeft: codesLeft } : {}) };
   });
 
   app.post('/auth/logout', { config: { allowDuringMaintenance: true }, schema: { tags: ['auth'] } }, async (req, reply) => {
@@ -182,6 +211,7 @@ export async function authRoutes(app: FastifyInstance) {
     const userId = await consumeUserToken(app, b.token, 'reset_password');
     await db.query('UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1', [userId, await hashPassword(b.password)]);
     await db.query(`UPDATE sessions SET revoked_at = now(), revoked_reason = 'password_reset' WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);
+    await revokeTrustedDevices(db, userId);
     await authEvent(app, req, 'password_reset', userId);
     await audit(db, req, { action: 'user.password_reset', resourceType: 'user', resourceId: userId, actorUserId: userId });
     return { ok: true };
@@ -193,6 +223,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (!(await checkPassword(app, user.id, b.currentPassword))) throw new AppError(401, 'unauthenticated', 'Current password is incorrect');
     await db.query('UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1', [user.id, await hashPassword(b.newPassword)]);
     await db.query(`UPDATE sessions SET revoked_at = now(), revoked_reason = 'password_changed' WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`, [user.id, req.auth!.session!.id]);
+    await revokeTrustedDevices(db, user.id);
     await authEvent(app, req, 'password_changed', user.id);
     await audit(db, req, { action: 'user.password_changed', resourceType: 'user', resourceId: user.id });
     return { ok: true };
@@ -203,43 +234,87 @@ export async function authRoutes(app: FastifyInstance) {
     const b = bodyOf(req, stepUpBody);
     const u = (await db.query('SELECT password_hash, mfa_enabled, mfa_secret_enc FROM users WHERE id = $1', [user.id])).rows[0];
     const okPw = await verifyPassword(u.password_hash, b.password);
-    const okMfa = !u.mfa_enabled || (b.totp !== undefined && verifyTotp(decryptSecret(config.ENCRYPTION_KEY, u.mfa_secret_enc), b.totp));
+    const okMfa = !u.mfa_enabled || (okPw && b.totp !== undefined && await useTotp(app.ctx, user.id, u.mfa_secret_enc, b.totp));
     if (!okPw || !okMfa) {
       await authEvent(app, req, 'step_up_failure', user.id);
-      throw new AppError(401, 'unauthenticated', u.mfa_enabled && !b.totp ? 'Enter your authenticator code' : 'Confirmation failed');
+      throw new AppError(401, 'unauthenticated', u.mfa_enabled && !b.totp ? 'Enter your authenticator code' : okPw && u.mfa_enabled ? 'That code is not valid or was already used. Wait for the next code.' : 'Confirmation failed');
     }
     await db.query('UPDATE sessions SET step_up_at = now(), mfa_verified = mfa_verified OR $2 WHERE id = $1', [req.auth!.session!.id, u.mfa_enabled]);
     await authEvent(app, req, 'step_up', user.id);
     return { ok: true, validForSeconds: 600 };
   });
 
-  app.post('/auth/mfa/setup', { config: rl, schema: { tags: ['auth'] } }, async (req) => {
+  app.get('/auth/mfa', { schema: { tags: ['auth'], description: 'Two-step verification status: whether it is on, backup codes left, trusted browsers, and whether the network requires it.' } }, async (req) => {
     const user = requireUser(req);
-    if (user.mfaEnabled) throw badRequest('MFA is already enabled');
-    const secret = newTotpSecret();
-    await db.query('UPDATE users SET mfa_secret_enc = $2 WHERE id = $1', [user.id, encryptSecret(config.ENCRYPTION_KEY, secret)]);
-    const s = await app.ctx.settings.get();
-    const label = encodeURIComponent(`${s.branding.productName}:${user.email}`);
-    return { secret, otpauthUrl: `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(s.branding.productName)}&algorithm=SHA1&digits=6&period=30` };
+    const u = (await db.query('SELECT mfa_enabled, mfa_enabled_at FROM users WHERE id = $1', [user.id])).rows[0];
+    const cookie = req.cookies?.[TRUST_COOKIE];
+    const devices = (await db.query(`SELECT id, token_hash, user_agent, created_at, last_used_at, expires_at FROM mfa_trusted_devices WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now() ORDER BY last_used_at DESC`, [user.id])).rows;
+    return {
+      data: {
+        enabled: u.mfa_enabled, enabledAt: u.mfa_enabled_at, required: mfaRequiredFor(await app.ctx.settings.get(), user),
+        backupCodesLeft: u.mfa_enabled ? await backupCodesLeft(db, user.id) : 0,
+        trustedDevices: devices.map((d) => ({ id: d.id, userAgent: d.user_agent, createdAt: d.created_at, lastUsedAt: d.last_used_at, expiresAt: d.expires_at, current: Boolean(cookie) && d.token_hash === sha256(cookie!) })),
+      },
+    };
   });
 
-  app.post('/auth/mfa/enable', { config: rl, schema: { tags: ['auth'], body: codeBody } }, async (req) => {
+  app.post('/auth/mfa/setup', { config: rl, schema: { tags: ['auth'], description: 'Start setting up an authenticator app: a new secret, its otpauth:// link and a QR code (SVG) to scan.' } }, async (req) => {
     const user = requireUser(req);
+    if (user.mfaEnabled) throw badRequest('Two-step verification is already on');
+    const secret = newTotpSecret();
+    await db.query('UPDATE users SET mfa_secret_enc = $2, mfa_last_step = NULL WHERE id = $1', [user.id, encryptSecret(config.ENCRYPTION_KEY, secret)]);
+    const s = await app.ctx.settings.get();
+    const label = encodeURIComponent(`${s.branding.productName}:${user.email}`);
+    const otpauthUrl = `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(s.branding.productName)}&algorithm=SHA1&digits=6&period=30`;
+    const qrSvg = await QRCode.toString(otpauthUrl, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#111827', light: '#ffffff' } });
+    return { secret, otpauthUrl, qrSvg };
+  });
+
+  app.post('/auth/mfa/enable', { config: rl, schema: { tags: ['auth'], body: codeBody, description: 'Finish setup with a code from the app. Returns ten one-time backup codes, shown only this once.' } }, async (req) => {
+    const user = requireUser(req);
+    if (user.mfaEnabled) throw badRequest('Two-step verification is already on');
     const u = (await db.query('SELECT mfa_secret_enc FROM users WHERE id = $1', [user.id])).rows[0];
-    if (!u?.mfa_secret_enc || !verifyTotp(decryptSecret(config.ENCRYPTION_KEY, u.mfa_secret_enc), bodyOf(req, codeBody).code)) throw badRequest('The code is not valid. Check your authenticator app and try again.');
-    await db.query('UPDATE users SET mfa_enabled = true WHERE id = $1', [user.id]);
+    if (!(await useTotp(app.ctx, user.id, u?.mfa_secret_enc ?? null, bodyOf(req, codeBody).code))) throw badRequest('The code is not valid. Check your authenticator app and try again.');
+    await db.query('UPDATE users SET mfa_enabled = true, mfa_enabled_at = now(), updated_at = now() WHERE id = $1', [user.id]);
+    const backupCodes = await issueBackupCodes(app.ctx, db, user.id);
     await db.query('UPDATE sessions SET mfa_verified = true WHERE id = $1', [req.auth!.session!.id]);
+    await authEvent(app, req, 'mfa_enabled', user.id);
     await audit(db, req, { action: 'user.mfa_enabled', resourceType: 'user', resourceId: user.id });
+    await securityEmail(app, user.id, 'Two-step verification was turned on for your account. From now on, signing in needs a code from your authenticator app (or a backup code).');
+    return { ok: true, backupCodes };
+  });
+
+  app.post('/auth/mfa/backup-codes', { config: rl, schema: { tags: ['auth'], description: 'Replace the backup codes with ten new ones (the old ones stop working). Needs a recent confirmation (step-up).' } }, async (req) => {
+    const user = requireUser(req);
+    requireStepUp(req);
+    if (!user.mfaEnabled) throw badRequest('Turn on two-step verification first');
+    const backupCodes = await issueBackupCodes(app.ctx, db, user.id);
+    await audit(db, req, { action: 'user.mfa_backup_codes_regenerated', resourceType: 'user', resourceId: user.id });
+    await securityEmail(app, user.id, 'New backup codes were made for your account. The old ones no longer work.');
+    return { backupCodes };
+  });
+
+  app.delete('/auth/mfa/trusted-devices/:id', { schema: { tags: ['auth'], params: idParams, description: 'Ask for a code again on that browser.' } }, async (req) => {
+    const user = requireUser(req);
+    const { id } = paramsOf(req, idParams);
+    const r = await db.query('UPDATE mfa_trusted_devices SET revoked_at = now() WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL', [id, user.id]);
+    if (!r.rowCount) throw notFound();
     return { ok: true };
   });
 
-  app.post('/auth/mfa/disable', { config: rl, schema: { tags: ['auth'], body: codeBody } }, async (req) => {
+  app.post('/auth/mfa/trusted-devices/revoke-all', { schema: { tags: ['auth'], description: 'Ask for a code again on every browser.' } }, async (req) => {
     const user = requireUser(req);
+    return { revoked: await revokeTrustedDevices(db, user.id) };
+  });
+
+  app.post('/auth/mfa/disable', { config: rl, schema: { tags: ['auth'], description: 'Turn two-step verification off. Needs a recent confirmation with password and code (step-up). Refused when the network requires it.' } }, async (req) => {
+    const user = requireUser(req);
+    if (mfaRequiredFor(await app.ctx.settings.get(), user)) throw new AppError(403, 'forbidden', 'This network requires two-step verification, so it cannot be turned off. You can move it to a new phone by making new backup codes and setting it up again after an administrator resets it.');
     requireStepUp(req);
-    const u = (await db.query('SELECT mfa_secret_enc FROM users WHERE id = $1', [user.id])).rows[0];
-    if (!u?.mfa_secret_enc || !verifyTotp(decryptSecret(config.ENCRYPTION_KEY, u.mfa_secret_enc), bodyOf(req, codeBody).code)) throw badRequest('The code is not valid');
-    await db.query('UPDATE users SET mfa_enabled = false, mfa_secret_enc = NULL WHERE id = $1', [user.id]);
+    await clearMfa(db, user.id);
+    await authEvent(app, req, 'mfa_disabled', user.id);
     await audit(db, req, { action: 'user.mfa_disabled', resourceType: 'user', resourceId: user.id });
+    await securityEmail(app, user.id, 'Two-step verification was turned off for your account. Signing in now needs only your password.');
     return { ok: true };
   });
 

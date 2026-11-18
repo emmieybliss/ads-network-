@@ -35,3 +35,5 @@ process.on('unhandledRejection', (err) => {
 });
 
 await app.listen({ host: config.HOST, port: config.PORT });
+// Keeps the GeoIP database current when GEOIP_AUTO_UPDATE is on (checks now, then daily).
+app.ctx.geoip.start();

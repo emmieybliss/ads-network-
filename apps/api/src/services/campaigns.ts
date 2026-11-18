@@ -6,6 +6,8 @@ import { moneyString } from '../lib/http';
 
 const targetingSchema = z.object({
   countries: z.array(z.string().regex(/^[A-Z]{2}$/)).max(250).default([]),
+  /** Countries never served, even with countries empty (all countries). */
+  excludeCountries: z.array(z.string().regex(/^[A-Z]{2}$/)).max(250).default([]),
   devices: z.array(z.enum(['desktop', 'mobile', 'tablet', 'other'])).max(4).default([]),
   siteCategories: z.array(z.string().trim().min(1).max(40)).max(50).default([]),
   keywords: z.array(z.string().trim().min(1).max(60)).max(100).default([]),
@@ -78,13 +80,13 @@ export function validateCampaignRules(input: CampaignInput, s: PlatformSettings)
 export async function writeTargetingAndCaps(client: PoolClient, campaignId: string, input: Pick<CampaignInput, 'targeting' | 'caps'>) {
   const t = input.targeting;
   await client.query(
-    `INSERT INTO campaign_targeting (campaign_id, countries, devices, site_categories, keywords, include_site_ids, exclude_site_ids, include_unit_ids, exclude_unit_ids, require_personalized, topics, exclude_topics, brand_safety)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-     ON CONFLICT (campaign_id) DO UPDATE SET countries = EXCLUDED.countries, devices = EXCLUDED.devices, site_categories = EXCLUDED.site_categories, keywords = EXCLUDED.keywords,
+    `INSERT INTO campaign_targeting (campaign_id, countries, devices, site_categories, keywords, include_site_ids, exclude_site_ids, include_unit_ids, exclude_unit_ids, require_personalized, topics, exclude_topics, brand_safety, exclude_countries)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     ON CONFLICT (campaign_id) DO UPDATE SET countries = EXCLUDED.countries, exclude_countries = EXCLUDED.exclude_countries, devices = EXCLUDED.devices, site_categories = EXCLUDED.site_categories, keywords = EXCLUDED.keywords,
        include_site_ids = EXCLUDED.include_site_ids, exclude_site_ids = EXCLUDED.exclude_site_ids, include_unit_ids = EXCLUDED.include_unit_ids, exclude_unit_ids = EXCLUDED.exclude_unit_ids, require_personalized = EXCLUDED.require_personalized,
        topics = EXCLUDED.topics, exclude_topics = EXCLUDED.exclude_topics, brand_safety = EXCLUDED.brand_safety`,
     [campaignId, t.countries, t.devices, t.siteCategories.map((c) => c.toLowerCase()), t.keywords.map((k) => k.toLowerCase()), t.includeSiteIds, t.excludeSiteIds, t.includeUnitIds, t.excludeUnitIds, t.requirePersonalized,
-      [...new Set(t.topics)], [...new Set(t.excludeTopics)], t.brandSafety],
+      [...new Set(t.topics)], [...new Set(t.excludeTopics)], t.brandSafety, [...new Set(t.excludeCountries)].filter((c) => !t.countries.includes(c))],
   );
   await client.query('DELETE FROM campaign_caps WHERE campaign_id = $1', [campaignId]);
   for (const c of input.caps) {
@@ -109,7 +111,7 @@ export function serializeCampaign(c: Record<string, any>, t?: Record<string, any
     timezone: c.timezone, startAt: c.start_at, endAt: c.end_at, pacing: c.pacing, priority: c.priority, acceptRefresh: c.accept_refresh ?? true, adminPriorityBoost: c.admin_priority_boost,
     version: c.version, submittedAt: c.submitted_at, approvedAt: c.approved_at, createdAt: c.created_at, updatedAt: c.updated_at,
     targeting: t ? {
-      countries: t.countries, devices: t.devices, siteCategories: t.site_categories, keywords: t.keywords, includeSiteIds: t.include_site_ids,
+      countries: t.countries, excludeCountries: t.exclude_countries ?? [], devices: t.devices, siteCategories: t.site_categories, keywords: t.keywords, includeSiteIds: t.include_site_ids,
       excludeSiteIds: t.exclude_site_ids, includeUnitIds: t.include_unit_ids, excludeUnitIds: t.exclude_unit_ids, requirePersonalized: t.require_personalized,
       topics: t.topics ?? [], excludeTopics: t.exclude_topics ?? [], brandSafety: t.brand_safety ?? 'standard',
     } : undefined,

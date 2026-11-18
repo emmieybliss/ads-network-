@@ -6,7 +6,7 @@ import { loadConfig } from '@blissnova/api/config';
 import { SettingsService } from '@blissnova/api/lib/settings';
 import { createMailer } from '@blissnova/api/lib/mailer';
 import { QUEUE_NAMES } from '@blissnova/api/lib/queue';
-import { processAdmittedEvent, RetryLaterError, type AdmittedEvent } from '@blissnova/api/services/events';
+import { processAdmittedEvent, RetryLaterError, rollupLive, type AdmittedEvent } from '@blissnova/api/services/events';
 import { writeServeLog, type ServeLog } from '@blissnova/api/services/serving';
 import { deliverOutbox, queueEmail } from '@blissnova/api/services/notifications';
 import { EMAIL_TEMPLATES } from '@blissnova/api/lib/mailer';
@@ -14,7 +14,7 @@ import { LocalStorage } from '@blissnova/api/lib/storage';
 import { PartnerRegistry } from '@blissnova/api/services/partners';
 import { PaymentProviderRegistry, paypalClientFor } from '@blissnova/api/services/payments/registry';
 import { PayoutProviderRegistry } from '@blissnova/api/services/payouts/registry';
-import { budgetAlerts, campaignLifecycle, dailyMaintenance, detectAnomalies, ivtSweep, lowBalanceAlerts, refreshAggregates, reportEmails, settleAll, syncPartners, syncProviders, syncSpendCounters, type JobCtx } from './jobs';
+import { budgetAlerts, campaignLifecycle, dailyMaintenance, detectAnomalies, ivtSweep, lowBalanceAlerts, refreshAggregates, reportEmails, settleAll, syncPartners, syncProviders, syncSpendCounters, LIVE_ROLLUP_MS, type JobCtx } from './jobs';
 
 /**
  * Background worker: event processing, serve logs, email delivery and
@@ -69,7 +69,6 @@ const workers = [
     await connection.set('worker:heartbeat', String(Date.now()), 'EX', 600);
     switch (job.name) {
       case 'minutely': {
-        await refreshAggregates(jobCtx);
         const lifecycle = await campaignLifecycle(jobCtx);
         const settled = await settleAll(jobCtx);
         const partners = await syncPartners(jobCtx);
@@ -77,6 +76,7 @@ const workers = [
         return { lifecycle, settled, partners };
       }
       case 'five-minutely':
+        await refreshAggregates(jobCtx);
         await budgetAlerts(jobCtx);
         await lowBalanceAlerts(jobCtx);
         await reportEmails(jobCtx);
@@ -98,6 +98,15 @@ await maintenanceQueue.upsertJobScheduler('minutely', { every: 60_000 }, { name:
 await maintenanceQueue.upsertJobScheduler('five-minutely', { every: 300_000 }, { name: 'five-minutely', opts: { removeOnComplete: 100, removeOnFail: 500 } });
 await maintenanceQueue.upsertJobScheduler('daily', { pattern: '15 0 * * *', tz: 'UTC' }, { name: 'daily', opts: { removeOnComplete: 30, removeOnFail: 100 } });
 await connection.set('worker:heartbeat', String(Date.now()), 'EX', 600);
+
+// Live reports: new events reach the aggregates within seconds. On its own
+// timer, not the maintenance queue, so a slow job never holds it up.
+let rolling = false;
+const liveTimer = setInterval(() => {
+  if (rolling) return;
+  rolling = true;
+  rollupLive(db).catch((err) => log.error({ err: (err as Error).message }, 'live report rollup failed')).finally(() => { rolling = false; });
+}, LIVE_ROLLUP_MS);
 log.info('worker started');
 
 let stopping = false;
@@ -105,6 +114,7 @@ async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
   log.info({ signal }, 'worker shutting down; finishing active jobs');
+  clearInterval(liveTimer);
   await Promise.all(workers.map((w) => w.close()));
   await Promise.all([emailQueue.close(), maintenanceQueue.close()]);
   await connection.quit();

@@ -191,93 +191,200 @@ export async function processAdmittedEvent(ctx: Pick<AppContext, 'db' | 'redis'>
   });
 }
 
-/** Recompute the reporting aggregates for one UTC day from event rows. Safe to run repeatedly. */
+/**
+ * Reporting aggregates (daily_stats and friends) are built from the event log
+ * in two ways that never overlap, tracked by report_rollup.built_through:
+ *
+ *  - live: every few seconds, the events written since built_through (by
+ *    ad_events.inserted_at, so late or queued events are not skipped) are
+ *    added to the aggregates of the day they happened on;
+ *  - full: a day is rebuilt from scratch after corrections (invalid traffic,
+ *    flat-rate allocation) and every few minutes as a reconcile, which also
+ *    picks up any event that was still being written during a live pass.
+ *
+ * Both run under one lock, in a single snapshot (REPEATABLE READ).
+ */
+const LIVE_LAG_MS = 2000;
+
+/** Which events to add: those that happened on one day (full rebuild), or those written in a time range (live). */
+type Window = { day: string } | { insFrom: string; insTo: string };
+
+/** Add the events in the window to the aggregates. Adding twice counts twice: callers keep windows apart. */
+async function addRows(c: { query: PoolClient['query'] }, win: Window) {
+  // Only the bounds that apply, so the planner sees one plain range (an extra
+  // unbounded range made it misjudge row counts and pick a nested loop).
+  const byDay = 'day' in win;
+  const w = byDay ? [`${win.day}T00:00:00Z`, `${nextDay(win.day)}T00:00:00Z`] : [win.insFrom, win.insTo];
+  const inWindow = (a = '') => (byDay ? `${a}occurred_at >= $1 AND ${a}occurred_at < $2` : `${a}inserted_at >= $1 AND ${a}inserted_at < $2`);
+  // The page topic comes from the delivery's 'served' row, served at most a token lifetime (a day) before the event;
+  // events written in the live window happened at most a couple of days before they were written.
+  const servedRange = byDay ? `occurred_at >= $1::timestamptz - interval '1 day' AND occurred_at < $2` : `occurred_at >= $1::timestamptz - interval '3 days'`;
+  const day = (a = '') => `(${a}occurred_at AT TIME ZONE 'UTC')::date`;
+  const add = (table: string, cols: string[]) => cols.map((x) => `${x} = ${table}.${x} + EXCLUDED.${x}`).join(', ');
+  const dailyCols = ['served', 'rendered', 'valid_impressions', 'invalid_impressions', 'viewable_impressions', 'valid_clicks', 'invalid_clicks', 'billable_impressions', 'billable_clicks', 'spend_micros', 'publisher_micros',
+    'in_view_ms', 'in_view_samples', 'conversions', 'conversion_value_micros', 'refreshed_impressions', 'refreshed_viewable_impressions', 'refreshed_spend_micros', 'refreshed_publisher_micros'];
+  const five = ['valid_impressions', 'viewable_impressions', 'valid_clicks', 'spend_micros', 'publisher_micros'];
+  // Conversions count on the day they happen, attributed to the click's campaign, placement and audience.
+  await c.query(
+    `INSERT INTO daily_stats (day, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source, ${dailyCols.join(', ')})
+     SELECT day, campaign_id, creative_id, min(advertiser_org_id::text)::uuid, site_id, unit_id, min(publisher_org_id::text)::uuid, country, device, os, browser, source,
+       ${dailyCols.map((x) => `sum(${x})`).join(', ')}
+     FROM (
+       SELECT ${day()} AS day, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source,
+         count(*) FILTER (WHERE type = 'served') AS served,
+         count(*) FILTER (WHERE type = 'render') AS rendered,
+         count(*) FILTER (WHERE type = 'render' AND status = 'valid') AS valid_impressions,
+         count(*) FILTER (WHERE type = 'render' AND status = 'invalid') AS invalid_impressions,
+         count(*) FILTER (WHERE type = 'viewable' AND status = 'valid') AS viewable_impressions,
+         count(*) FILTER (WHERE type = 'click' AND status = 'valid') AS valid_clicks,
+         count(*) FILTER (WHERE type = 'click' AND status = 'invalid') AS invalid_clicks,
+         count(*) FILTER (WHERE type = 'render' AND billable) AS billable_impressions,
+         count(*) FILTER (WHERE type = 'click' AND billable) AS billable_clicks,
+         COALESCE(sum(cost_micros) FILTER (WHERE billable), 0) AS spend_micros,
+         COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0) AS publisher_micros,
+         COALESCE(sum(in_view_ms) FILTER (WHERE type = 'inview' AND status = 'valid'), 0) AS in_view_ms,
+         count(*) FILTER (WHERE type = 'inview' AND status = 'valid') AS in_view_samples,
+         0::bigint AS conversions, 0::bigint AS conversion_value_micros,
+         count(*) FILTER (WHERE type = 'render' AND status = 'valid' AND refresh_count > 0) AS refreshed_impressions,
+         count(*) FILTER (WHERE type = 'viewable' AND status = 'valid' AND refresh_count > 0) AS refreshed_viewable_impressions,
+         COALESCE(sum(cost_micros) FILTER (WHERE billable AND refresh_count > 0), 0) AS refreshed_spend_micros,
+         COALESCE(sum(publisher_micros) FILTER (WHERE billable AND refresh_count > 0), 0) AS refreshed_publisher_micros
+       FROM ad_events WHERE ${inWindow()}
+       GROUP BY 1, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source
+       UNION ALL
+       SELECT ${day()}, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source,
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, count(*), COALESCE(sum(value_micros), 0), 0, 0, 0, 0
+       FROM conversions WHERE ${inWindow()}
+       GROUP BY 1, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source
+     ) x
+     GROUP BY day, campaign_id, creative_id, site_id, unit_id, country, device, os, browser, source
+     ON CONFLICT (day, campaign_id, creative_id, site_id, unit_id, country, device, os, browser, source) DO UPDATE SET ${add('daily_stats', dailyCols)}`, w);
+  await c.query(
+    `INSERT INTO page_daily_stats (day, site_id, publisher_org_id, page_path, valid_impressions, valid_clicks, publisher_micros)
+     SELECT ${day()}, site_id, min(publisher_org_id::text)::uuid, page_path,
+       count(*) FILTER (WHERE type = 'render' AND status = 'valid'),
+       count(*) FILTER (WHERE type = 'click' AND status = 'valid'),
+       COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0)
+     FROM ad_events WHERE ${inWindow()} AND page_path IS NOT NULL
+     GROUP BY 1, site_id, page_path
+     ON CONFLICT (day, site_id, page_path) DO UPDATE SET ${add('page_daily_stats', ['valid_impressions', 'valid_clicks', 'publisher_micros'])}`, w);
+  // Topic of the page each ad was served on, from the delivery's 'served' row (served at most a token lifetime earlier).
+  await c.query(
+    `INSERT INTO topic_daily_stats (day, campaign_id, advertiser_org_id, site_id, publisher_org_id, topic, ${five.join(', ')})
+     SELECT ${day('e.')}, e.campaign_id, min(e.advertiser_org_id::text)::uuid, e.site_id, min(e.publisher_org_id::text)::uuid, COALESCE(s.topic, ''),
+       count(*) FILTER (WHERE e.type = 'render' AND e.status = 'valid'),
+       count(*) FILTER (WHERE e.type = 'viewable' AND e.status = 'valid'),
+       count(*) FILTER (WHERE e.type = 'click' AND e.status = 'valid'),
+       COALESCE(sum(e.cost_micros) FILTER (WHERE e.billable), 0),
+       COALESCE(sum(e.publisher_micros) FILTER (WHERE e.billable), 0)
+     FROM ad_events e
+     LEFT JOIN (
+       -- Materialized so the join is one hash join, not an index probe per event. Tokens live at most a day.
+       SELECT delivery_id, topic FROM ad_events WHERE type = 'served' AND ${servedRange} OFFSET 0
+     ) s ON s.delivery_id = e.delivery_id
+     WHERE ${inWindow('e.')} AND e.type IN ('render', 'viewable', 'click')
+     GROUP BY 1, e.campaign_id, e.site_id, COALESCE(s.topic, '')
+     ON CONFLICT (day, campaign_id, site_id, topic) DO UPDATE SET ${add('topic_daily_stats', five)}`, w);
+  await c.query(
+    `INSERT INTO hourly_stats (hour, campaign_id, advertiser_org_id, site_id, publisher_org_id, ${five.join(', ')})
+     SELECT date_trunc('hour', occurred_at), campaign_id, min(advertiser_org_id::text)::uuid, site_id, min(publisher_org_id::text)::uuid,
+       count(*) FILTER (WHERE type = 'render' AND status = 'valid'),
+       count(*) FILTER (WHERE type = 'viewable' AND status = 'valid'),
+       count(*) FILTER (WHERE type = 'click' AND status = 'valid'),
+       COALESCE(sum(cost_micros) FILTER (WHERE billable), 0),
+       COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0)
+     FROM ad_events WHERE ${inWindow()} AND type IN ('render', 'viewable', 'click')
+     GROUP BY 1, campaign_id, site_id
+     ON CONFLICT (hour, campaign_id, site_id) DO UPDATE SET ${add('hourly_stats', five)}`, w);
+  await c.query(
+    `INSERT INTO ivt_daily_stats (day, campaign_id, advertiser_org_id, site_id, publisher_org_id, type, reason, events)
+     SELECT ${day()}, campaign_id, min(advertiser_org_id::text)::uuid, site_id, min(publisher_org_id::text)::uuid, type, COALESCE(invalid_reason, 'unknown'), count(*)
+     FROM ad_events WHERE ${inWindow()} AND status = 'invalid'
+     GROUP BY 1, campaign_id, site_id, type, COALESCE(invalid_reason, 'unknown')
+     ON CONFLICT (day, campaign_id, site_id, type, reason) DO UPDATE SET events = ivt_daily_stats.events + EXCLUDED.events`, w);
+}
+
+/** Run fn holding the rollup lock, in one REPEATABLE READ snapshot taken after the lock is held. */
+async function underRollupLock<T>(db: AppContext['db'], fn: (c: PoolClient, through: string, now: string) => Promise<T>): Promise<T> {
+  const client = await (db as import('pg').Pool).connect();
+  try {
+    await client.query(`SELECT pg_advisory_lock(hashtext('report-rollup'))`);
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+      try {
+        // The first statement takes the snapshot; a row written by a transaction that began after
+        // this clock reading cannot be in it, so "now" splits what is visible from what comes later.
+        // Timestamps stay text so no microseconds are lost on the way through JavaScript.
+        const head = (await client.query<{ now: string; through: string | null }>('SELECT clock_timestamp()::text AS now, (SELECT built_through::text FROM report_rollup WHERE id) AS through')).rows[0]!;
+        let through = head.through;
+        if (!through) {
+          // First run: everything already written counts as built by the full rebuilds that follow.
+          await client.query('INSERT INTO report_rollup (id, built_through) VALUES (true, $1)', [head.now]);
+          through = head.now;
+        }
+        // These are whole-range aggregations: a nested loop is never the right plan, but fresh
+        // tables without statistics (a just-seeded demo) can make the planner pick one.
+        await client.query('SET LOCAL enable_nestloop = off');
+        const out = await fn(client, through, head.now);
+        await client.query('COMMIT');
+        return out;
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw err;
+      }
+    } finally {
+      await client.query(`SELECT pg_advisory_unlock(hashtext('report-rollup'))`).catch(() => undefined);
+    }
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Rebuild one UTC day's reporting aggregates from the event log. Safe to run
+ * repeatedly; runs after corrections (invalid traffic, flat-rate allocation)
+ * and every few minutes as a reconcile behind the live rollup.
+ */
 export async function aggregateDay(db: AppContext['db'], day: string) {
-  await withTransaction(db, async (c) => {
-    await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`agg:${day}`]);
+  await underRollupLock(db, async (c, through, now) => {
+    // Bring every day up to now first, so moving built_through below skips nothing.
+    await addRows(c, { insFrom: through, insTo: now });
     await c.query('DELETE FROM daily_stats WHERE day = $1', [day]);
-    // Conversions count on the day they happen, attributed to the click's campaign, placement and audience.
-    await c.query(
-      `INSERT INTO daily_stats (day, campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source, served, rendered, valid_impressions, invalid_impressions,
-         viewable_impressions, valid_clicks, invalid_clicks, billable_impressions, billable_clicks, spend_micros, publisher_micros, in_view_ms, in_view_samples, conversions, conversion_value_micros,
-         refreshed_impressions, refreshed_viewable_impressions, refreshed_spend_micros, refreshed_publisher_micros)
-       SELECT $1::date, campaign_id, creative_id, min(advertiser_org_id::text)::uuid, site_id, unit_id, min(publisher_org_id::text)::uuid, country, device, os, browser, source,
-         sum(served), sum(rendered), sum(valid_impressions), sum(invalid_impressions), sum(viewable_impressions), sum(valid_clicks), sum(invalid_clicks),
-         sum(billable_impressions), sum(billable_clicks), sum(spend_micros), sum(publisher_micros), sum(in_view_ms), sum(in_view_samples), sum(conversions), sum(conversion_value_micros),
-         sum(refreshed_impressions), sum(refreshed_viewable_impressions), sum(refreshed_spend_micros), sum(refreshed_publisher_micros)
-       FROM (
-         SELECT campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source,
-           count(*) FILTER (WHERE type = 'served') AS served,
-           count(*) FILTER (WHERE type = 'render') AS rendered,
-           count(*) FILTER (WHERE type = 'render' AND status = 'valid') AS valid_impressions,
-           count(*) FILTER (WHERE type = 'render' AND status = 'invalid') AS invalid_impressions,
-           count(*) FILTER (WHERE type = 'viewable' AND status = 'valid') AS viewable_impressions,
-           count(*) FILTER (WHERE type = 'click' AND status = 'valid') AS valid_clicks,
-           count(*) FILTER (WHERE type = 'click' AND status = 'invalid') AS invalid_clicks,
-           count(*) FILTER (WHERE type = 'render' AND billable) AS billable_impressions,
-           count(*) FILTER (WHERE type = 'click' AND billable) AS billable_clicks,
-           COALESCE(sum(cost_micros) FILTER (WHERE billable), 0) AS spend_micros,
-           COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0) AS publisher_micros,
-           COALESCE(sum(in_view_ms) FILTER (WHERE type = 'inview' AND status = 'valid'), 0) AS in_view_ms,
-           count(*) FILTER (WHERE type = 'inview' AND status = 'valid') AS in_view_samples,
-           0::bigint AS conversions, 0::bigint AS conversion_value_micros,
-           count(*) FILTER (WHERE type = 'render' AND status = 'valid' AND refresh_count > 0) AS refreshed_impressions,
-           count(*) FILTER (WHERE type = 'viewable' AND status = 'valid' AND refresh_count > 0) AS refreshed_viewable_impressions,
-           COALESCE(sum(cost_micros) FILTER (WHERE billable AND refresh_count > 0), 0) AS refreshed_spend_micros,
-           COALESCE(sum(publisher_micros) FILTER (WHERE billable AND refresh_count > 0), 0) AS refreshed_publisher_micros
-         FROM ad_events WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1
-         GROUP BY campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source
-         UNION ALL
-         SELECT campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source,
-           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, count(*), COALESCE(sum(value_micros), 0), 0, 0, 0, 0
-         FROM conversions WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1
-         GROUP BY campaign_id, creative_id, advertiser_org_id, site_id, unit_id, publisher_org_id, country, device, os, browser, source
-       ) x
-       GROUP BY campaign_id, creative_id, site_id, unit_id, country, device, os, browser, source`, [day]);
     await c.query('DELETE FROM page_daily_stats WHERE day = $1', [day]);
-    await c.query(
-      `INSERT INTO page_daily_stats (day, site_id, publisher_org_id, page_path, valid_impressions, valid_clicks, publisher_micros)
-       SELECT $1::date, site_id, publisher_org_id, page_path,
-         count(*) FILTER (WHERE type = 'render' AND status = 'valid'),
-         count(*) FILTER (WHERE type = 'click' AND status = 'valid'),
-         COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0)
-       FROM ad_events WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1 AND page_path IS NOT NULL
-       GROUP BY site_id, publisher_org_id, page_path`, [day]);
-    // Topic of the page each ad was served on, from the delivery's 'served' row (served at most a token lifetime earlier).
     await c.query('DELETE FROM topic_daily_stats WHERE day = $1', [day]);
-    await c.query(
-      `INSERT INTO topic_daily_stats (day, campaign_id, advertiser_org_id, site_id, publisher_org_id, topic, valid_impressions, viewable_impressions, valid_clicks, spend_micros, publisher_micros)
-       SELECT $1::date, e.campaign_id, min(e.advertiser_org_id::text)::uuid, e.site_id, min(e.publisher_org_id::text)::uuid, COALESCE(s.topic, ''),
-         count(*) FILTER (WHERE e.type = 'render' AND e.status = 'valid'),
-         count(*) FILTER (WHERE e.type = 'viewable' AND e.status = 'valid'),
-         count(*) FILTER (WHERE e.type = 'click' AND e.status = 'valid'),
-         COALESCE(sum(e.cost_micros) FILTER (WHERE e.billable), 0),
-         COALESCE(sum(e.publisher_micros) FILTER (WHERE e.billable), 0)
-       FROM ad_events e
-       LEFT JOIN (
-         -- Materialized so the join is one hash join, not an index probe per event. Tokens live at most a day.
-         SELECT delivery_id, topic FROM ad_events WHERE type = 'served' AND occurred_at >= $1::date - 1 AND occurred_at < $1::date + 1 OFFSET 0
-       ) s ON s.delivery_id = e.delivery_id
-       WHERE e.occurred_at >= $1::date AND e.occurred_at < $1::date + 1 AND e.type IN ('render', 'viewable', 'click')
-       GROUP BY e.campaign_id, e.site_id, COALESCE(s.topic, '')`, [day]);
     await c.query(`DELETE FROM hourly_stats WHERE hour >= $1::date AND hour < $1::date + 1`, [day]);
-    await c.query(
-      `INSERT INTO hourly_stats (hour, campaign_id, advertiser_org_id, site_id, publisher_org_id, valid_impressions, viewable_impressions, valid_clicks, spend_micros, publisher_micros)
-       SELECT date_trunc('hour', occurred_at), campaign_id, min(advertiser_org_id::text)::uuid, site_id, min(publisher_org_id::text)::uuid,
-         count(*) FILTER (WHERE type = 'render' AND status = 'valid'),
-         count(*) FILTER (WHERE type = 'viewable' AND status = 'valid'),
-         count(*) FILTER (WHERE type = 'click' AND status = 'valid'),
-         COALESCE(sum(cost_micros) FILTER (WHERE billable), 0),
-         COALESCE(sum(publisher_micros) FILTER (WHERE billable), 0)
-       FROM ad_events WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1 AND type IN ('render', 'viewable', 'click')
-       GROUP BY 1, campaign_id, site_id`, [day]);
     await c.query('DELETE FROM ivt_daily_stats WHERE day = $1', [day]);
-    await c.query(
-      `INSERT INTO ivt_daily_stats (day, campaign_id, advertiser_org_id, site_id, publisher_org_id, type, reason, events)
-       SELECT $1::date, campaign_id, min(advertiser_org_id::text)::uuid, site_id, min(publisher_org_id::text)::uuid, type, COALESCE(invalid_reason, 'unknown'), count(*)
-       FROM ad_events WHERE occurred_at >= $1::date AND occurred_at < $1::date + 1 AND status = 'invalid'
-       GROUP BY campaign_id, site_id, type, COALESCE(invalid_reason, 'unknown')`, [day]);
+    await addRows(c, { day });
+    await c.query(`UPDATE report_rollup SET built_through = GREATEST(built_through, $1), changed_at = now(), full_built_at = now() WHERE id`, [now]);
   });
+}
+
+/**
+ * Live reporting: add the events written since the last pass to the
+ * aggregates. Reads only the new events (by inserted_at), so it is cheap
+ * enough to run every few seconds. Returns how many events were added.
+ */
+export async function rollupLive(db: AppContext['db']): Promise<number> {
+  return underRollupLock(db, async (c, from, now) => {
+    const { to, ahead } = (await c.query<{ to: string; ahead: boolean }>(
+      `SELECT ($1::timestamptz - make_interval(secs => $3))::text AS to, ($1::timestamptz - make_interval(secs => $3)) > $2::timestamptz AS ahead`, [now, from, LIVE_LAG_MS / 1000])).rows[0]!;
+    if (!ahead) return 0;
+    const n = Number((await c.query<{ n: string }>(
+      `SELECT (SELECT count(*) FROM ad_events WHERE inserted_at >= $1 AND inserted_at < $2) + (SELECT count(*) FROM conversions WHERE inserted_at >= $1 AND inserted_at < $2) AS n`, [from, to])).rows[0]!.n);
+    if (n > 0) await addRows(c, { insFrom: from, insTo: to });
+    await c.query(`UPDATE report_rollup SET built_through = $1, changed_at = CASE WHEN $2::bigint > 0 THEN now() ELSE changed_at END, events_added = events_added + $2 WHERE id`, [to, n]);
+    return n;
+  });
+}
+
+/** When the reports last changed and how far they are built, for dashboards that update themselves. */
+export async function reportFreshness(db: AppContext['db']) {
+  const r = (await db.query<{ built_through: Date; changed_at: Date }>('SELECT built_through, changed_at FROM report_rollup WHERE id')).rows[0];
+  return { builtThrough: r?.built_through?.toISOString() ?? null, changedAt: r?.changed_at?.toISOString() ?? null };
+}
+
+function nextDay(day: string) {
+  return new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
 }
 
 /**

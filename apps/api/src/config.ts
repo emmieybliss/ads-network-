@@ -25,6 +25,20 @@ const envSchema = z.object({
   GEO_COUNTRY_HEADER: z.string().default(''),
   /** A country database in MaxMind .mmdb format (DB-IP Lite or GeoLite2), used when the header is absent. Empty = none. */
   GEOIP_DB_PATH: z.string().default(''),
+  /**
+   * Keep GEOIP_DB_PATH current by downloading the free DB-IP "IP to Country
+   * Lite" database (CC BY 4.0) once a month. The file is checked daily and
+   * swapped in without a restart. Needs GEOIP_DB_PATH.
+   */
+  GEOIP_AUTO_UPDATE: bool(false),
+  /** Where the monthly database is downloaded from; {YYYY} and {MM} are filled in. A .gz file or a plain .mmdb. */
+  GEOIP_DOWNLOAD_URL: z.string().default('https://download.db-ip.com/free/dbip-country-lite-{YYYY}-{MM}.mmdb.gz'),
+  /**
+   * Development only: the country that visits from this computer or the local
+   * network (127.0.0.1, 192.168.x.x ...) count as, so country targeting can be
+   * tried locally. Startup refuses it in production.
+   */
+  GEO_LOCAL_COUNTRY: z.string().trim().toUpperCase().regex(/^$|^[A-Z]{2}$/, 'GEO_LOCAL_COUNTRY must be a two-letter country code').default(''),
   COOKIE_SECURE: bool(true),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 90).default(24 * 14),
   /** HMAC secret for pseudonymous identifiers (IP/visitor hashes) and email tokens. */
@@ -120,6 +134,7 @@ export function productionProblems(c: z.infer<typeof envSchema>, corsOrigins: st
   const paypal = [c.PAYPAL_CLIENT_ID, c.PAYPAL_CLIENT_SECRET, c.PAYPAL_WEBHOOK_ID].filter(Boolean).length;
   if (paypal > 0 && paypal < 3) p.push('Set PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET and PAYPAL_WEBHOOK_ID together, or none of them');
   if (paypal === 3 && c.PAYPAL_ENV !== 'live') p.push('PAYPAL_ENV must be live in production; sandbox moves no real money');
+  if (c.GEO_LOCAL_COUNTRY) p.push('GEO_LOCAL_COUNTRY must be empty: it sets a test country for local visits and is for development only');
   if (c.ENABLE_DEV_VERIFICATION_SIMULATOR) p.push('ENABLE_DEV_VERIFICATION_SIMULATOR must be false: simulated domain verification is for local development only');
   if (c.VERIFICATION_ALLOW_HTTP || c.VERIFICATION_PRIVATE_HOST_ALLOWLIST) p.push('VERIFICATION_ALLOW_HTTP and VERIFICATION_PRIVATE_HOST_ALLOWLIST are development overrides and must be unset');
   if (c.SEED_DEMO_DATA) p.push('SEED_DEMO_DATA must be false');

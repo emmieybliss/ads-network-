@@ -11,7 +11,7 @@ import type { PaymentProviderRegistry } from '../services/payments/registry';
 import type { PartnerRegistry } from '../services/partners';
 import type { PayoutProviderRegistry } from '../services/payouts/registry';
 import type { CheckDeps } from '../services/verification';
-import type { GeoLookup } from './geo';
+import type { GeoIpService } from './geo';
 
 export interface AppContext {
   config: AppConfig;
@@ -27,7 +27,7 @@ export interface AppContext {
   payouts: PayoutProviderRegistry;
   /** DNS resolver and HTTP fetcher used by domain verification. Empty means the real ones; tests substitute fakes. */
   verifier: CheckDeps;
-  /** Country lookup from GEOIP_DB_PATH, or null when none is configured. */
-  geo: GeoLookup | null;
+  /** Visitor country: CDN header, else the GeoIP database (kept current when GEOIP_AUTO_UPDATE is on). */
+  geoip: GeoIpService;
   log: FastifyBaseLogger;
 }

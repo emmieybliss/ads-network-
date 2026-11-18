@@ -42,12 +42,14 @@
     "maxmind": "5.0.6",
     "nodemailer": "^10.2.1",
     "pg": "^8.13.0",
+    "qrcode": "1.5.4",
     "zod": "^4.1.0"
   },
   "devDependencies": {
     "@types/ioredis-mock": "^8.2.8",
     "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.11.0",
+    "@types/qrcode": "1.5.5",
     "esbuild": "^0.25.0"
   }
 }

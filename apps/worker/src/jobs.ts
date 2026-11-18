@@ -4,6 +4,9 @@ import { applyGuarantee, finalizeEarnings, issueInvoice, releaseCampaignReserve,
 import { withTransaction } from '@blissnova/database';
 import { formatMoney, type PlatformSettings } from '@blissnova/shared';
 import { aggregateDay, allocateFlatRate } from '@blissnova/api/services/events';
+
+/** How often new events are added to the reports (the live rollup). */
+export const LIVE_ROLLUP_MS = 5_000;
 import { dayInZone, invalidateServingCache } from '@blissnova/api/services/serving';
 import { sendDueReports } from '@blissnova/api/services/report-emails';
 import { syncPartnerCampaigns, type PartnerRegistry } from '@blissnova/api/services/partners';
@@ -26,7 +29,10 @@ interface StatementAccum { currency: string; lines: Array<{ description: string;
 const today = () => new Date().toISOString().slice(0, 10);
 const yesterday = () => new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
 
-/** Near-real-time reporting: recompute today's aggregate (and yesterday's shortly after midnight UTC). */
+/**
+ * Reconcile behind the live rollup: rebuild today's aggregates from the event
+ * log (and yesterday's shortly after midnight UTC). Runs every five minutes.
+ */
 export async function refreshAggregates(ctx: JobCtx) {
   await aggregateDay(ctx.db, today());
   if (new Date().getUTCHours() < 1) await aggregateDay(ctx.db, yesterday());

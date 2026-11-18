@@ -18,7 +18,7 @@ import { SettingsService } from './lib/settings';
 import { createMailer } from './lib/mailer';
 import { LocalStorage } from './lib/storage';
 import { createQueues } from './lib/queue';
-import { openGeoDb } from './lib/geo';
+import { GeoIpService } from './lib/geo';
 import { hit } from './lib/ratelimit';
 import { authPlugin } from './plugins/auth';
 import { PaymentProviderRegistry, paypalClientFor } from './services/payments/registry';
@@ -40,7 +40,7 @@ declare module 'fastify' {
 export interface BuildOptions {
   config?: AppConfig;
   /** Override pieces of the context in tests. */
-  overrides?: Partial<Pick<AppContext, 'db' | 'redis' | 'mailer' | 'verifier' | 'partners'>>;
+  overrides?: Partial<Pick<AppContext, 'db' | 'redis' | 'mailer' | 'verifier' | 'partners' | 'geoip'>>;
   logger?: boolean;
 }
 
@@ -73,7 +73,11 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     payouts: new PayoutProviderRegistry(config, paypal),
     partners: opts.overrides?.partners ?? new PartnerRegistry(config, redis),
     verifier: opts.overrides?.verifier ?? {},
-    geo: openGeoDb(config.GEOIP_DB_PATH, (m) => app.log.warn(m)),
+    geoip: opts.overrides?.geoip ?? new GeoIpService({
+      path: config.GEOIP_DB_PATH, header: config.GEO_COUNTRY_HEADER, autoUpdate: config.GEOIP_AUTO_UPDATE, downloadUrl: config.GEOIP_DOWNLOAD_URL,
+      localCountry: config.GEO_LOCAL_COUNTRY, allowLocalTest: config.NODE_ENV !== 'production',
+      warn: (m) => app.log.warn(m), info: (m) => app.log.info(m),
+    }),
     log: app.log,
   };
   app.decorate('ctx', ctx);
@@ -182,6 +186,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await registerRoutes(app);
 
   app.addHook('onClose', async () => {
+    ctx.geoip.stop();
     await queues.close().catch(() => undefined);
     if (!opts.overrides?.redis) await redis.quit().catch(() => undefined);
     if (!opts.overrides?.db) await db.end().catch(() => undefined);

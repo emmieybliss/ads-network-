@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import { countryLabel } from '@/lib/countries';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { ADMIN_CAMPAIGN_TRANSITIONS } from '@blissnova/shared';
@@ -49,7 +50,7 @@ export default function AdminCampaign() {
                   ['Pricing', `${c.pricingModel.toUpperCase()} ${money(c.rateMicros)}`], ['Lifetime budget', money(c.lifetimeBudgetMicros)], ['Daily budget', c.dailyBudgetMicros ? money(c.dailyBudgetMicros) : 'None'],
                   ['Spent', money(c.spentMicros)], ['Reserved', money(c.reservedMicros)], ['Schedule', `${formatDate(c.startAt, true)} – ${c.endAt ? formatDate(c.endAt, true) : 'open'}`],
                   ['Pacing / priority', `${humanize(c.pacing)} / ${c.priority}${c.adminPriorityBoost ? ` (boost ${c.adminPriorityBoost})` : ''}`],
-                  ['Countries', c.targeting?.countries?.join(', ') || 'All'], ['Devices', c.targeting?.devices?.join(', ') || 'All'], ['Categories', c.targeting?.siteCategories?.join(', ') || 'All'],
+                  ['Countries', c.targeting?.countries?.map(countryLabel).join(', ') || 'All'], ['Excluded countries', c.targeting?.excludeCountries?.map(countryLabel).join(', ') || 'None'], ['Devices', c.targeting?.devices?.join(', ') || 'All'], ['Categories', c.targeting?.siteCategories?.join(', ') || 'All'],
                   ['Page topics', c.targeting?.topics?.map((t: string) => topicLabel(t)).join(', ') || 'Any'], ['Excluded topics', c.targeting?.excludeTopics?.map((t: string) => topicLabel(t)).join(', ') || 'None'], ['Brand safety', c.targeting?.brandSafety ?? 'standard'],
                   ['Frequency caps', c.caps.length ? c.caps.map((x: any) => `${x.maxImpressions}/${x.scope}/${Math.round(x.windowSeconds / 3600)}h`).join(', ') : 'None'],
                 ]} />

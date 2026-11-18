@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import { LiveIndicator } from '@/components/LiveIndicator';
 import { Plus } from 'lucide-react';
 import { Async, Card, CardHeader, EmptyState, LinkButton, PageHeader, Stat } from '@/components/ui';
 import { BreakdownBars, TrendChart } from '@/components/charts';
@@ -9,11 +10,11 @@ import { formatMicros, formatNumber, formatPercent, humanize } from '@/lib/forma
 
 export default function PublisherOverview() {
   const org = useOrg();
-  const res = useApi<{ data: any }>(`/orgs/${org.id}/dashboard`);
+  const res = useApi<{ data: any }>(`/orgs/${org.id}/dashboard`, { live: true });
   const money = (v: string | null | undefined) => formatMicros(v, org.currency);
   return (
     <>
-      <PageHeader title="Overview" description="Last 30 days across your websites. Earnings are estimates until settled and released after the hold period." actions={<LinkButton href="/publisher/sites/new"><Plus className="size-4" /> Add website</LinkButton>} />
+      <PageHeader title="Overview" description="Last 30 days across your websites. Earnings are estimates until settled and released after the hold period." actions={<div className="flex items-center gap-3"><LiveIndicator /><LinkButton href="/publisher/sites/new"><Plus className="size-4" /> Add website</LinkButton></div>} />
       <Async res={res}>
         {({ data }) => {
           const t = data.totals;

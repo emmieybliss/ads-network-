@@ -83,7 +83,9 @@ Runs in the build container with local PostgreSQL 16 and Redis 7, not on the own
 See `docs/STATUS_REPORT.md` for the full built / simulated / partial / missing review.
 - [ ] Deployment to a public server (no domain yet)
 - [ ] Stripe and PayPal tested against the real services (only mocked APIs so far)
-- [ ] GeoIP database bundled (country comes from a CDN header or a `.mmdb` file, if configured)
+- [x] GeoIP: free DB-IP Lite country database downloaded and refreshed monthly without a restart, CDN header still first, admin lookup and local test country, country include/exclude targeting (migration 0020)
+- [x] Live reports: rollup every 5 seconds by insertion time, full rebuild every 5 minutes, dashboards update themselves (migration 0020)
+- [x] Two-step verification: QR setup, one-use codes, backup codes, trusted devices, required for everyone or staff, admin reset (migration 0020)
 - [x] Viewable auto-refresh: opt-in per placement (30 s+ in view, visible tab, active visitor, per-page-view cap), network switch and limits, advertiser opt-out, refreshed impressions reported apart (migration 0017)
 - [x] Automatic contextual classification of pages (topics and brand safety, English)
 - [x] Stronger bot detection: datacenter IP ranges, automated-browser checks, click cadence, per-publisher IVT rates, review queue, automatic clawback (docs/INVALID_TRAFFIC.md)

@@ -113,6 +113,9 @@ Object.assign(process.env, {
   ENABLE_DEV_VERIFICATION_SIMULATOR: 'true',
   ENABLE_DEV_PARTNER_SIMULATOR: 'true',
   LOG_LEVEL: process.env.LOG_LEVEL ?? 'warn',
+  // Free DB-IP country database, downloaded on first start and refreshed monthly.
+  GEOIP_DB_PATH: process.env.GEOIP_DB_PATH ?? join(dataDir, 'geo', 'dbip-country-lite.mmdb'),
+  GEOIP_AUTO_UPDATE: process.env.GEOIP_AUTO_UPDATE ?? 'true',
 });
 
 // Optional test-mode payment keys, so card checkout can be tried for real on
@@ -230,10 +233,19 @@ async function run(name: string, fn: () => Promise<unknown>) {
     busy = false;
   }
 }
-const minutely = () => run('minutely', async () => { await jobs.refreshAggregates(jobCtx); await jobs.campaignLifecycle(jobCtx); await jobs.settleAll(jobCtx); await jobs.syncPartners(jobCtx); await jobs.syncSpendCounters(jobCtx); });
-const fiveMinutely = () => run('five-minutely', async () => { await jobs.budgetAlerts(jobCtx); await jobs.lowBalanceAlerts(jobCtx); await jobs.reportEmails(jobCtx); await jobs.detectAnomalies(jobCtx); await jobs.ivtSweep(jobCtx); await jobs.syncProviders(jobCtx); });
+const minutely = () => run('minutely', async () => { await jobs.campaignLifecycle(jobCtx); await jobs.settleAll(jobCtx); await jobs.syncPartners(jobCtx); await jobs.syncSpendCounters(jobCtx); });
+const fiveMinutely = () => run('five-minutely', async () => { await jobs.refreshAggregates(jobCtx); await jobs.budgetAlerts(jobCtx); await jobs.lowBalanceAlerts(jobCtx); await jobs.reportEmails(jobCtx); await jobs.detectAnomalies(jobCtx); await jobs.ivtSweep(jobCtx); await jobs.syncProviders(jobCtx); });
 const daily = () => run('daily', () => jobs.dailyMaintenance(jobCtx));
-const timers = [setInterval(minutely, 60_000), setInterval(fiveMinutely, 300_000), setInterval(daily, 86_400_000)];
+// Live reports: new events are added to the reports every few seconds, apart from the jobs above.
+const { rollupLive } = await import('./services/events');
+let rolling = false;
+const live = () => {
+  if (rolling) return;
+  rolling = true;
+  rollupLive(app.ctx.db).catch((err) => log.error({ err: (err as Error).message }, 'live report rollup failed')).finally(() => { rolling = false; });
+};
+const timers = [setInterval(minutely, 60_000), setInterval(fiveMinutely, 300_000), setInterval(daily, 86_400_000), setInterval(live, jobs.LIVE_ROLLUP_MS)];
+await jobs.refreshAggregates(jobCtx).catch((err) => log.error({ err: (err as Error).message }, 'report rebuild failed'));
 await minutely();
 
 let stopping = false;
@@ -252,4 +264,7 @@ console.log(`\nBlissNova API is running at ${config.PUBLIC_API_URL}`);
 console.log(`Demo logins: admin@example.com, advertiser@example.com, publisher@example.com`);
 console.log(`Password: ${secrets.seedPassword}   (also in ${secretsFile})`);
 console.log(`Emails the demo sends are saved in ${join(dataDir, 'emails')}`);
+// Country lookups: the free DB-IP database, downloaded on the first start (about 8 MB) and refreshed monthly.
+if (!app.ctx.geoip.db) console.log('Downloading the free country database (DB-IP Lite) in the background...');
+app.ctx.geoip.start();
 console.log('Keep this window open while you use the demo. Close it, or press Ctrl+C, to stop.\n');

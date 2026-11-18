@@ -180,12 +180,12 @@ export function ShareBars({ rows, format }: { rows: Array<{ key: string; label: 
   );
 }
 
-/** The last 30 minutes, refreshed every 15 seconds while the tab is visible. */
+/** The last 30 minutes, refreshed every 5 seconds while the tab is visible. */
 export function RealtimePanel({ path, currency, topLabel }: { path: string; currency: string; topLabel: string }) {
   const res = useApi<{ data: { at: string; money: string; totals: Record<string, any>; activePages: number; minutes: Array<Record<string, any>>; top: Array<Record<string, any>>; countries?: Array<Record<string, any>> } }>(path);
   const [paused, setPaused] = useState(false);
   useEffect(() => {
-    const t = setInterval(() => { if (document.visibilityState === 'visible' && !paused) res.reload(); }, 15_000);
+    const t = setInterval(() => { if (document.visibilityState === 'visible' && !paused) res.reload(); }, 5_000);
     return () => clearInterval(t);
   }, [paused, res.reload]); // eslint-disable-line react-hooks/exhaustive-deps
   const d = res.data?.data;
@@ -197,7 +197,7 @@ export function RealtimePanel({ path, currency, topLabel }: { path: string; curr
             <span className="relative flex size-2.5"><span className={cn('absolute inline-flex size-full rounded-full bg-success opacity-60', !paused && 'animate-ping')} /><span className="relative inline-flex size-2.5 rounded-full bg-success" /></span>
             Real time
           </h2>
-          <p className="mt-0.5 text-sm text-muted">Last 30 minutes from the event log, updated every 15 seconds{d ? `, last at ${new Date(d.at).toLocaleTimeString()}` : ''}.</p>
+          <p className="mt-0.5 text-sm text-muted">Last 30 minutes from the event log, updated every 5 seconds{d ? `, last at ${new Date(d.at).toLocaleTimeString()}` : ''}.</p>
         </div>
         <button className="text-xs font-medium text-primary hover:underline" onClick={() => setPaused((p) => !p)}>{paused ? 'Resume updates' : 'Pause updates'}</button>
       </div>
